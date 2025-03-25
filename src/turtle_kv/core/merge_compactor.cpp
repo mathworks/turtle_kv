@@ -2,7 +2,7 @@
 //
 
 #include <turtle_kv/core/algo/merge_compact_edits.hpp>
-#include <turtle_kv/core/key_range_order.hpp>
+#include <turtle_kv/core/key_range.hpp>
 #include <turtle_kv/core/packed_sizeof_edit.hpp>
 
 #include <turtle_kv/import/constants.hpp>
