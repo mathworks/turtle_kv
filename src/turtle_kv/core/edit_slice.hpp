@@ -37,12 +37,9 @@ bool is_empty(const EditSlice& edit_slice) noexcept;
 //
 usize get_item_count(const EditSlice& edit_slice) noexcept;
 
-inline bool is_sorted_by_key(const EditSlice& edit_slice) noexcept
-{
-  return batt::case_of(edit_slice, [](const auto& edits) {
-    return std::is_sorted(edits.begin(), edits.end(), KeyOrder{});
-  });
-}
+/** \brief Returns true iff the edit_slice is sorted by key.
+ */
+bool is_sorted_by_key(const EditSlice& edit_slice) noexcept;
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 
