@@ -44,7 +44,18 @@ class TurtleKvRecipe(ConanFile):
         VISIBLE = self.cor.VISIBLE
         OVERRIDE = self.cor.OVERRIDE
 
-        self.requires("boost/[>=1.84.0]", **VISIBLE)
+        self.requires("abseil/20240116.2", **VISIBLE)
+        self.requires("batteries/0.58.1-devel", **VISIBLE, **OVERRIDE)
+        self.requires("boost/1.85.0", **VISIBLE, **OVERRIDE)
+        self.requires("glog/[>=0.7.0]", **VISIBLE)
+        self.requires("llfs/0.41.1-devel", **VISIBLE)
+        self.requires("pcg-cpp/[>=cci.20220409]", **VISIBLE)
+
+        if platform.system() == "Linux":
+            self.requires("libfuse/[>=3.16.2]", **VISIBLE)
+            self.requires("libunwind/[>=1.7.2]", **VISIBLE)
+            self.requires("liburing/[>=2.4]", **VISIBLE)
+
         self.test_requires("gtest/[>=1.14.0]")
 
     def configure(self):

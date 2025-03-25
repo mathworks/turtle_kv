@@ -4,7 +4,9 @@ cxx_library(turtle_kv)
 
 target_link_libraries(
   turtle_kv
-  PUBLIC boost::boost
+  PUBLIC
+  boost::boost
+  llfs::llfs
   #
   # Add other library -> library dependencies here.
   #
