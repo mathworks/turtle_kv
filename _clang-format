@@ -1,9 +1,6 @@
 BasedOnStyle: Google
 
-Language: Cpp
-Standard: "c++20"
-
-ColumnLimit: 110
+ColumnLimit: 100
 
 AlignEscapedNewlines: Right
 AllowAllArgumentsOnNextLine: false
@@ -14,13 +11,15 @@ AllowShortIfStatementsOnASingleLine: false
 AllowShortLambdasOnASingleLine: false
 AllowShortLoopsOnASingleLine: false
 BreakBeforeBraces: Custom
+BreakConstructorInitializers: BeforeComma
+BreakInheritanceList: BeforeComma
 DerivePointerAlignment: false
 FixNamespaceComments: true
-IndentCaseLabels: false
+IncludeBlocks: Preserve
+IndentCaseLabels: true
 IndentPPDirectives: None
 IndentWidth: 2
 PointerAlignment: Left
-IncludeBlocks: Preserve
 SortIncludes: true
 SortUsingDeclarations: true
 SpaceBeforeParens: ControlStatements
@@ -40,10 +39,3 @@ BraceWrapping:
   SplitEmptyRecord: true
   SplitEmptyNamespace: true
 
-SpacesInLineCommentPrefix:
-  Minimum: 0
-  Maximum: -1
-
-BreakConstructorInitializers: "BeforeComma"
-BreakInheritanceList: "BeforeComma"
-  
