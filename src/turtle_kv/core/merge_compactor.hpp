@@ -157,6 +157,8 @@ class MergeCompactor
       *this = ResultSet{};
     }
 
+    /** \brief Returns the number of live edits in this result set.
+     */
     usize size() const noexcept
     {
       const usize n = this->chunks_.back().offset;
