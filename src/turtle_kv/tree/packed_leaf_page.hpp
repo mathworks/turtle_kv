@@ -45,7 +45,7 @@ struct PackedLeafPage {
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   template <typename T>
-  static const PackedLeafPage& view_of(T&& t) noexcept
+  static const PackedLeafPage& view_of(T&& t)
   {
     const ConstBuffer buffer = get_page_const_payload(BATT_FORWARD(t));
     BATT_CHECK_GE(buffer.size(), sizeof(PackedLeafPage));
@@ -59,7 +59,7 @@ struct PackedLeafPage {
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  void check_invariants(Optional<usize> payload_size) const noexcept
+  void check_invariants(Optional<usize> payload_size) const
   {
     BATT_CHECK_EQ(this->magic, PackedLeafPage::kMagic);
     BATT_CHECK(this->items);
@@ -71,85 +71,84 @@ struct PackedLeafPage {
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
   //
-  KeyView key_at(usize i) const noexcept
+  KeyView key_at(usize i) const
   {
     return (*this->items)[i].key_view();
   }
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
   //
-  ValueView value_at(usize i) const noexcept
+  ValueView value_at(usize i) const
   {
     return (*this->items)[i].value_view();
   }
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
   //
-  const PackedKeyValue& front_item() const noexcept
+  const PackedKeyValue& front_item() const
   {
     return this->items->front();
   }
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
   //
-  const PackedKeyValue& back_item() const noexcept
+  const PackedKeyValue& back_item() const
   {
     return (*this->items)[this->key_count - 1];
   }
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
   //
-  const PackedKeyValue* items_begin() const noexcept
+  const PackedKeyValue* items_begin() const
   {
     return this->items->data();
   }
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
   //
-  const PackedKeyValue* items_end() const noexcept
+  const PackedKeyValue* items_end() const
   {
     return this->items->data() + this->key_count;
   }
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
   //
-  Slice<const PackedKeyValue> items_slice() const noexcept
+  Slice<const PackedKeyValue> items_slice() const
   {
     return Slice<const PackedKeyValue>{this->items_begin(), this->items_end()};
   }
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
   //
-  BoxedSeq<EditSlice> as_edit_slice_seq() const noexcept
+  BoxedSeq<EditSlice> as_edit_slice_seq() const
   {
     return seq::single_item(EditSlice{this->items_slice()}) | seq::boxed();
   }
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
   //
-  KeyView min_key() const noexcept
+  KeyView min_key() const
   {
     return get_key(this->front_item());
   }
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
   //
-  KeyView max_key() const noexcept
+  KeyView max_key() const
   {
     return get_key(this->back_item());
   }
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
   //
-  CInterval<KeyView> get_key_crange() const noexcept
+  CInterval<KeyView> get_key_crange() const
   {
     return CInterval<KeyView>{this->min_key(), this->max_key()};
   }
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
   //
-  Interval<usize> calculate_search_range(const std::string_view& key,
-                                         usize& key_prefix_match) const noexcept
+  Interval<usize> calculate_search_range(const std::string_view& key, usize& key_prefix_match) const
   {
     if (!this->trie_index) {
       return Interval<usize>{0, this->key_count};
@@ -172,7 +171,7 @@ struct PackedLeafPage {
   //
   const PackedKeyValue* find_key_in_range(const std::string_view& key,
                                           Interval<usize> search_range,
-                                          usize skip_n = 0) const noexcept
+                                          usize skip_n = 0) const
   {
     auto [first, last] = [&] {
       if (skip_n) {
@@ -197,7 +196,7 @@ struct PackedLeafPage {
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
   //
-  const PackedKeyValue* find_key(const std::string_view& key) const noexcept
+  const PackedKeyValue* find_key(const std::string_view& key) const
   {
     usize key_prefix_match = 0;
     Interval<usize> search_range = this->calculate_search_range(key, key_prefix_match);
@@ -209,7 +208,7 @@ struct PackedLeafPage {
   //
   const PackedKeyValue* lower_bound_in_range(const std::string_view& key,
                                              Interval<usize> search_range,
-                                             usize skip_n = 0) const noexcept
+                                             usize skip_n = 0) const
   {
     auto first = [&] {
       if (skip_n) {
@@ -236,7 +235,7 @@ struct PackedLeafPage {
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
   //
-  const PackedKeyValue* lower_bound(const std::string_view& key) const noexcept
+  const PackedKeyValue* lower_bound(const std::string_view& key) const
   {
     usize key_prefix_match = 0;
     Interval<usize> search_range = this->calculate_search_range(key, key_prefix_match);
@@ -249,7 +248,7 @@ BATT_STATIC_ASSERT_EQ(sizeof(PackedLeafPage), 32);
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-inline usize leaf_max_space_from_size(usize leaf_size) noexcept
+inline usize leaf_max_space_from_size(usize leaf_size)
 {
   return leaf_size - (sizeof(llfs::PackedPageHeader) + sizeof(PackedLeafPage) +
                       sizeof(llfs::PackedArray<PackedKeyValue>));
@@ -290,22 +289,22 @@ struct PackedLeafLayoutPlan {
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   template <typename ItemsRangeT>
-  static Self from_items(usize page_size, const ItemsRangeT& items, bool use_trie_index) noexcept;
+  static Self from_items(usize page_size, const ItemsRangeT& items, bool use_trie_index);
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   template <typename T>
-  T* place(const MutableBuffer& buffer, usize offset) const noexcept
+  T* place(const MutableBuffer& buffer, usize offset) const
   {
     return const_cast<T*>(static_cast<const T*>(advance_pointer(buffer.data(), offset)));
   }
 
-  bool is_valid() const noexcept
+  bool is_valid() const
   {
     return this->value_data_end <= this->page_size;
   }
 
-  void check_valid(std::string_view label) const noexcept;
+  void check_valid(std::string_view label) const;
 };
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -332,7 +331,7 @@ BATT_OBJECT_PRINT_IMPL((inline),
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-inline void PackedLeafLayoutPlan::check_valid(std::string_view label) const noexcept
+inline void PackedLeafLayoutPlan::check_valid(std::string_view label) const
 {
   BATT_CHECK(this->is_valid()) << *this << BATT_INSPECT_STR(label);
 }
@@ -352,7 +351,7 @@ class PackedLeafLayoutPlanBuilder
   usize value_data_size = 0;
   bool use_trie_index = false;
 
-  Self& add(const std::string_view& key, const ValueView& value) noexcept
+  Self& add(const std::string_view& key, const ValueView& value)
   {
     this->key_count += 1;
     this->key_data_size += key.size() + sizeof(PackedValueOffset);
@@ -361,7 +360,7 @@ class PackedLeafLayoutPlanBuilder
     return *this;
   }
 
-  PackedLeafLayoutPlan build(bool check = true) const noexcept
+  PackedLeafLayoutPlan build(bool check = true) const
   {
     PackedLeafLayoutPlan plan;
 
@@ -487,7 +486,7 @@ struct AddLeafItemsSummary {
 template <typename ItemsRangeT>
 /*static*/ PackedLeafLayoutPlan PackedLeafLayoutPlan::from_items(usize page_size,
                                                                  const ItemsRangeT& items,
-                                                                 bool use_trie_index) noexcept
+                                                                 bool use_trie_index)
 {
   LeafItemsSummary summary = std::accumulate(std::begin(items),
                                              std::end(items),
@@ -514,18 +513,18 @@ template <typename ItemsRangeT>
 struct BufferBoundsChecker {
   MutableBuffer buffer;
 
-  const void* buffer_begin() const noexcept
+  const void* buffer_begin() const
   {
     return this->buffer.data();
   }
 
-  const void* buffer_end() const noexcept
+  const void* buffer_end() const
   {
     return advance_pointer(this->buffer.data(), this->buffer.size());
   }
 
   template <typename T>
-  bool contains(const T* ptr) const noexcept
+  bool contains(const T* ptr) const
   {
     return ((const void*)(ptr + 0) >= this->buffer_begin()) &&  //
            ((const void*)(ptr + 1) <= this->buffer_end());
@@ -538,7 +537,7 @@ struct BufferBoundsChecker {
 template <typename Items>
 inline PackedLeafPage* build_leaf_page(MutableBuffer buffer,
                                        const PackedLeafLayoutPlan& plan,
-                                       const Items& items) noexcept
+                                       const Items& items)
 {
   BATT_CHECK_EQ(plan.key_count, std::end(items) - std::begin(items));
   BATT_CHECK_LE(plan.value_data_end, buffer.size());
@@ -659,18 +658,17 @@ inline PackedLeafPage* build_leaf_page(MutableBuffer buffer,
   return p_header;
 }
 
-llfs::PageLayoutId packed_leaf_page_layout_id() noexcept;
+llfs::PageLayoutId packed_leaf_page_layout_id();
 
-StatusOr<llfs::PinnedPage> pin_leaf_page_to_job(
-    llfs::PageCacheJob& page_job,
-    std::shared_ptr<llfs::PageBuffer>&& page_buffer) noexcept;
+StatusOr<llfs::PinnedPage> pin_leaf_page_to_job(llfs::PageCacheJob& page_job,
+                                                std::shared_ptr<llfs::PageBuffer>&& page_buffer);
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 //
 template <typename Items>
 inline StatusOr<llfs::PinnedPage> build_leaf_page_in_job(llfs::PageCacheJob& page_job,
                                                          const Items& items,
-                                                         usize page_size) noexcept
+                                                         usize page_size)
 {
   auto plan = PackedLeafLayoutPlan::from_items(page_size, items, /*use_trie_index=*/true);
 

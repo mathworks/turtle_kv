@@ -20,32 +20,32 @@ struct FakeLevel {
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  usize segment_count() const noexcept
+  usize segment_count() const
   {
     return this->segments_.size();
   }
 
-  Segment& get_segment(usize i) noexcept
+  Segment& get_segment(usize i)
   {
     BATT_CHECK_LT(i, this->segments_.size());
 
     return this->segments_[i];
   }
 
-  const Segment& get_segment(usize i) const noexcept
+  const Segment& get_segment(usize i) const
   {
     BATT_CHECK_LT(i, this->segments_.size());
 
     return this->segments_[i];
   }
 
-  Segment& append_segment() noexcept
+  Segment& append_segment()
   {
     this->segments_.emplace_back();
     return this->segments_.back();
   }
 
-  void drop_segment(usize i) noexcept
+  void drop_segment(usize i)
   {
     this->segments_.erase(this->segments_.begin() + i);
   }

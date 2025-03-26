@@ -32,24 +32,23 @@ class TreeBuilder
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  const Subtree& get_tree() const noexcept
+  const Subtree& get_tree() const
   {
     return this->tree_;
   }
 
-  Subtree& get_tree() noexcept
+  Subtree& get_tree()
   {
     return this->tree_;
   }
 
-  Status apply_batch_update(
-      MergeCompactor::ResultSet</*decay_to_items=*/false>&& result_set) noexcept;
+  Status apply_batch_update(MergeCompactor::ResultSet</*decay_to_items=*/false>&& result_set);
 
-  StatusOr<std::unique_ptr<llfs::PageCacheJob>> serialize(llfs::PageCache& page_cache) noexcept;
+  StatusOr<std::unique_ptr<llfs::PageCacheJob>> serialize(llfs::PageCache& page_cache);
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
-  Status grow_tree() noexcept;
+  Status grow_tree();
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
   batt::WorkerPool& worker_pool_;

@@ -26,7 +26,7 @@ template <
 StatusOr<R> visit_tree_page(llfs::PageLoader& page_loader,
                             llfs::PinnedPage& pinned_page_out,
                             const llfs::PageIdSlot& page_id_slot,
-                            VisitorFn&& visitor_fn) noexcept
+                            VisitorFn&& visitor_fn)
 {
   if (!pinned_page_out || pinned_page_out.page_id() != page_id_slot.page_id) {
     BATT_ASSIGN_OK_RESULT(pinned_page_out,
@@ -56,7 +56,7 @@ template <
     typename R = StatusOr<RemoveStatusOr<std::invoke_result_t<VisitorFn, const PackedLeafPage&>>>>
 StatusOr<R> visit_tree_page(llfs::PageLoader& page_loader,
                             const llfs::PageIdSlot& page_id_slot,
-                            VisitorFn&& visitor_fn) noexcept
+                            VisitorFn&& visitor_fn)
 {
   llfs::PinnedPage pinned_page;
 
@@ -69,7 +69,7 @@ template <typename... CaseFns>
 decltype(auto) visit_tree_page(llfs::PageLoader& page_loader,
                                llfs::PinnedPage& pinned_page_out,
                                const llfs::PageIdSlot& page_id_slot,
-                               CaseFns&&... case_fns) noexcept
+                               CaseFns&&... case_fns)
 {
   return visit_tree_page(page_loader,
                          pinned_page_out,
@@ -82,7 +82,7 @@ decltype(auto) visit_tree_page(llfs::PageLoader& page_loader,
 template <typename... CaseFns>
 decltype(auto) visit_tree_page(llfs::PageLoader& page_loader,
                                const llfs::PageIdSlot& page_id_slot,
-                               CaseFns&&... case_fns) noexcept
+                               CaseFns&&... case_fns)
 {
   return visit_tree_page(page_loader,
                          page_id_slot,
@@ -97,7 +97,7 @@ template <
 StatusOr<R> visit_leaf_page(llfs::PageLoader& page_loader,
                             llfs::PinnedPage& pinned_page_out,
                             const llfs::PageIdSlot& page_id_slot,
-                            VisitorFn&& visitor_fn) noexcept
+                            VisitorFn&& visitor_fn)
 {
   if (!pinned_page_out || pinned_page_out.page_id() != page_id_slot.page_id) {
     BATT_ASSIGN_OK_RESULT(pinned_page_out,
@@ -116,7 +116,7 @@ template <
     typename R = StatusOr<RemoveStatusOr<std::invoke_result_t<VisitorFn, const PackedLeafPage&>>>>
 StatusOr<R> visit_leaf_page(llfs::PageLoader& page_loader,
                             const llfs::PageIdSlot& page_id_slot,
-                            VisitorFn&& visitor_fn) noexcept
+                            VisitorFn&& visitor_fn)
 {
   llfs::PinnedPage pinned_page;
 
@@ -131,7 +131,7 @@ template <
 StatusOr<R> visit_node_page(llfs::PageLoader& page_loader,
                             llfs::PinnedPage& pinned_page_out,
                             const llfs::PageIdSlot& page_id_slot,
-                            VisitorFn&& visitor_fn) noexcept
+                            VisitorFn&& visitor_fn)
 {
   if (!pinned_page_out || pinned_page_out.page_id() != page_id_slot.page_id) {
     BATT_ASSIGN_OK_RESULT(pinned_page_out,
@@ -150,7 +150,7 @@ template <
     typename R = StatusOr<RemoveStatusOr<std::invoke_result_t<VisitorFn, const PackedNodePage&>>>>
 StatusOr<R> visit_node_page(llfs::PageLoader& page_loader,
                             const llfs::PageIdSlot& page_id_slot,
-                            VisitorFn&& visitor_fn) noexcept
+                            VisitorFn&& visitor_fn)
 {
   llfs::PinnedPage pinned_page;
 

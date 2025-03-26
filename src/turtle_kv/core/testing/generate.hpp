@@ -33,14 +33,14 @@ class MinMaxSize
   {
   }
 
-  Self& set_min_size(usize n) noexcept
+  Self& set_min_size(usize n)
   {
     this->min_size_ = n;
     this->max_size_ = std::max(this->max_size_, n);
     return *this;
   }
 
-  Self& set_max_size(usize n) noexcept
+  Self& set_max_size(usize n)
   {
     BATT_CHECK_GE(n, this->min_size_);
     BATT_CHECK_LT(n, kMaxSize);
@@ -49,13 +49,13 @@ class MinMaxSize
     return *this;
   }
 
-  Self set_size(usize n) noexcept
+  Self set_size(usize n)
   {
     return this->set_min_size(n).set_max_size(n);
   }
 
   template <typename Rng>
-  usize pick_size(Rng& rng) const noexcept
+  usize pick_size(Rng& rng) const
   {
     return std::uniform_int_distribution<usize>{this->min_size_, this->max_size_}(rng);
   }
@@ -78,7 +78,7 @@ class RandomStringGenerator : public MinMaxSize<256>
   }
 
   template <typename Rng>
-  std::string operator()(Rng& rng) noexcept
+  std::string operator()(Rng& rng)
   {
     return this->generate_impl(rng, [](char* data, usize size) -> std::string {
       return std::string(data, size);
@@ -86,7 +86,7 @@ class RandomStringGenerator : public MinMaxSize<256>
   }
 
   template <typename Rng>
-  std::string_view operator()(Rng& rng, llfs::StableStringStore& store) noexcept
+  std::string_view operator()(Rng& rng, llfs::StableStringStore& store)
   {
     return this->generate_impl(rng, [&store](char* data, usize size) -> std::string_view {
       return store.store(std::string_view{data, size});
@@ -96,7 +96,7 @@ class RandomStringGenerator : public MinMaxSize<256>
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
   template <typename Rng, typename Fn /* T (char* data, usize size) */>
-  decltype(auto) generate_impl(Rng& rng, Fn&& fn) noexcept
+  decltype(auto) generate_impl(Rng& rng, Fn&& fn)
   {
     std::array<char, kMaxSize> buffer;
 
@@ -130,18 +130,18 @@ class RandomResultSetGenerator : public MinMaxSize<usize{1} << 24>
   {
   }
 
-  RandomStringGenerator& key_generator() noexcept
+  RandomStringGenerator& key_generator()
   {
     return this->key_generator_;
   }
 
-  Self& set_key_size(usize n) noexcept
+  Self& set_key_size(usize n)
   {
     this->key_generator_.set_size(n);
     return *this;
   }
 
-  Self& set_value_size(usize n) noexcept
+  Self& set_value_size(usize n)
   {
     this->value_size_ = n;
     return *this;
@@ -149,7 +149,7 @@ class RandomResultSetGenerator : public MinMaxSize<usize{1} << 24>
 
   template <bool kDecayToItems, typename Rng>
   MergeCompactor::ResultSet</*kDecayToItems=*/kDecayToItems>
-  operator()(DecayToItem<kDecayToItems>, Rng& rng, llfs::StableStringStore& store) noexcept
+  operator()(DecayToItem<kDecayToItems>, Rng& rng, llfs::StableStringStore& store)
   {
     using ResultSet = MergeCompactor::ResultSet</*kDecayToItems=*/kDecayToItems>;
     using Item = typename ResultSet::value_type;

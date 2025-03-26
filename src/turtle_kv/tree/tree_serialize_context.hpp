@@ -35,23 +35,35 @@ class TreeSerializeContext
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  const TreeOptions& tree_options() const noexcept;
+  const TreeOptions& tree_options() const
+  {
+    return this->tree_options_;
+  }
 
-  llfs::PageCacheJob& page_job() noexcept;
+  llfs::PageCacheJob& page_job()
+  {
+    return this->page_job_;
+  }
 
-  batt::WorkerPool& worker_pool() noexcept;
+  batt::WorkerPool& worker_pool()
+  {
+    return this->worker_pool_;
+  }
 
-  const batt::CancelToken& cancel_token() const noexcept;
+  const batt::CancelToken& cancel_token() const
+  {
+    return this->cancel_token_;
+  }
 
-  BuildPageJobId async_build_page(BuildPageJobFn&& build_page_fn) noexcept;
+  BuildPageJobId async_build_page(BuildPageJobFn&& build_page_fn);
 
-  Status build_all_pages() noexcept;
+  Status build_all_pages();
 
-  StatusOr<llfs::PinnedPage> get_build_page_result(BuildPageJobId id) noexcept;
+  StatusOr<llfs::PinnedPage> get_build_page_result(BuildPageJobId id);
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
-  void build_pages_task_fn() noexcept;
+  void build_pages_task_fn();
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 

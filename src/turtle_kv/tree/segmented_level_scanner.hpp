@@ -85,11 +85,11 @@ class SegmentedLevelScanner : private SegmentedLevelScannerBase
   //+++++++++++-+-+--+----- --- -- -  -  -   -
   // Seq methods
 
-  Optional<Item> peek() noexcept;
+  Optional<Item> peek();
 
-  Optional<Item> next() noexcept;
+  Optional<Item> next();
 
-  Status status() const noexcept
+  Status status() const
   {
     return this->status_;
   }
@@ -97,12 +97,12 @@ class SegmentedLevelScanner : private SegmentedLevelScannerBase
   //+++++++++++-+-+--+----- --- -- -  -  -   -
   // Methods to access internal state
 
-  usize get_pivot_index() const noexcept
+  usize get_pivot_index() const
   {
     return this->pivot_i_;
   }
 
-  usize get_segment_index() const noexcept
+  usize get_segment_index() const
   {
     return this->segment_i_;
   }
@@ -110,20 +110,20 @@ class SegmentedLevelScanner : private SegmentedLevelScannerBase
   /** \brief Returns the index of the next unconsumed item within the current segment; this may not
    * be accurate if called after this->next(); instead, call this->peek() and then this function.
    */
-  usize get_item_index() const noexcept
+  usize get_item_index() const
   {
     return this->item_i_;
   }
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
-  Optional<Item> peek_next_impl(bool advance) noexcept;
+  Optional<Item> peek_next_impl(bool advance);
 
-  void advance_segment() noexcept;
+  void advance_segment();
 
   void advance_to_pivot(usize target_pivot_i,
                         const Segment& segment,
-                        const PackedLeafPage& leaf_page) noexcept;
+                        const PackedLeafPage& leaf_page);
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
   Node* node_;
@@ -170,7 +170,7 @@ inline /*explicit*/ SegmentedLevelScanner<NodeT, LevelT, PageLoaderT>::Segmented
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename NodeT, typename LevelT, typename PageLoaderT>
-inline auto SegmentedLevelScanner<NodeT, LevelT, PageLoaderT>::peek() noexcept -> Optional<Item>
+inline auto SegmentedLevelScanner<NodeT, LevelT, PageLoaderT>::peek() -> Optional<Item>
 {
   return this->peek_next_impl(false);
 }
@@ -178,7 +178,7 @@ inline auto SegmentedLevelScanner<NodeT, LevelT, PageLoaderT>::peek() noexcept -
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename NodeT, typename LevelT, typename PageLoaderT>
-inline auto SegmentedLevelScanner<NodeT, LevelT, PageLoaderT>::next() noexcept -> Optional<Item>
+inline auto SegmentedLevelScanner<NodeT, LevelT, PageLoaderT>::next() -> Optional<Item>
 {
   return this->peek_next_impl(true);
 }
@@ -186,7 +186,7 @@ inline auto SegmentedLevelScanner<NodeT, LevelT, PageLoaderT>::next() noexcept -
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename NodeT, typename LevelT, typename PageLoaderT>
-inline auto SegmentedLevelScanner<NodeT, LevelT, PageLoaderT>::peek_next_impl(bool advance) noexcept
+inline auto SegmentedLevelScanner<NodeT, LevelT, PageLoaderT>::peek_next_impl(bool advance)
     -> Optional<Item>
 {
   // Errors are final; check the current status.
@@ -292,7 +292,7 @@ inline auto SegmentedLevelScanner<NodeT, LevelT, PageLoaderT>::peek_next_impl(bo
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename NodeT, typename LevelT, typename PageLoaderT>
-inline void SegmentedLevelScanner<NodeT, LevelT, PageLoaderT>::advance_segment() noexcept
+inline void SegmentedLevelScanner<NodeT, LevelT, PageLoaderT>::advance_segment()
 {
   ++this->segment_i_;
   this->needs_load_ = true;
@@ -304,7 +304,7 @@ template <typename NodeT, typename LevelT, typename PageLoaderT>
 inline void SegmentedLevelScanner<NodeT, LevelT, PageLoaderT>::advance_to_pivot(
     usize target_pivot_i,
     const Segment& segment,
-    const PackedLeafPage& leaf_page) noexcept
+    const PackedLeafPage& leaf_page)
 {
   BATT_CHECK_LT(target_pivot_i, this->node_->pivot_count());
 

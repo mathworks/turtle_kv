@@ -18,7 +18,7 @@ constexpr unsigned kMaxLeafUtilizationRatio = 3;
 //
 // Default can be overridden at runtime with environment variable TURTLE_TREE_PREFETCH=<level>
 //
-unsigned tree_prefetch_level() noexcept;
+unsigned tree_prefetch_level();
 
 constexpr unsigned kDefaultPrefetchLevel = 1;
 

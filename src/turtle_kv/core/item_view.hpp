@@ -26,7 +26,7 @@ struct ItemView {
   ValueView value;
 };
 
-inline const KeyView& get_key(const ItemView& item)
+BATT_ALWAYS_INLINE inline const KeyView& get_key(const ItemView& item)
 {
   return item.key;
 }
@@ -36,7 +36,7 @@ inline Optional<ItemView> to_item_view(const ItemView& item)
   return {item};
 }
 
-inline const ValueView& get_value(const ItemView& item) noexcept
+inline const ValueView& get_value(const ItemView& item)
 {
   return item.value;
 }
@@ -49,19 +49,19 @@ struct ToItemView {
   }
 };
 
-inline bool operator==(const ItemView& l, const ItemView& r) noexcept
+inline bool operator==(const ItemView& l, const ItemView& r)
 {
   return l.key == r.key && l.value == r.value;
 }
 
 template <typename K, typename V>
-inline bool operator==(const ItemView& l, const std::pair<K, V>& r) noexcept
+inline bool operator==(const ItemView& l, const std::pair<K, V>& r)
 {
   return l.key == get_key(r.first) && l.value.as_str() == get_value_as_str(r.second);
 }
 
 template <typename K, typename V>
-inline bool operator==(const std::pair<K, V>& l, const ItemView& r) noexcept
+inline bool operator==(const std::pair<K, V>& l, const ItemView& r)
 {
   return get_key(l.first) == r.key && get_value_as_str(l.second) == r.value;
 }

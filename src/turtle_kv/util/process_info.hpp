@@ -48,7 +48,7 @@ class ProcessInfo
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  void update_stats() noexcept
+  void update_stats()
   {
     bool fail = false;
 
@@ -71,22 +71,22 @@ class ProcessInfo
     }
   }
 
-  usize cpu_seconds() const noexcept
+  usize cpu_seconds() const
   {
     return this->cpu_seconds_.load();
   }
 
-  usize memory_usage() const noexcept
+  usize memory_usage() const
   {
     return this->memory_usage_.load();
   }
 
-  void halt() noexcept
+  void halt()
   {
     this->halt_requested_.store(true);
   }
 
-  void join() noexcept
+  void join()
   {
     if (this->thread_.joinable()) {
       this->thread_.join();
@@ -95,7 +95,7 @@ class ProcessInfo
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
-  void thread_main() noexcept
+  void thread_main()
   {
     LOG(INFO) << "ProcessInfo{" << BATT_INSPECT(this->target_pid_) << "}";
     LOG(INFO) << BATT_INSPECT(this->get_cpu_seconds_command_);

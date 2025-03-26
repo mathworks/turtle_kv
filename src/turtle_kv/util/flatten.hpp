@@ -2,6 +2,8 @@
 
 #include <turtle_kv/import/int_types.hpp>
 
+#include <batteries/utility.hpp>
+
 #include <boost/iterator/iterator_facade.hpp>
 
 #include <iterator>
@@ -26,12 +28,12 @@ class Chunk
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  bool empty() const noexcept
+  bool empty() const
   {
     return this->items.empty();
   }
 
-  usize size() const noexcept
+  usize size() const
   {
     return this->items.size();
   }
@@ -77,18 +79,18 @@ class Flatten
   {
   }
 
-  reference dereference() const
+  BATT_ALWAYS_INLINE reference dereference() const
   {
     return this->cached_chunk_.items.front();
   }
 
-  bool equal(const Flatten& that) const
+  BATT_ALWAYS_INLINE bool equal(const Flatten& that) const
   {
     return this->chunk_iter_ == that.chunk_iter_ &&
            this->cached_chunk_.offset == that.cached_chunk_.offset;
   }
 
-  void increment()
+  BATT_ALWAYS_INLINE void increment()
   {
     this->cached_chunk_.items.advance_begin(1);
     if (this->cached_chunk_.items.empty()) {
@@ -98,7 +100,7 @@ class Flatten
     }
   }
 
-  void decrement()
+  BATT_ALWAYS_INLINE void decrement()
   {
     BATT_ASSERT_GT(this->cached_chunk_.offset, 0);
 
@@ -109,7 +111,7 @@ class Flatten
     this->cached_chunk_.items.advance_begin(-1);
   }
 
-  void advance(isize delta)
+  BATT_ALWAYS_INLINE void advance(isize delta)
   {
     while (delta < 0) {
       if (this->cached_chunk_.offset == this->chunk_iter_->offset) {
@@ -134,19 +136,19 @@ class Flatten
     }
   }
 
-  isize distance_to(const Flatten& that) const
+  BATT_ALWAYS_INLINE isize distance_to(const Flatten& that) const
   {
     return that.cached_chunk_.offset - this->cached_chunk_.offset;
   }
 
-  void to_next_chunk_first()
+  BATT_ALWAYS_INLINE void to_next_chunk_first()
   {
     ++this->chunk_iter_;
     this->cached_chunk_ = *this->chunk_iter_;
   }
 
  private:
-  void to_prev_chunk_last()
+  BATT_ALWAYS_INLINE void to_prev_chunk_last()
   {
     --this->chunk_iter_;
     this->cached_chunk_ = *this->chunk_iter_;

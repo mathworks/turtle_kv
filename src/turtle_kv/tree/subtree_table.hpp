@@ -17,25 +17,25 @@ class SubtreeTable : public Table
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  Status put(const KeyView& key, const ValueView& value) noexcept override
+  Status put(const KeyView& key, const ValueView& value) override
   {
     BATT_PANIC() << "This will never be implemented.";
     return batt::StatusCode::kUnimplemented;
   }
 
-  StatusOr<ValueView> get(const KeyView& key) noexcept override
+  StatusOr<ValueView> get(const KeyView& key) override
   {
     return this->subtree_.find_key(this->page_loader_, this->latest_pinned_page_, key);
   }
 
   StatusOr<usize> scan(const KeyView& min_key,
-                       const Slice<std::pair<KeyView, ValueView>>& items_out) noexcept override
+                       const Slice<std::pair<KeyView, ValueView>>& items_out) override
   {
     BATT_PANIC() << "This will never be implemented.";
     return {batt::StatusCode::kUnimplemented};
   }
 
-  Status remove(const KeyView& key) noexcept override
+  Status remove(const KeyView& key) override
   {
     BATT_PANIC() << "This will never be implemented.";
     return batt::StatusCode::kUnimplemented;

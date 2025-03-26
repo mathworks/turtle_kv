@@ -14,7 +14,7 @@ using batt::bit_count;
 /** \brief Returns the 0-based index of the first 1 bit in the set, or 64 if there are no 1 bits
  * present.
  */
-inline i32 first_bit(u64 bit_set) noexcept
+inline i32 first_bit(u64 bit_set)
 {
   if (bit_set == 0) {
     return 64;
@@ -25,7 +25,7 @@ inline i32 first_bit(u64 bit_set) noexcept
 /** \brief Returns the 0-based index of the last 1 bit in the set, or -1 if there are no 1 bits
  * present.
  */
-inline i32 last_bit(u64 bit_set) noexcept
+inline i32 last_bit(u64 bit_set)
 {
   if (bit_set == 0) {
     return -1;
@@ -35,7 +35,7 @@ inline i32 last_bit(u64 bit_set) noexcept
 
 /** \brief Returns the index of the next 1 bit, after `index`.
  */
-inline i32 next_bit(u64 bit_set, i32 index) noexcept
+inline i32 next_bit(u64 bit_set, i32 index)
 {
   const u64 mask = (u64{2} << index) - 1;
   return first_bit(bit_set & ~mask);
@@ -43,7 +43,7 @@ inline i32 next_bit(u64 bit_set, i32 index) noexcept
 
 /** \brief Returns the one past the index of the previous 1 bit before `index`.
  */
-inline i32 prev_bit(u64 bit_set, i32 index) noexcept
+inline i32 prev_bit(u64 bit_set, i32 index)
 {
   const u64 mask = ((u64{1} << index) - 1);
   return last_bit(bit_set & mask);
@@ -51,7 +51,7 @@ inline i32 prev_bit(u64 bit_set, i32 index) noexcept
 
 /** \brief Reads the bit at index within bit_set, returning true iff it is set.
  */
-inline bool get_bit(u64 bit_set, i32 index) noexcept
+inline bool get_bit(u64 bit_set, i32 index)
 {
   return (bit_set & (u64{1} << index)) != 0;
 }
@@ -59,7 +59,7 @@ inline bool get_bit(u64 bit_set, i32 index) noexcept
 /** \brief Returns a copy of `bit_set` with the specified bit (`index`) set to 0 (false) or 1 (true)
  * depending on `value`.
  */
-inline [[nodiscard]] u64 set_bit(u64 bit_set, i32 index, bool value) noexcept
+inline [[nodiscard]] u64 set_bit(u64 bit_set, i32 index, bool value)
 {
   const u64 mask = u64{1} << index;
   if (value) {
@@ -72,7 +72,7 @@ inline [[nodiscard]] u64 set_bit(u64 bit_set, i32 index, bool value) noexcept
 /** \brief Inserts a bit into `bit_set` at the given index, shifting (up) all bits at that point and
  * beyond.
  */
-inline [[nodiscard]] u64 insert_bit(u64 bit_set, i32 index, bool value) noexcept
+inline [[nodiscard]] u64 insert_bit(u64 bit_set, i32 index, bool value)
 {
   const u64 lower_mask = (u64{1} << index) - 1;
   const u64 upper_mask = ~lower_mask;
@@ -85,7 +85,7 @@ inline [[nodiscard]] u64 insert_bit(u64 bit_set, i32 index, bool value) noexcept
 
 /** \brief Removes the bit at the given index, shifting all those above down by one position.
  */
-inline [[nodiscard]] u64 remove_bit(u64 bit_set, i32 index) noexcept
+inline [[nodiscard]] u64 remove_bit(u64 bit_set, i32 index)
 {
   const u64 lower_mask = (u64{1} << index) - 1;
   const u64 upper_mask = (~lower_mask) << 1;
@@ -94,7 +94,7 @@ inline [[nodiscard]] u64 remove_bit(u64 bit_set, i32 index) noexcept
 }
 
 template <typename IntT>
-inline u64 mask_from_interval(const CInterval<IntT>& i) noexcept
+inline u64 mask_from_interval(const CInterval<IntT>& i)
 {
   u64 mask = (u64{1} << i.size()) - 1;
   return mask << i.lower_bound;
@@ -126,7 +126,7 @@ inline u64 mask_from_interval(const CInterval<IntT>& i) noexcept
  *   bit_rank(0b1101011100, 9) ==  5
  *              ^
  */
-inline i32 bit_rank(u64 bit_set, i32 index) noexcept
+inline i32 bit_rank(u64 bit_set, i32 index)
 {
   return __builtin_popcountll(bit_set & ((u64{2} << index) - 1)) - 1;
 }
@@ -170,7 +170,7 @@ inline i32 bit_rank(u64 bit_set, i32 index) noexcept
  * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~│~~~~~~~~~~~~~~~~~
  *                                               │ (63 - 47) = 16 =  (select result)
  */
-inline i32 bit_select(u64 bit_set, i32 rank) noexcept
+inline i32 bit_select(u64 bit_set, i32 rank)
 {
   return 63 - __builtin_clzll(_pdep_u64((u64{1} << (rank + 1)) - 1, bit_set));
 }

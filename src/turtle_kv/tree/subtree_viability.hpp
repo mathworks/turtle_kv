@@ -27,7 +27,7 @@ struct NeedsMerge {
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  explicit operator bool() const noexcept
+  explicit operator bool() const
   {
     return this->too_few_pivots ||  //
            this->too_few_items;
@@ -50,7 +50,7 @@ struct NeedsSplit {
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  explicit operator bool() const noexcept
+  explicit operator bool() const
   {
     return this->items_too_large ||    //
            this->keys_too_large ||     //

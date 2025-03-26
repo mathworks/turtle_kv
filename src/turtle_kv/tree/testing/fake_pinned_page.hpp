@@ -24,7 +24,7 @@ class FakePinnedPage
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  llfs::PageId page_id() const noexcept
+  llfs::PageId page_id() const
   {
     if (!this->page_buffer_) {
       return llfs::PageId{};
@@ -33,12 +33,12 @@ class FakePinnedPage
     return llfs::get_page_header(*this->page_buffer_).page_id.unpack();
   }
 
-  explicit operator bool() const noexcept
+  explicit operator bool() const
   {
     return (bool)this->page_buffer_;
   }
 
-  std::shared_ptr<llfs::PageBuffer> get_page_buffer() const noexcept
+  std::shared_ptr<llfs::PageBuffer> get_page_buffer() const
   {
     return this->page_buffer_;
   }

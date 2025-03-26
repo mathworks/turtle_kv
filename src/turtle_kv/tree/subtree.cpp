@@ -16,14 +16,14 @@ namespace turtle_kv {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-/*static*/ Subtree Subtree::make_empty() noexcept
+/*static*/ Subtree Subtree::make_empty()
 {
   return Subtree::from_page_id(llfs::PageId{});
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-/*static*/ Subtree Subtree::from_page_id(const llfs::PageId& page_id) noexcept
+/*static*/ Subtree Subtree::from_page_id(const llfs::PageId& page_id)
 {
   return Subtree{
       .impl = llfs::PageIdSlot::from_page_id(page_id),
@@ -32,14 +32,14 @@ namespace turtle_kv {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-/*static*/ Subtree Subtree::from_pinned_page(const llfs::PinnedPage& pinned_page) noexcept
+/*static*/ Subtree Subtree::from_pinned_page(const llfs::PinnedPage& pinned_page)
 {
   return Subtree::from_page_id(pinned_page.page_id());
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-/*static*/ llfs::PageLayoutId Subtree::expected_layout_for_height(i32 height) noexcept
+/*static*/ llfs::PageLayoutId Subtree::expected_layout_for_height(i32 height)
 {
   if (height == 1) {
     return LeafPageView::page_layout_id();
@@ -53,7 +53,7 @@ Status Subtree::apply_batch_update(const TreeOptions& tree_options,
                                    i32 parent_height,
                                    BatchUpdate& update,
                                    const KeyView& key_upper_bound,
-                                   IsRoot is_root) noexcept
+                                   IsRoot is_root)
 {
   BATT_CHECK_GT(parent_height, 0);
 
@@ -182,7 +182,7 @@ Status Subtree::apply_batch_update(const TreeOptions& tree_options,
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<i32> Subtree::get_height(llfs::PageLoader& page_loader) const noexcept
+StatusOr<i32> Subtree::get_height(llfs::PageLoader& page_loader) const
 {
   return batt::case_of(
       this->impl,
@@ -213,7 +213,7 @@ StatusOr<i32> Subtree::get_height(llfs::PageLoader& page_loader) const noexcept
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 StatusOr<KeyView> Subtree::get_min_key(llfs::PageLoader& page_loader,
-                                       llfs::PinnedPage& pinned_page_out) const noexcept
+                                       llfs::PinnedPage& pinned_page_out) const
 {
   return batt::case_of(
       this->impl,
@@ -242,7 +242,7 @@ StatusOr<KeyView> Subtree::get_min_key(llfs::PageLoader& page_loader,
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 StatusOr<KeyView> Subtree::get_max_key(llfs::PageLoader& page_loader,
-                                       llfs::PinnedPage& pinned_page_out) const noexcept
+                                       llfs::PinnedPage& pinned_page_out) const
 {
   return batt::case_of(
       this->impl,
@@ -270,7 +270,7 @@ StatusOr<KeyView> Subtree::get_max_key(llfs::PageLoader& page_loader,
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-SubtreeViability Subtree::get_viability() const noexcept
+SubtreeViability Subtree::get_viability() const
 {
   return batt::case_of(
       this->impl,
@@ -286,7 +286,7 @@ SubtreeViability Subtree::get_viability() const noexcept
 //
 StatusOr<ValueView> Subtree::find_key(llfs::PageLoader& page_loader,
                                       llfs::PinnedPage& pinned_page_out,
-                                      const KeyView& key) const noexcept
+                                      const KeyView& key) const
 {
   return batt::case_of(
       this->impl,
@@ -318,9 +318,9 @@ StatusOr<ValueView> Subtree::find_key(llfs::PageLoader& page_loader,
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-std::function<void(std::ostream&)> Subtree::dump(i32 detail_level) const noexcept
+std::function<void(std::ostream&)> Subtree::dump(i32 detail_level) const
 {
-  return [this](std::ostream& out) noexcept {
+  return [this](std::ostream& out) {
     batt::case_of(
         this->impl,
         [&](const llfs::PageIdSlot& page_id_slot) {
@@ -352,7 +352,7 @@ std::function<void(std::ostream&)> Subtree::dump(i32 detail_level) const noexcep
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Optional<llfs::PageId> Subtree::get_page_id() const noexcept
+Optional<llfs::PageId> Subtree::get_page_id() const
 {
   return batt::case_of(
       this->impl,
@@ -366,7 +366,7 @@ Optional<llfs::PageId> Subtree::get_page_id() const noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<Subtree> Subtree::try_split(llfs::PageLoader& page_loader) noexcept
+StatusOr<Subtree> Subtree::try_split(llfs::PageLoader& page_loader)
 {
   return batt::case_of(
       this->impl,
@@ -394,7 +394,7 @@ StatusOr<Subtree> Subtree::try_split(llfs::PageLoader& page_loader) noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-llfs::PackedPageId Subtree::packed_page_id_or_panic() const noexcept
+llfs::PackedPageId Subtree::packed_page_id_or_panic() const
 {
   BATT_CHECK((batt::is_case<llfs::PageIdSlot>(this->impl)));
 
@@ -403,14 +403,14 @@ llfs::PackedPageId Subtree::packed_page_id_or_panic() const noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-bool Subtree::is_serialized() const noexcept
+bool Subtree::is_serialized() const
 {
   return batt::is_case<llfs::PageIdSlot>(this->impl);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status Subtree::start_serialize(TreeSerializeContext& context) noexcept
+Status Subtree::start_serialize(TreeSerializeContext& context)
 {
   return batt::case_of(
       this->impl,
@@ -427,7 +427,7 @@ Status Subtree::start_serialize(TreeSerializeContext& context) noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<llfs::PinnedPage> Subtree::finish_serialize(TreeSerializeContext& context) noexcept
+StatusOr<llfs::PinnedPage> Subtree::finish_serialize(TreeSerializeContext& context)
 {
   StatusOr<llfs::PinnedPage> pinned_page = batt::case_of(
       this->impl,

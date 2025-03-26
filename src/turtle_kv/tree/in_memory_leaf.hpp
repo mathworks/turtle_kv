@@ -43,7 +43,7 @@ struct InMemoryLeaf {
   {
   }
 
-  void set_edit_size_totals(batt::RunningTotal&& running_total) noexcept
+  void set_edit_size_totals(batt::RunningTotal&& running_total)
   {
     this->shared_edit_size_totals_ = std::make_shared<batt::RunningTotal>(std::move(running_total));
 
@@ -51,12 +51,12 @@ struct InMemoryLeaf {
                                    this->shared_edit_size_totals_->end());
   }
 
-  usize get_item_count() const noexcept
+  usize get_item_count() const
   {
     return this->result_set.size();
   }
 
-  usize get_items_size() const noexcept
+  usize get_items_size() const
   {
     BATT_CHECK(this->edit_size_totals);
     BATT_CHECK_EQ(this->edit_size_totals->size(), this->result_set.size() + 1);
@@ -67,30 +67,30 @@ struct InMemoryLeaf {
     return this->edit_size_totals->back() - this->edit_size_totals->front();
   }
 
-  KeyView get_min_key() const noexcept
+  KeyView get_min_key() const
   {
     return this->result_set.get_min_key();
   }
 
-  KeyView get_max_key() const noexcept
+  KeyView get_max_key() const
   {
     return this->result_set.get_max_key();
   }
 
-  StatusOr<ValueView> find_key(const KeyView& key) const noexcept
+  StatusOr<ValueView> find_key(const KeyView& key) const
   {
     return this->result_set.find_key(key);
   }
 
-  SubtreeViability get_viability() noexcept;
+  SubtreeViability get_viability();
 
-  StatusOr<std::unique_ptr<InMemoryLeaf>> try_split() noexcept;
+  StatusOr<std::unique_ptr<InMemoryLeaf>> try_split();
 
-  StatusOr<SplitPlan> make_split_plan() const noexcept;
+  StatusOr<SplitPlan> make_split_plan() const;
 
-  Status start_serialize(TreeSerializeContext& context) noexcept;
+  Status start_serialize(TreeSerializeContext& context);
 
-  StatusOr<llfs::PinnedPage> finish_serialize(TreeSerializeContext& context) noexcept;
+  StatusOr<llfs::PinnedPage> finish_serialize(TreeSerializeContext& context);
 };
 
 // #=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++

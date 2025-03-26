@@ -49,6 +49,6 @@ struct HexBinaryView {
   std::string_view str;
 };
 
-std::ostream& operator<<(std::ostream& out, const HexBinaryView& t) noexcept;
+std::ostream& operator<<(std::ostream& out, const HexBinaryView& t);
 
 }  // namespace turtle_kv

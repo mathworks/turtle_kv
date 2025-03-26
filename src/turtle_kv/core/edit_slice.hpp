@@ -23,34 +23,34 @@ using EditSlice = std::variant<  //
 
 // The key of the first edit in the slice; the slice MUST be non-empty.
 //
-KeyView get_min_key(const EditSlice& edit_slice) noexcept;
+KeyView get_min_key(const EditSlice& edit_slice);
 
 // The key of the last edit in the slice; the slice MUST be non-empty.
 //
-KeyView get_max_key(const EditSlice& edit_slice) noexcept;
+KeyView get_max_key(const EditSlice& edit_slice);
 
 // Returns true iff this slice is empty.
 //
-bool is_empty(const EditSlice& edit_slice) noexcept;
+bool is_empty(const EditSlice& edit_slice);
 
 // Returns the number of items in this slice.
 //
-usize get_item_count(const EditSlice& edit_slice) noexcept;
+usize get_item_count(const EditSlice& edit_slice);
 
 /** \brief Returns true iff the edit_slice is sorted by key.
  */
-bool is_sorted_by_key(const EditSlice& edit_slice) noexcept;
+bool is_sorted_by_key(const EditSlice& edit_slice);
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 
 template <typename T>
-decltype(auto) get_min_key(const Ref<T>& r) noexcept
+decltype(auto) get_min_key(const Ref<T>& r)
 {
   return get_min_key(r.get());
 }
 
 template <typename T>
-decltype(auto) get_max_key(const Ref<T>& r) noexcept
+decltype(auto) get_max_key(const Ref<T>& r)
 {
   return get_max_key(r.get());
 }
@@ -78,6 +78,6 @@ struct MaxKeyHeapOrder {
 namespace batt {
 
 SmallFn<void(std::ostream&)> dump_range(const ::turtle_kv::EditSlice& edit_slice,
-                                        Pretty pretty = Pretty::False) noexcept;
+                                        Pretty pretty = Pretty::False);
 
 }  // namespace batt

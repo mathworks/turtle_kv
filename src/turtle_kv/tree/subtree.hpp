@@ -30,13 +30,13 @@ struct Subtree {
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  static Subtree make_empty() noexcept;
+  static Subtree make_empty();
 
-  static Subtree from_page_id(const llfs::PageId& page_id) noexcept;
+  static Subtree from_page_id(const llfs::PageId& page_id);
 
-  static Subtree from_pinned_page(const llfs::PinnedPage& pinned_page) noexcept;
+  static Subtree from_pinned_page(const llfs::PinnedPage& pinned_page);
 
-  static llfs::PageLayoutId expected_layout_for_height(i32 height) noexcept;
+  static llfs::PageLayoutId expected_layout_for_height(i32 height);
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -44,38 +44,38 @@ struct Subtree {
                             i32 parent_height,                //
                             BatchUpdate& update,              //
                             const KeyView& key_upper_bound,   //
-                            IsRoot is_root) noexcept;
+                            IsRoot is_root);
 
-  StatusOr<i32> get_height(llfs::PageLoader& page_loader) const noexcept;
+  StatusOr<i32> get_height(llfs::PageLoader& page_loader) const;
 
   StatusOr<KeyView> get_min_key(llfs::PageLoader& page_loader,  //
-                                llfs::PinnedPage& pinned_page_out) const noexcept;
+                                llfs::PinnedPage& pinned_page_out) const;
 
   StatusOr<KeyView> get_max_key(llfs::PageLoader& page_loader,  //
-                                llfs::PinnedPage& pinned_page_out) const noexcept;
+                                llfs::PinnedPage& pinned_page_out) const;
 
-  SubtreeViability get_viability() const noexcept;
+  SubtreeViability get_viability() const;
 
   StatusOr<ValueView> find_key(llfs::PageLoader& page_loader,      //
                                llfs::PinnedPage& pinned_page_out,  //
-                               const KeyView& key) const noexcept;
+                               const KeyView& key) const;
 
-  std::function<void(std::ostream&)> dump(i32 detail_level = 1) const noexcept;
+  std::function<void(std::ostream&)> dump(i32 detail_level = 1) const;
 
-  Optional<llfs::PageId> get_page_id() const noexcept;
+  Optional<llfs::PageId> get_page_id() const;
 
   /** \brief Attempts to split the tree at the top level only; if successful, returns the new
    * right-sibling (i.e. key range _after_ this).
    */
-  StatusOr<Subtree> try_split(llfs::PageLoader& page_loader) noexcept;
+  StatusOr<Subtree> try_split(llfs::PageLoader& page_loader);
 
-  llfs::PackedPageId packed_page_id_or_panic() const noexcept;
+  llfs::PackedPageId packed_page_id_or_panic() const;
 
-  bool is_serialized() const noexcept;
+  bool is_serialized() const;
 
-  Status start_serialize(TreeSerializeContext& context) noexcept;
+  Status start_serialize(TreeSerializeContext& context);
 
-  StatusOr<llfs::PinnedPage> finish_serialize(TreeSerializeContext& context) noexcept;
+  StatusOr<llfs::PinnedPage> finish_serialize(TreeSerializeContext& context);
 };
 
 //=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++

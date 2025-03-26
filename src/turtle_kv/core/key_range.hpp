@@ -10,21 +10,22 @@
 #include <llfs/key.hpp>
 
 #include <batteries/assert.hpp>
+#include <batteries/utility.hpp>
 
 namespace turtle_kv {
 
-inline const CInterval<KeyView>& get_key_range(const CInterval<KeyView>& key_range) noexcept
+inline const CInterval<KeyView>& get_key_range(const CInterval<KeyView>& key_range)
 {
   return key_range;
 }
 
-inline const Interval<KeyView>& get_key_range(const Interval<KeyView>& key_range) noexcept
+inline const Interval<KeyView>& get_key_range(const Interval<KeyView>& key_range)
 {
   return key_range;
 }
 
 template <typename T>
-inline CInterval<KeyView> get_key_range(const Chunk<const T*>& chunk) noexcept
+inline CInterval<KeyView> get_key_range(const Chunk<const T*>& chunk)
 {
   BATT_CHECK(!chunk.items.empty());
   return CInterval<KeyView>{
@@ -33,7 +34,7 @@ inline CInterval<KeyView> get_key_range(const Chunk<const T*>& chunk) noexcept
   };
 }
 
-inline CInterval<KeyView> get_key_range(const EditView& edit) noexcept
+inline CInterval<KeyView> get_key_range(const EditView& edit)
 {
   return CInterval<KeyView>{
       .lower_bound = get_key(edit),
@@ -41,7 +42,7 @@ inline CInterval<KeyView> get_key_range(const EditView& edit) noexcept
   };
 }
 
-inline CInterval<KeyView> get_key_range(const ItemView& item) noexcept
+inline CInterval<KeyView> get_key_range(const ItemView& item)
 {
   return CInterval<KeyView>{
       .lower_bound = get_key(item),
@@ -49,7 +50,7 @@ inline CInterval<KeyView> get_key_range(const ItemView& item) noexcept
   };
 }
 
-inline CInterval<KeyView> get_key_range(const KeyView& key) noexcept
+inline CInterval<KeyView> get_key_range(const KeyView& key)
 {
   return CInterval<KeyView>{
       .lower_bound = key,
@@ -60,29 +61,29 @@ inline CInterval<KeyView> get_key_range(const KeyView& key) noexcept
 struct ExtendedKeyRangeOrder : llfs::KeyRangeOrder {
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  bool less_than(const Interval<KeyView>& l, const Interval<KeyView>& r) const noexcept
+  bool less_than(const Interval<KeyView>& l, const Interval<KeyView>& r) const
   {
     return llfs::KeyRangeOrder::operator()(l, r);
   }
 
-  bool less_than(const CInterval<KeyView>& l, const CInterval<KeyView>& r) const noexcept
+  bool less_than(const CInterval<KeyView>& l, const CInterval<KeyView>& r) const
   {
     return llfs::KeyRangeOrder::operator()(l, r);
   }
 
-  bool less_than(const CInterval<KeyView>& l, const Interval<KeyView>& r) const noexcept
+  bool less_than(const CInterval<KeyView>& l, const Interval<KeyView>& r) const
   {
     return llfs::KeyOrder{}(l.upper_bound, r.lower_bound);
   }
 
-  bool less_than(const Interval<KeyView>& l, const CInterval<KeyView>& r) const noexcept
+  bool less_than(const Interval<KeyView>& l, const CInterval<KeyView>& r) const
   {
     return !llfs::KeyOrder{}(r.lower_bound, l.upper_bound);
   }
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
   template <typename L, typename R>
-  bool operator()(const L& l, const R& r) const noexcept
+  bool operator()(const L& l, const R& r) const
   {
     return this->less_than(get_key_range(l), get_key_range(r));
   }

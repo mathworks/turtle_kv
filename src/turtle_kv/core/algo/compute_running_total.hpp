@@ -18,7 +18,7 @@ template <bool kDecayValue = false>
 inline batt::RunningTotal compute_running_total(
     batt::WorkerPool& worker_pool,
     const MergeCompactor::ResultSet</*decay_to_items=*/false>& result_set,
-    DecayToItem<kDecayValue> decay_to_item [[maybe_unused]] = {}) noexcept
+    DecayToItem<kDecayValue> decay_to_item [[maybe_unused]] = {})
 {
   auto merged_edits = result_set.get();
 
@@ -38,7 +38,7 @@ inline batt::RunningTotal compute_running_total(
       worker_pool,
       merged_edits.begin(),
       merged_edits.end(),
-      [](const auto& edit) noexcept -> usize {
+      [](const auto& edit) -> usize {
         if (DecayToItem<kDecayValue>::keep_item(edit)) {
           return PackedSizeOfEdit{}(edit);
         }

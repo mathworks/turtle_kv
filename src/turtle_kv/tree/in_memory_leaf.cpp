@@ -9,7 +9,7 @@ namespace turtle_kv {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-SubtreeViability InMemoryLeaf::get_viability() noexcept
+SubtreeViability InMemoryLeaf::get_viability()
 {
   const usize total_size = this->get_items_size();
 
@@ -24,7 +24,7 @@ SubtreeViability InMemoryLeaf::get_viability() noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<std::unique_ptr<InMemoryLeaf>> InMemoryLeaf::try_split() noexcept
+StatusOr<std::unique_ptr<InMemoryLeaf>> InMemoryLeaf::try_split()
 {
   BATT_CHECK(this->edit_size_totals);
   BATT_CHECK(!this->edit_size_totals->empty());
@@ -73,7 +73,7 @@ StatusOr<std::unique_ptr<InMemoryLeaf>> InMemoryLeaf::try_split() noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-auto InMemoryLeaf::make_split_plan() const noexcept -> StatusOr<SplitPlan>
+auto InMemoryLeaf::make_split_plan() const -> StatusOr<SplitPlan>
 {
   BATT_CHECK(this->edit_size_totals);
 
@@ -151,7 +151,7 @@ auto InMemoryLeaf::make_split_plan() const noexcept -> StatusOr<SplitPlan>
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status InMemoryLeaf::start_serialize(TreeSerializeContext& context) noexcept
+Status InMemoryLeaf::start_serialize(TreeSerializeContext& context)
 {
   BATT_CHECK(!batt::is_case<NeedsSplit>(this->get_viability()))
       << BATT_INSPECT(this->get_viability()) << BATT_INSPECT(this->get_items_size())
@@ -173,7 +173,7 @@ Status InMemoryLeaf::start_serialize(TreeSerializeContext& context) noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<llfs::PinnedPage> InMemoryLeaf::finish_serialize(TreeSerializeContext& context) noexcept
+StatusOr<llfs::PinnedPage> InMemoryLeaf::finish_serialize(TreeSerializeContext& context)
 {
   u64 observed_id = this->future_id_.load();
 

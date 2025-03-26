@@ -14,12 +14,12 @@ using ::llfs::KeyOrder;
 using ::llfs::KeyRangeOrder;
 using ::llfs::KeyView;
 
-inline KeyView get_key(const char* c_str) noexcept
+BATT_ALWAYS_INLINE inline KeyView get_key(const char* c_str)
 {
   return KeyView{c_str};
 }
 
-inline KeyView get_key(const std::string& s) noexcept
+BATT_ALWAYS_INLINE inline KeyView get_key(const std::string& s)
 {
   return KeyView{s};
 }
@@ -42,26 +42,39 @@ struct KeySuffixOrder {
   }
 };
 
-inline const KeyView& global_min_key() noexcept
+inline const KeyView& global_min_key()
 {
   static const KeyView min_key_{"", 0};
   return min_key_;
 }
 
-inline bool is_global_min_key(const KeyView& key) noexcept
+inline bool is_global_min_key(const KeyView& key)
 {
   return key.empty();
 }
 
-inline const KeyView&& global_max_key() noexcept
+inline const KeyView&& global_max_key()
 {
   static const KeyView max_key_ = batt::StringUpperBound();
   return std::forward<const KeyView>(max_key_);
 }
 
-inline bool is_global_max_key(const KeyView& key) noexcept
+inline bool is_global_max_key(const KeyView& key)
 {
   return key.data() == global_max_key().data();
+}
+
+/** \brief Returns 0 if `key` is the global_max_key(); otherwise `key.size()`.
+ *
+ * We don't pack globally-maximal key values as they would be too large; instead we pack them as
+ * empty strings and infer that the packed key is the max key from context.
+ */
+inline usize packed_key_data_size(const KeyView& key)
+{
+  if (is_global_max_key(key)) {
+    return 0;
+  }
+  return key.size();
 }
 
 }  // namespace turtle_kv

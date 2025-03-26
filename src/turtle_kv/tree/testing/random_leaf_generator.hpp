@@ -35,7 +35,7 @@ class RandomLeafGenerator
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  static llfs::PageId make_fake_page_id() noexcept
+  static llfs::PageId make_fake_page_id()
   {
     static std::atomic<u64> next_page_id_int{1};
     return llfs::PageId{next_page_id_int.fetch_add(1)};
@@ -43,7 +43,7 @@ class RandomLeafGenerator
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  RandomResultSetGenerator& items_generator() noexcept
+  RandomResultSetGenerator& items_generator()
   {
     return this->items_generator_;
   }
@@ -52,7 +52,7 @@ class RandomLeafGenerator
   Result<kDecayToItems> operator()(DecayToItem<kDecayToItems> decay_to_items,
                                    Rng& rng,
                                    FakePageLoader& fake_loader,
-                                   llfs::StableStringStore& store) noexcept
+                                   llfs::StableStringStore& store)
   {
     Result<kDecayToItems> result;
     llfs::PageSize page_size = fake_loader.get_page_size();

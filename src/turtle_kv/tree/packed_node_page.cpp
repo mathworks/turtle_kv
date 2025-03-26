@@ -16,7 +16,7 @@ namespace turtle_kv {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-PackedNodePage* build_node_page(const MutableBuffer& buffer, const InMemoryNode& src_node) noexcept
+PackedNodePage* build_node_page(const MutableBuffer& buffer, const InMemoryNode& src_node)
 {
   BATT_CHECK(src_node.is_packable());
   BATT_CHECK_GT(buffer.size(), sizeof(llfs::PackedPageHeader));
@@ -204,7 +204,7 @@ PackedNodePage* build_node_page(const MutableBuffer& buffer, const InMemoryNode&
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Subtree PackedNodePage::get_child(i32 pivot_i) const noexcept
+Subtree PackedNodePage::get_child(i32 pivot_i) const
 {
   return Subtree{
       .impl = llfs::PageIdSlot::from_page_id(this->children[pivot_i].unpack()),
@@ -215,7 +215,7 @@ Subtree PackedNodePage::get_child(i32 pivot_i) const noexcept
 //
 StatusOr<ValueView> PackedNodePage::find_key(llfs::PageLoader& page_loader,
                                              llfs::PinnedPage& pinned_page_out,
-                                             const KeyView& key) const noexcept
+                                             const KeyView& key) const
 {
   return in_node(*this).find_key(page_loader, pinned_page_out, key);
 }
@@ -226,7 +226,7 @@ StatusOr<ValueView> PackedNodePage::find_key_in_level(usize level_i,            
                                                       llfs::PageLoader& page_loader,      //
                                                       llfs::PinnedPage& pinned_page_out,  //
                                                       i32 key_pivot_i,                    //
-                                                      const KeyView& key) const noexcept
+                                                      const KeyView& key) const
 {
   UpdateBuffer::SegmentedLevel level = this->update_buffer.get_level(level_i);
 
@@ -238,7 +238,7 @@ StatusOr<ValueView> PackedNodePage::find_key_in_level(usize level_i,            
 //
 StatusOr<llfs::PinnedPage> PackedNodePage::UpdateBuffer::Segment::load_leaf_page(
     llfs::PageLoader& page_loader,
-    llfs::PinPageToJob pin_page_to_job) const noexcept
+    llfs::PinPageToJob pin_page_to_job) const
 {
   return page_loader.get_page_with_layout_in_job(this->leaf_page_id.unpack(),
                                                  NodePageView::page_layout_id(),
@@ -250,7 +250,7 @@ StatusOr<llfs::PinnedPage> PackedNodePage::UpdateBuffer::Segment::load_leaf_page
 //
 usize PackedNodePage::UpdateBuffer::Segment::get_flushed_item_upper_bound(
     const SegmentedLevel& level,
-    i32 pivot_i) const noexcept
+    i32 pivot_i) const
 {
   if (!get_bit(this->flushed_pivots, pivot_i)) {
     return 0;
@@ -270,7 +270,7 @@ usize PackedNodePage::UpdateBuffer::Segment::get_flushed_item_upper_bound(
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-std::function<void(std::ostream&)> PackedNodePage::dump() const noexcept
+std::function<void(std::ostream&)> PackedNodePage::dump() const
 {
   return [this](std::ostream& out) {
     out << "PackedNodePage:" << std::endl                                    //

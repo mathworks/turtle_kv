@@ -7,7 +7,7 @@ using TrimResult = BatchUpdate::TrimResult;
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-BatchUpdate BatchUpdate::make_child_update() const noexcept
+BatchUpdate BatchUpdate::make_child_update() const
 {
   return BatchUpdate{
       .worker_pool = this->worker_pool,
@@ -20,14 +20,14 @@ BatchUpdate BatchUpdate::make_child_update() const noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-void BatchUpdate::update_edit_size_totals() noexcept
+void BatchUpdate::update_edit_size_totals()
 {
   this->edit_size_totals.emplace(compute_running_total(this->worker_pool, this->result_set));
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-TrimResult BatchUpdate::trim_back_down_to_size(usize byte_size_limit) noexcept
+TrimResult BatchUpdate::trim_back_down_to_size(usize byte_size_limit)
 {
   TrimResult result;
 

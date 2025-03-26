@@ -19,72 +19,72 @@ namespace turtle_kv {
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 
-inline i32 get_first_active_pivot(i32 pivot_i) noexcept
+inline i32 get_first_active_pivot(i32 pivot_i)
 {
   return pivot_i;
 }
 
-inline i32 get_last_active_pivot(i32 pivot_i) noexcept
-{
-  return pivot_i;
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-
-inline i32 get_first_active_pivot(usize pivot_i) noexcept
-{
-  return pivot_i;
-}
-
-inline i32 get_last_active_pivot(usize pivot_i) noexcept
+inline i32 get_last_active_pivot(i32 pivot_i)
 {
   return pivot_i;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 
-inline i32 get_first_active_pivot(const Interval<i32>& pivot_range) noexcept
+inline i32 get_first_active_pivot(usize pivot_i)
+{
+  return pivot_i;
+}
+
+inline i32 get_last_active_pivot(usize pivot_i)
+{
+  return pivot_i;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+
+inline i32 get_first_active_pivot(const Interval<i32>& pivot_range)
 {
   return pivot_range.lower_bound;
 }
 
-inline i32 get_last_active_pivot(const Interval<i32>& pivot_range) noexcept
+inline i32 get_last_active_pivot(const Interval<i32>& pivot_range)
 {
   return pivot_range.upper_bound - 1;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 
-inline i32 get_first_active_pivot(const CInterval<i32>& pivot_range) noexcept
+inline i32 get_first_active_pivot(const CInterval<i32>& pivot_range)
 {
   return pivot_range.lower_bound;
 }
 
-inline i32 get_last_active_pivot(const CInterval<i32>& pivot_range) noexcept
+inline i32 get_last_active_pivot(const CInterval<i32>& pivot_range)
 {
   return pivot_range.upper_bound;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 
-inline i32 get_first_active_pivot(const Interval<usize>& pivot_range) noexcept
+inline i32 get_first_active_pivot(const Interval<usize>& pivot_range)
 {
   return pivot_range.lower_bound;
 }
 
-inline i32 get_last_active_pivot(const Interval<usize>& pivot_range) noexcept
+inline i32 get_last_active_pivot(const Interval<usize>& pivot_range)
 {
   return pivot_range.upper_bound - 1;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 
-inline i32 get_first_active_pivot(const CInterval<usize>& pivot_range) noexcept
+inline i32 get_first_active_pivot(const CInterval<usize>& pivot_range)
 {
   return pivot_range.lower_bound;
 }
 
-inline i32 get_last_active_pivot(const CInterval<usize>& pivot_range) noexcept
+inline i32 get_last_active_pivot(const CInterval<usize>& pivot_range)
 {
   return pivot_range.upper_bound;
 }
@@ -98,13 +98,13 @@ using EnableIfHasActivePivotsBitset =
 //----- --- -- -  -  -   -
 
 template <typename T, typename = EnableIfHasActivePivotsBitset<T>>
-inline i32 get_first_active_pivot(T&& segment) noexcept
+inline i32 get_first_active_pivot(T&& segment)
 {
   return first_bit(segment.get_active_pivots());
 }
 
 template <typename T, typename = EnableIfHasActivePivotsBitset<T>>
-inline i32 get_last_active_pivot(T&& segment) noexcept
+inline i32 get_last_active_pivot(T&& segment)
 {
   return last_bit(segment.get_active_pivots());
 }
@@ -135,12 +135,12 @@ struct SegmentedLevelAlgorithms {
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  static constexpr bool node_available() noexcept
+  static constexpr bool node_available()
   {
     return !std::is_same_v<std::decay<NodeT>, NodeUnavailable>;
   }
 
-  static constexpr bool page_loader_available() noexcept
+  static constexpr bool page_loader_available()
   {
     return !std::is_same_v<std::decay<PageLoaderT>, PageLoaderUnavailable>;
   }
@@ -164,7 +164,7 @@ struct SegmentedLevelAlgorithms {
 
   /** \brief Marks all items in `pivot_i` with keys less than or equal to `max_key` as flushed.
    */
-  Status flush_pivot_up_to_key(usize pivot_i, const KeyView& max_key) noexcept
+  Status flush_pivot_up_to_key(usize pivot_i, const KeyView& max_key)
   {
     static_assert(node_available());
     static_assert(page_loader_available());
@@ -196,40 +196,6 @@ struct SegmentedLevelAlgorithms {
       auto pivot_first = leaf_view.lower_bound(pivot_lower_bound_key);
       auto pivot_last = leaf_view.lower_bound(pivot_upper_bound_key);
       auto flushed_last = leaf_view.lower_bound(max_key);
-
-#if 0
-      //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-      BATT_DEBUG_INFO(([&leaf_view, &pivot_last, &flushed_last](std::ostream& out) {
-                        out << " flushed_max=";
-                        if (flushed_last == leaf_view.items_begin()) {
-                          out << "(begin)";
-                        } else {
-                          out << batt::c_str_literal(get_key(*std::prev(flushed_last)));
-                        }
-                        out << " flushed_last=";
-                        if (flushed_last != leaf_view.items_end()) {
-                          out << batt::c_str_literal(get_key(*flushed_last));
-                        } else {
-                          out << "(end)";
-                        }
-                        out << " pivot_last=";
-                        if (pivot_last != leaf_view.items_end()) {
-                          out << batt::c_str_literal(get_key(*pivot_last));
-                        } else {
-                          out << "(end)";
-                        }
-                      })
-                      << std::endl                                                          //
-                      << BATT_INSPECT(pivot_first == flushed_last) << std::endl             //
-                      << BATT_INSPECT_STR(max_key)                                          //
-                      << BATT_INSPECT_STR(pivot_lower_bound_key)                            //
-                      << BATT_INSPECT_STR(pivot_upper_bound_key) << std::endl               //
-                      << BATT_INSPECT(std::distance(pivot_first, pivot_last))               //
-                      << BATT_INSPECT(std::distance(leaf_view.items_begin(), pivot_first))  //
-                      << BATT_INSPECT(std::distance(leaf_view.items_begin(), pivot_last))   //
-      );
-      //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-#endif
 
       if (flushed_last != leaf_view.items_end() && get_key(*flushed_last) <= max_key) {
         ++flushed_last;
@@ -290,7 +256,7 @@ struct SegmentedLevelAlgorithms {
    */
   Status split_pivot(i32 pivot_i,
                      const Interval<KeyView>& old_pivot_key_range,
-                     const KeyView& split_key) noexcept
+                     const KeyView& split_key)
   {
     static_assert(node_available());
     static_assert(page_loader_available());
@@ -350,7 +316,7 @@ struct SegmentedLevelAlgorithms {
   template <typename PivotSelector,
             typename Fn,
             typename = std::enable_if_t<!std::is_convertible_v<std::decay_t<PivotSelector>, i32>>>
-  void for_each_active_segment_in(const PivotSelector& pivot_selector, Fn&& fn) noexcept
+  void for_each_active_segment_in(const PivotSelector& pivot_selector, Fn&& fn)
   {
     // Get a slice view of all segments for this level.
     //
@@ -375,7 +341,7 @@ struct SegmentedLevelAlgorithms {
   /** \brief Invokes `fn` for each SegmentT& which is active for `pivot_i`.
    */
   template <typename Fn>
-  void for_each_active_segment_in(i32 pivot_i, Fn&& fn) noexcept
+  void for_each_active_segment_in(i32 pivot_i, Fn&& fn)
   {
     this->for_each_active_segment_in(  //
         CInterval<i32>{pivot_i, pivot_i},
@@ -392,9 +358,7 @@ struct SegmentedLevelAlgorithms {
 
   /** \brief Finds the given key in the segments of this level.
    */
-  StatusOr<ValueView> find_key(PinnedPageT& pinned_page_out,
-                               i32 key_pivot_i,
-                               const KeyView& key) noexcept
+  StatusOr<ValueView> find_key(PinnedPageT& pinned_page_out, i32 key_pivot_i, const KeyView& key)
   {
     static_assert(page_loader_available());
 
@@ -458,7 +422,7 @@ struct SegmentedLevelAlgorithms {
  */
 template <typename NodeT, typename LevelT, typename PageLoaderT>
 inline SegmentedLevelAlgorithms<NodeT, LevelT, PageLoaderT>
-in_segmented_level(NodeT& node, LevelT& level, PageLoaderT& page_loader) noexcept
+in_segmented_level(NodeT& node, LevelT& level, PageLoaderT& page_loader)
 {
   return SegmentedLevelAlgorithms<NodeT, LevelT, PageLoaderT>{
       node,
@@ -472,7 +436,7 @@ in_segmented_level(NodeT& node, LevelT& level, PageLoaderT& page_loader) noexcep
  */
 template <typename LevelT>
 inline SegmentedLevelAlgorithms<NodeUnavailable, LevelT, PageLoaderUnavailable> in_segmented_level(
-    LevelT& level) noexcept
+    LevelT& level)
 {
   return SegmentedLevelAlgorithms<NodeUnavailable, LevelT, PageLoaderUnavailable>{
       NodeUnavailable{},

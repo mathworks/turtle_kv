@@ -27,37 +27,37 @@ struct FakeSegment {
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   StatusOr<FakePinnedPage> load_leaf_page(FakePageLoader& loader,
-                                          llfs::PinPageToJob pin_page_to_job) const noexcept
+                                          llfs::PinPageToJob pin_page_to_job) const
   {
     return loader.get_page_in_job(this->page_id_, pin_page_to_job, llfs::OkIfNotFound{false});
   }
 
-  u64 get_active_pivots() const noexcept
+  u64 get_active_pivots() const
   {
     return this->active_pivots_;
   }
 
-  bool is_pivot_active(usize pivot_i) const noexcept
+  bool is_pivot_active(usize pivot_i) const
   {
     return get_bit(this->active_pivots_, pivot_i);
   }
 
-  void set_pivot_active(usize pivot_i, bool active) noexcept
+  void set_pivot_active(usize pivot_i, bool active)
   {
     this->active_pivots_ = set_bit(this->active_pivots_, pivot_i, active);
   }
 
-  void insert_active_pivot(usize pivot_i, bool is_active = true) noexcept
+  void insert_active_pivot(usize pivot_i, bool is_active = true)
   {
     this->active_pivots_ = insert_bit(this->active_pivots_, pivot_i, is_active);
   }
 
-  u64 get_flushed_pivots() const noexcept
+  u64 get_flushed_pivots() const
   {
     return this->flushed_pivots_;
   }
 
-  usize get_flushed_item_upper_bound(const FakeLevel&, usize pivot_i) const noexcept
+  usize get_flushed_item_upper_bound(const FakeLevel&, usize pivot_i) const
   {
     auto iter = this->flushed_item_upper_bound_.find(pivot_i);
     if (iter == this->flushed_item_upper_bound_.end()) {
@@ -66,7 +66,7 @@ struct FakeSegment {
     return iter->second;
   }
 
-  void set_flushed_item_upper_bound(usize pivot_i, usize upper_bound) noexcept
+  void set_flushed_item_upper_bound(usize pivot_i, usize upper_bound)
   {
     this->flushed_pivots_ = set_bit(this->flushed_pivots_, pivot_i, (upper_bound != 0));
     if (upper_bound != 0) {
@@ -76,7 +76,7 @@ struct FakeSegment {
     }
   }
 
-  void set_pivot_items_count(usize pivot_i, usize count) noexcept
+  void set_pivot_items_count(usize pivot_i, usize count)
   {
     this->active_pivots_ = set_bit(this->active_pivots_, pivot_i, (count > 0));
     if (count > 0) {
@@ -86,7 +86,7 @@ struct FakeSegment {
     }
   }
 
-  void insert_flushed_item_upper_bound(usize pivot_i, usize new_upper_bound) noexcept
+  void insert_flushed_item_upper_bound(usize pivot_i, usize new_upper_bound)
   {
     this->flushed_pivots_ = insert_bit(this->flushed_pivots_, pivot_i, (new_upper_bound != 0));
 
@@ -104,18 +104,18 @@ struct FakeSegment {
     std::swap(this->flushed_item_upper_bound_, new_flushed_item_upper_bound);
   }
 
-  void set_page_id(llfs::PageId page_id) noexcept
+  void set_page_id(llfs::PageId page_id)
   {
     this->page_id_ = page_id;
   }
 
-  void clear_active_pivots() noexcept
+  void clear_active_pivots()
   {
     this->active_pivots_ = 0;
     this->pivot_items_count_.clear();
   }
 
-  void clear_flushed_pivots() noexcept
+  void clear_flushed_pivots()
   {
     this->flushed_pivots_ = 0;
     this->flushed_item_upper_bound_.clear();

@@ -23,7 +23,7 @@ namespace turtle_kv {
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 Status TreeBuilder::apply_batch_update(
-    MergeCompactor::ResultSet</*decay_to_items=*/false>&& result_set) noexcept
+    MergeCompactor::ResultSet</*decay_to_items=*/false>&& result_set)
 {
   //----- --- -- -  -  -   -
   // Create and install a CancelToken.
@@ -84,8 +84,7 @@ Status TreeBuilder::apply_batch_update(
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<std::unique_ptr<llfs::PageCacheJob>> TreeBuilder::serialize(
-    llfs::PageCache& page_cache) noexcept
+StatusOr<std::unique_ptr<llfs::PageCacheJob>> TreeBuilder::serialize(llfs::PageCache& page_cache)
 {
   //----- --- -- -  -  -   -
   // Create a new PageCacheJob for the newly serialized tree pages.
@@ -141,7 +140,7 @@ StatusOr<std::unique_ptr<llfs::PageCacheJob>> TreeBuilder::serialize(
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status TreeBuilder::grow_tree() noexcept
+Status TreeBuilder::grow_tree()
 {
   BATT_ASSIGN_OK_RESULT(  //
       Subtree upper_half_subtree,

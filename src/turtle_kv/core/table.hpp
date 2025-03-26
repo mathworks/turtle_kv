@@ -23,14 +23,14 @@ class Table
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  virtual Status put(const KeyView& key, const ValueView& value) noexcept = 0;
+  virtual Status put(const KeyView& key, const ValueView& value) = 0;
 
-  virtual StatusOr<ValueView> get(const KeyView& key) noexcept = 0;
+  virtual StatusOr<ValueView> get(const KeyView& key) = 0;
 
   virtual StatusOr<usize> scan(const KeyView& min_key,
-                               const Slice<std::pair<KeyView, ValueView>>& items_out) noexcept = 0;
+                               const Slice<std::pair<KeyView, ValueView>>& items_out) = 0;
 
-  virtual Status remove(const KeyView& key) noexcept = 0;
+  virtual Status remove(const KeyView& key) = 0;
 
  protected:
   Table() = default;
@@ -41,7 +41,7 @@ class Table
 class StdMapTable : public Table
 {
  public:
-  Status put(const KeyView& key, const ValueView& value) noexcept override
+  Status put(const KeyView& key, const ValueView& value) override
   {
     auto [iter, inserted] = this->state_.emplace(key, value.as_str());
     if (!inserted) {
@@ -51,7 +51,7 @@ class StdMapTable : public Table
     return OkStatus();
   }
 
-  StatusOr<ValueView> get(const KeyView& key) noexcept override
+  StatusOr<ValueView> get(const KeyView& key) override
   {
     auto iter = this->state_.find(std::string{key});
     if (iter == this->state_.end()) {
@@ -62,7 +62,7 @@ class StdMapTable : public Table
   }
 
   StatusOr<usize> scan(const KeyView& min_key,
-                       const Slice<std::pair<KeyView, ValueView>>& items_out) noexcept override
+                       const Slice<std::pair<KeyView, ValueView>>& items_out) override
   {
     usize n = 0;
 
@@ -82,7 +82,7 @@ class StdMapTable : public Table
     return n;
   }
 
-  Status remove(const KeyView& key) noexcept override
+  Status remove(const KeyView& key) override
   {
     return OkStatus();
   }

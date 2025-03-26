@@ -51,15 +51,15 @@ class MergeLine
 
   /** \brief Returns true iff this line has unread data.
    */
-  bool empty() noexcept;
+  bool empty();
 
   /** \brief Pulls a slice from `rest` to `first`, if possible.
    */
-  void advance() noexcept;
+  void advance();
 
   /** \brief Returns the stack-depth of this line.
    */
-  u32 depth() const noexcept
+  u32 depth() const
   {
     return this->depth_;
   }
@@ -69,16 +69,16 @@ class MergeLine
    * If last_key is the final item in `first`, then the next slice is pulled from `rest`; otherwise
    * first becomes everything *after* last_key.
    */
-  EditSlice cut(const KeyView& last_key) noexcept;
+  EditSlice cut(const KeyView& last_key);
 
   /** \brief If the line is non-empty, returns true iff the given key is strictly less-than the
    * first unread key in this line.  If the line is empty, always returns true.
    */
-  bool begins_after(const KeyView& key) const noexcept;
+  bool begins_after(const KeyView& key) const;
 
   /** \brief Returns the (0-based) index of this line within its containing MergeFrame.
    */
-  usize get_index_in_frame() const noexcept;
+  usize get_index_in_frame() const;
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 

@@ -112,38 +112,38 @@ class TreeOptions
 
   /** \brief The max number of bytes in the payload (data) of a leaf page.
    */
-  usize leaf_data_size() const noexcept;
+  usize leaf_data_size() const;
 
-  usize flush_size() const noexcept
+  usize flush_size() const
   {
     return this->leaf_data_size() - kTrieIndexReserveSize;
   }
 
   //----- --- -- -  -  -   -
 
-  Self& set_filter_bits_per_key(Optional<u16> bits_per_key) noexcept
+  Self& set_filter_bits_per_key(Optional<u16> bits_per_key)
   {
     this->filter_bits_per_key_ = bits_per_key;
     return *this;
   }
 
-  usize filter_bits_per_key() const noexcept
+  usize filter_bits_per_key() const
   {
     return this->filter_bits_per_key_.value_or(Self::kDefaultFilterBitsPerKey);
   }
 
-  Self& set_filter_page_size_log2(u8 size_log2) noexcept
+  Self& set_filter_page_size_log2(u8 size_log2)
   {
     this->filter_page_size_log2_ = size_log2;
     return *this;
   }
 
-  Self& set_filter_page_size(u64 size) noexcept
+  Self& set_filter_page_size(u64 size)
   {
     return this->set_filter_page_size_log2(log2_ceil(size));
   }
 
-  llfs::PageSizeLog2 filter_page_size_log2() const noexcept
+  llfs::PageSizeLog2 filter_page_size_log2() const
   {
     if (this->filter_page_size_log2_) {
       return llfs::PageSizeLog2{*this->filter_page_size_log2_};
@@ -161,36 +161,36 @@ class TreeOptions
     return llfs::PageSizeLog2{static_cast<u32>(log2_ceil(expected_filter_page_size))};
   }
 
-  llfs::PageSize filter_page_size() const noexcept
+  llfs::PageSize filter_page_size() const
   {
     return llfs::PageSize{u32{1} << this->filter_page_size_log2()};
   }
 
   //----- --- -- -  -  -   -
 
-  u32 key_size_hint() const noexcept
+  u32 key_size_hint() const
   {
     return this->key_size_hint_;
   }
 
-  Self& set_key_size_hint(u32 n_bytes) noexcept
+  Self& set_key_size_hint(u32 n_bytes)
   {
     this->key_size_hint_ = n_bytes;
     return *this;
   }
 
-  u32 value_size_hint() const noexcept
+  u32 value_size_hint() const
   {
     return this->value_size_hint_;
   }
 
-  Self& set_value_size_hint(u32 n_bytes) noexcept
+  Self& set_value_size_hint(u32 n_bytes)
   {
     this->value_size_hint_ = n_bytes;
     return *this;
   }
 
-  usize expected_item_size() const noexcept
+  usize expected_item_size() const
   {
     static constexpr usize kKeyHeader = sizeof(llfs::PackedBytes);
     static constexpr usize kValueHeader = sizeof(llfs::PackedBytes);
@@ -198,12 +198,12 @@ class TreeOptions
     return kKeyHeader + this->key_size_hint_ + kValueHeader + this->value_size_hint_;
   }
 
-  usize expected_items_per_leaf() const noexcept
+  usize expected_items_per_leaf() const
   {
     return this->leaf_data_size() / this->expected_item_size();
   }
 
-  usize expected_item_slot_size() const noexcept
+  usize expected_item_slot_size() const
   {
     static constexpr usize kVolumeEventHeader = 1;
     static constexpr usize kTabletEventHeader = 1;

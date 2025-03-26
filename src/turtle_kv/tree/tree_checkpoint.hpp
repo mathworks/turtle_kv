@@ -27,11 +27,10 @@ class Checkpoint
  public:
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  static StatusOr<Checkpoint> recover(
-      llfs::Volume& checkpoint_volume,
-      const llfs::SlotWithPayload<TabletCheckpoint>& checkpoint) noexcept;
+  static StatusOr<Checkpoint> recover(llfs::Volume& checkpoint_volume,
+                                      const llfs::SlotWithPayload<TabletCheckpoint>& checkpoint);
 
-  static Checkpoint empty_at_batch(DeltaBatchId batch_id) noexcept;
+  static Checkpoint empty_at_batch(DeltaBatchId batch_id);
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -52,7 +51,7 @@ class Checkpoint
 
       // WAL lock covering the slot range of the checkpoint.
       //
-      CheckpointLock&& checkpoint_lock) noexcept;
+      CheckpointLock&& checkpoint_lock);
 
   Checkpoint(const Checkpoint&) = default;
   Checkpoint& operator=(const Checkpoint&) = default;
@@ -63,7 +62,7 @@ class Checkpoint
    */
   llfs::PageId root_id() const;
 
-  Optional<llfs::PageId> maybe_root_id() const noexcept
+  Optional<llfs::PageId> maybe_root_id() const
   {
     return this->root_id_;
   }
@@ -72,7 +71,7 @@ class Checkpoint
    */
   StatusOr<Checkpoint> serialize(const TreeOptions& tree_options,
                                  llfs::PageCacheJob& job,
-                                 batt::WorkerPool& worker_pool) const noexcept;
+                                 batt::WorkerPool& worker_pool) const;
 
   /** \brief Returns the in-memory view of the checkpoint tree.
    */
@@ -82,7 +81,7 @@ class Checkpoint
    * Checkpoint.
    */
 
-  DeltaBatchId batch_upper_bound() const noexcept
+  DeltaBatchId batch_upper_bound() const
   {
     return this->batch_upper_bound_;
   }
@@ -110,7 +109,7 @@ class Checkpoint
 
   /** \brief Returns true iff this checkpoint is known to be durable.
    */
-  bool is_durable() const noexcept;
+  bool is_durable() const;
 
   /** \brief Applys a batch update to this Checkpoint's tree to produce a new Checkpoint.
    */
@@ -118,11 +117,11 @@ class Checkpoint
                                    llfs::PageCacheJob& job,
                                    const TreeOptions& tree_options,
                                    std::unique_ptr<DeltaBatch>&& batch,
-                                   const batt::CancelToken& cancel_token) noexcept;
+                                   const batt::CancelToken& cancel_token);
 
   /** \brief Returns a copy of this Checkpoint's CheckpointLock.
    */
-  CheckpointLock clone_checkpoint_lock() const noexcept
+  CheckpointLock clone_checkpoint_lock() const
   {
     return batt::make_copy(this->checkpoint_lock_);
   }

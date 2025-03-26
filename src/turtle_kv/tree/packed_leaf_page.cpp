@@ -9,16 +9,15 @@ namespace turtle_kv {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-llfs::PageLayoutId packed_leaf_page_layout_id() noexcept
+llfs::PageLayoutId packed_leaf_page_layout_id()
 {
   return LeafPageView::page_layout_id();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<llfs::PinnedPage> pin_leaf_page_to_job(
-    llfs::PageCacheJob& page_job,
-    std::shared_ptr<llfs::PageBuffer>&& page_buffer) noexcept
+StatusOr<llfs::PinnedPage> pin_leaf_page_to_job(llfs::PageCacheJob& page_job,
+                                                std::shared_ptr<llfs::PageBuffer>&& page_buffer)
 {
   BATT_CHECK_OK(LeafPageView::register_layout(page_job.cache()));
 

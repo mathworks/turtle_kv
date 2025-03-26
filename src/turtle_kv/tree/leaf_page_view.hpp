@@ -64,7 +64,7 @@ class LeafPageView : public llfs::PageView
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  const PackedLeafPage& packed_leaf_page() const noexcept
+  const PackedLeafPage& packed_leaf_page() const
   {
     return *this->packed_leaf_page_;
   }

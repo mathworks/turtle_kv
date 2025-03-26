@@ -4,8 +4,10 @@
 #include <turtle_kv/tree/algo/nodes.hpp>
 #include <turtle_kv/tree/algo/segmented_levels.hpp>
 #include <turtle_kv/tree/leaf_page_view.hpp>
+#include <turtle_kv/tree/node_page_view.hpp>
 #include <turtle_kv/tree/segmented_level_scanner.hpp>
 
+#include <turtle_kv/core/algo/split_parts.hpp>
 #include <turtle_kv/core/key_view.hpp>
 #include <turtle_kv/core/value_view.hpp>
 
@@ -32,7 +34,7 @@ using PackedSegment = PackedUpdateBuffer::Segment;
 //
 /*static*/ StatusOr<std::unique_ptr<InMemoryNode>> InMemoryNode::unpack(
     const TreeOptions& tree_options,
-    const PackedNodePage& packed_node) noexcept
+    const PackedNodePage& packed_node)
 {
   auto node = std::make_unique<InMemoryNode>(tree_options);
 
@@ -112,7 +114,7 @@ using PackedSegment = PackedUpdateBuffer::Segment;
     Subtree&& first_subtree,
     Subtree&& second_subtree,
     const KeyView& key_upper_bound,
-    IsRoot is_root) noexcept
+    IsRoot is_root)
 {
   auto new_node = std::make_unique<InMemoryNode>(tree_options);
 
@@ -158,7 +160,7 @@ using PackedSegment = PackedUpdateBuffer::Segment;
 //
 Status InMemoryNode::apply_batch_update(BatchUpdate& update,
                                         const KeyView& key_upper_bound,
-                                        IsRoot is_root) noexcept
+                                        IsRoot is_root)
 {
   BATT_DEBUG_INFO("InMemoryNode::apply_batch_update");
 
@@ -201,7 +203,7 @@ Status InMemoryNode::apply_batch_update(BatchUpdate& update,
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status InMemoryNode::update_buffer_insert(BatchUpdate& update) noexcept
+Status InMemoryNode::update_buffer_insert(BatchUpdate& update)
 {
   // Base case 0: UpdateBuffer completely empty.
   //
@@ -304,7 +306,7 @@ Status InMemoryNode::update_buffer_insert(BatchUpdate& update) noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status InMemoryNode::flush_if_necessary(BatchUpdate& update, bool force_flush) noexcept
+Status InMemoryNode::flush_if_necessary(BatchUpdate& update, bool force_flush)
 {
   // If we have enough buffered edit bytes on some pivot to flush, then do it.
   //
@@ -319,7 +321,7 @@ Status InMemoryNode::flush_if_necessary(BatchUpdate& update, bool force_flush) n
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status InMemoryNode::flush_to_pivot(BatchUpdate& update, i32 pivot_i) noexcept
+Status InMemoryNode::flush_to_pivot(BatchUpdate& update, i32 pivot_i)
 {
   Interval<KeyView> pivot_key_range = in_node(*this).get_pivot_key_range(pivot_i);
   BatchUpdate child_update = update.make_child_update();
@@ -493,7 +495,7 @@ Status InMemoryNode::flush_to_pivot(BatchUpdate& update, i32 pivot_i) noexcept
 //
 Status InMemoryNode::set_pivot_items_flushed(llfs::PageLoader& page_loader,
                                              usize pivot_i,
-                                             const CInterval<KeyView>& flush_key_crange) noexcept
+                                             const CInterval<KeyView>& flush_key_crange)
 {
   Status segment_load_status;
 
@@ -528,7 +530,7 @@ Status InMemoryNode::set_pivot_items_flushed(llfs::PageLoader& page_loader,
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-MaxPendingBytes InMemoryNode::find_max_pending() const noexcept
+MaxPendingBytes InMemoryNode::find_max_pending() const
 {
   // TODO [tastolfi 2021-09-01] use parallel_accumulate here?
   //
@@ -555,7 +557,7 @@ void InMemoryNode::push_levels_to_merge(MergeFrame& frame,
                                         Status& segment_load_status,
                                         HasPageRefs& has_page_refs,
                                         const Slice<Level>& levels_to_merge,
-                                        i32 min_pivot_i) noexcept
+                                        i32 min_pivot_i)
 {
   for (Level& level : levels_to_merge) {
     frame.push_line(batt::case_of(  //
@@ -587,7 +589,7 @@ void InMemoryNode::push_levels_to_merge(MergeFrame& frame,
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-usize InMemoryNode::segment_count() const noexcept
+usize InMemoryNode::segment_count() const
 {
   usize total = 0;
   for (const Level& level : this->update_buffer.levels) {
@@ -608,7 +610,7 @@ usize InMemoryNode::segment_count() const noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-usize InMemoryNode::key_data_byte_size() const noexcept
+usize InMemoryNode::key_data_byte_size() const
 {
   usize total = packed_key_data_size(this->max_key_) +  //
                 packed_key_data_size(this->common_key_prefix);
@@ -622,7 +624,7 @@ usize InMemoryNode::key_data_byte_size() const noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-usize InMemoryNode::flushed_item_counts_byte_size() const noexcept
+usize InMemoryNode::flushed_item_counts_byte_size() const
 {
   usize count = 0;
 
@@ -649,7 +651,7 @@ usize InMemoryNode::flushed_item_counts_byte_size() const noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-SubtreeViability InMemoryNode::get_viability() const noexcept
+SubtreeViability InMemoryNode::get_viability() const
 {
   NeedsSplit needs_split;
 
@@ -681,7 +683,7 @@ SubtreeViability InMemoryNode::get_viability() const noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-bool InMemoryNode::is_viable(IsRoot is_root) const noexcept
+bool InMemoryNode::is_viable(IsRoot is_root) const
 {
   return batt::case_of(
       this->get_viability(),
@@ -698,8 +700,7 @@ bool InMemoryNode::is_viable(IsRoot is_root) const noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<std::unique_ptr<InMemoryNode>> InMemoryNode::try_split(
-    llfs::PageLoader& page_loader) noexcept
+StatusOr<std::unique_ptr<InMemoryNode>> InMemoryNode::try_split(llfs::PageLoader& page_loader)
 {
   const usize orig_pivot_count = this->pivot_count();
   SmallVec<KeyView, 65> orig_pivot_keys = std::move(this->pivot_keys_);
@@ -861,7 +862,7 @@ StatusOr<std::unique_ptr<InMemoryNode>> InMemoryNode::try_split(
 //
 StatusOr<ValueView> InMemoryNode::find_key(llfs::PageLoader& page_loader,
                                            llfs::PinnedPage& pinned_page_out,
-                                           const KeyView& key) const noexcept
+                                           const KeyView& key) const
 {
   return in_node(*this).find_key(page_loader, pinned_page_out, key);
 }
@@ -872,7 +873,7 @@ StatusOr<ValueView> InMemoryNode::find_key_in_level(usize level_i,              
                                                     llfs::PageLoader& page_loader,      //
                                                     llfs::PinnedPage& pinned_page_out,  //
                                                     i32 key_pivot_i,                    //
-                                                    const KeyView& key) const noexcept
+                                                    const KeyView& key) const
 {
   const Level& level = this->update_buffer.levels[level_i];
 
@@ -892,7 +893,7 @@ StatusOr<ValueView> InMemoryNode::find_key_in_level(usize level_i,              
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-bool InMemoryNode::is_packable() const noexcept
+bool InMemoryNode::is_packable() const
 {
   for (const Level& level : this->update_buffer.levels) {
     if (batt::is_case<MergedLevel>(level)) {
@@ -911,7 +912,7 @@ bool InMemoryNode::is_packable() const noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status InMemoryNode::start_serialize(TreeSerializeContext& context) noexcept
+Status InMemoryNode::start_serialize(TreeSerializeContext& context)
 {
   for (Level& level : this->update_buffer.levels) {
     BATT_REQUIRE_OK(    //
@@ -937,7 +938,7 @@ Status InMemoryNode::start_serialize(TreeSerializeContext& context) noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<llfs::PinnedPage> InMemoryNode::finish_serialize(TreeSerializeContext& context) noexcept
+StatusOr<llfs::PinnedPage> InMemoryNode::finish_serialize(TreeSerializeContext& context)
 {
   for (Level& level : this->update_buffer.levels) {
     Optional<SegmentedLevel> new_segmented_level;
@@ -997,9 +998,8 @@ StatusOr<llfs::PinnedPage> InMemoryNode::finish_serialize(TreeSerializeContext& 
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<llfs::PinnedPage> Segment::load_leaf_page(
-    llfs::PageLoader& page_loader,
-    llfs::PinPageToJob pin_page_to_job) const noexcept
+StatusOr<llfs::PinnedPage> Segment::load_leaf_page(llfs::PageLoader& page_loader,
+                                                   llfs::PinPageToJob pin_page_to_job) const
 {
   return this->page_id_slot.load_through(page_loader,
                                          LeafPageView::page_layout_id(),
@@ -1009,7 +1009,7 @@ StatusOr<llfs::PinnedPage> Segment::load_leaf_page(
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status MergedLevel::start_serialize(TreeSerializeContext& context) noexcept
+Status MergedLevel::start_serialize(TreeSerializeContext& context)
 {
   batt::RunningTotal running_total =
       compute_running_total(context.worker_pool(), this->result_set, DecayToItem<false>{});
@@ -1037,7 +1037,7 @@ Status MergedLevel::start_serialize(TreeSerializeContext& context) noexcept
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 StatusOr<SegmentedLevel> MergedLevel::finish_serialize(const InMemoryNode& node,
-                                                       TreeSerializeContext& context) noexcept
+                                                       TreeSerializeContext& context)
 {
   SegmentedLevel segmented_level;
 
@@ -1078,7 +1078,7 @@ StatusOr<SegmentedLevel> MergedLevel::finish_serialize(const InMemoryNode& node,
 //
 void InMemoryNode::UpdateBuffer::SegmentedLevel::check_items_sorted(
     const InMemoryNode& node,
-    llfs::PageLoader& page_loader) const noexcept
+    llfs::PageLoader& page_loader) const
 {
   SegmentedLevelScanner<const InMemoryNode, const SegmentedLevel, llfs::PageLoader> scanner{
       node,

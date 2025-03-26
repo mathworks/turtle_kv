@@ -24,7 +24,7 @@ class UseCounter
     return this->counter_;
   }
 
-  void halt() noexcept
+  void halt()
   {
     this->counter_.close();
   }

@@ -18,35 +18,7 @@ using BuildPageJobId = TreeSerializeContext::BuildPageJobId;
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-const TreeOptions& TreeSerializeContext::tree_options() const noexcept
-{
-  return this->tree_options_;
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-llfs::PageCacheJob& TreeSerializeContext::page_job() noexcept
-{
-  return this->page_job_;
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-batt::WorkerPool& TreeSerializeContext::worker_pool() noexcept
-{
-  return this->worker_pool_;
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-const batt::CancelToken& TreeSerializeContext::cancel_token() const noexcept
-{
-  return this->cancel_token_;
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-BuildPageJobId TreeSerializeContext::async_build_page(BuildPageJobFn&& build_page_fn) noexcept
+BuildPageJobId TreeSerializeContext::async_build_page(BuildPageJobFn&& build_page_fn)
 {
   BuildPageJobId id = this->input_queue_.size();
 
@@ -58,7 +30,7 @@ BuildPageJobId TreeSerializeContext::async_build_page(BuildPageJobFn&& build_pag
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status TreeSerializeContext::build_all_pages() noexcept
+Status TreeSerializeContext::build_all_pages()
 {
   const usize n_threads = this->worker_pool_.size();
   batt::ScopedWorkContext context{this->worker_pool_};
@@ -76,7 +48,7 @@ Status TreeSerializeContext::build_all_pages() noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<llfs::PinnedPage> TreeSerializeContext::get_build_page_result(BuildPageJobId id) noexcept
+StatusOr<llfs::PinnedPage> TreeSerializeContext::get_build_page_result(BuildPageJobId id)
 {
   BATT_CHECK_LT(id, this->output_queue_.size());
   return this->output_queue_[id];
@@ -84,7 +56,7 @@ StatusOr<llfs::PinnedPage> TreeSerializeContext::get_build_page_result(BuildPage
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-void TreeSerializeContext::build_pages_task_fn() noexcept
+void TreeSerializeContext::build_pages_task_fn()
 {
   for (;;) {
     const usize consumed = this->next_input_.fetch_add(1);

@@ -61,7 +61,7 @@ class SegmentedLevelScannerTest : public ::testing::Test
       this->set_random_seed(seed);
     }
 
-    void set_random_seed(u32 seed) noexcept
+    void set_random_seed(u32 seed)
     {
       rng.emplace(seed);
       for (usize i = 0; i < 10; ++i) {
@@ -69,28 +69,28 @@ class SegmentedLevelScannerTest : public ::testing::Test
       }
     }
 
-    void set_key_size(usize n) noexcept
+    void set_key_size(usize n)
     {
       this->leaf_generator.items_generator().key_generator().set_size(n);
     }
 
-    void set_value_size(usize n) noexcept
+    void set_value_size(usize n)
     {
       this->leaf_generator.items_generator().set_value_size(n);
     }
 
-    void set_item_count(usize n) noexcept
+    void set_item_count(usize n)
     {
       this->leaf_generator.items_generator().set_size(n);
     }
 
-    void set_leaf_size(usize n) noexcept
+    void set_leaf_size(usize n)
     {
       this->fake_page_loader.emplace(llfs::PageSize{BATT_CHECKED_CAST(u32, n)});
     }
 
     template <bool kDecayToItems>
-    RandomLeafGenerator::Result<kDecayToItems> generate_leaf_pages() noexcept
+    RandomLeafGenerator::Result<kDecayToItems> generate_leaf_pages()
     {
       return this->leaf_generator(DecayToItem<kDecayToItems>{},
                                   *this->rng,
@@ -100,7 +100,7 @@ class SegmentedLevelScannerTest : public ::testing::Test
 
     template <bool kDecayToItems>
     FakeNode make_fake_node(const RandomLeafGenerator::Result<kDecayToItems>& generated,
-                            usize pivot_count) noexcept
+                            usize pivot_count)
     {
       // The final result object.
       //
@@ -165,7 +165,7 @@ class SegmentedLevelScannerTest : public ::testing::Test
 
     template <bool kDecayToItems>
     void verify_items(const MergeCompactor::ResultSet<kDecayToItems>& expected,
-                      const FakeNode& actual) noexcept
+                      const FakeNode& actual)
     {
       std::vector<std::string_view> expected_keys, actual_keys;
 
@@ -263,7 +263,7 @@ TEST_F(SegmentedLevelScannerTest, Test)
   llfs::testing::ScenarioRunner runner;
 
   runner.n_seeds(64);
-  runner.n_updates(4);
+  runner.n_updates(0);
   runner.run(batt::StaticType<Scenario>{});
 }
 

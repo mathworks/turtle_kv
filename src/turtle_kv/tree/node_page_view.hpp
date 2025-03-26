@@ -65,7 +65,7 @@ class NodePageView : public llfs::PageView
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  const PackedNodePage& packed_node_page() const noexcept
+  const PackedNodePage& packed_node_page() const
   {
     return *this->packed_node_page_;
   }

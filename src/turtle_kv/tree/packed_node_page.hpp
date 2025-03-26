@@ -119,25 +119,25 @@ struct PackedNodePage {
 
       //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-      bool is_pivot_active(i32 pivot_i) const noexcept
+      bool is_pivot_active(i32 pivot_i) const
       {
         return get_bit(this->active_pivots, pivot_i);
       }
 
-      u64 get_active_pivots() const noexcept
+      u64 get_active_pivots() const
       {
         return this->active_pivots;
       }
 
-      u64 get_flushed_pivots() const noexcept
+      u64 get_flushed_pivots() const
       {
         return this->flushed_pivots;
       }
 
       StatusOr<llfs::PinnedPage> load_leaf_page(llfs::PageLoader& page_loader,
-                                                llfs::PinPageToJob pin_page_to_job) const noexcept;
+                                                llfs::PinPageToJob pin_page_to_job) const;
 
-      usize get_flushed_item_upper_bound(const SegmentedLevel& level, i32 pivot_i) const noexcept;
+      usize get_flushed_item_upper_bound(const SegmentedLevel& level, i32 pivot_i) const;
     };
 
     struct SegmentedLevel {
@@ -147,22 +147,22 @@ struct PackedNodePage {
       usize level_i_;
       Slice<const Segment> segments_slice;
 
-      const Slice<const Segment>& get_segments_slice() const noexcept
+      const Slice<const Segment>& get_segments_slice() const
       {
         return this->segments_slice;
       }
 
-      usize segment_count() const noexcept
+      usize segment_count() const
       {
         return this->segments_slice.size();
       }
 
-      const Segment& get_segment(usize i) const noexcept
+      const Segment& get_segment(usize i) const
       {
         return this->segments_slice[i];
       }
 
-      bool empty() const noexcept
+      bool empty() const
       {
         return this->segments_slice.empty();
       }
@@ -178,7 +178,7 @@ struct PackedNodePage {
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-    SegmentedLevel get_level(usize level_i) const noexcept
+    SegmentedLevel get_level(usize level_i) const
     {
       BATT_CHECK_LT(level_i, kMaxLevels);
 
@@ -193,28 +193,27 @@ struct PackedNodePage {
       };
     }
 
-    usize segment_count() const noexcept
+    usize segment_count() const
     {
       return this->level_start.back();
     }
 
-    const Segment* segments_begin() const noexcept
+    const Segment* segments_begin() const
     {
       return this->segments.data();
     }
 
-    const Segment* segments_end() const noexcept
+    const Segment* segments_end() const
     {
       return this->segments_begin() + this->segment_count();
     }
 
-    Slice<const Segment> segments_slice() const noexcept
+    Slice<const Segment> segments_slice() const
     {
       return as_const_slice(this->segments_begin(), this->segments_end());
     }
 
-    Slice<const little_u32> get_flushed_item_upper_bounds(usize level_i,
-                                                          usize segment_i) const noexcept
+    Slice<const little_u32> get_flushed_item_upper_bounds(usize level_i, usize segment_i) const
     {
       BATT_CHECK_LT(level_i, kMaxLevels);
 
@@ -254,7 +253,7 @@ struct PackedNodePage {
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   template <typename T>
-  static const PackedNodePage& view_of(T&& t) noexcept
+  static const PackedNodePage& view_of(T&& t)
   {
     const ConstBuffer buffer = get_page_const_payload(BATT_FORWARD(t));
 
@@ -269,73 +268,73 @@ struct PackedNodePage {
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  const llfs::PackedPageId* children_begin() const noexcept
+  const llfs::PackedPageId* children_begin() const
   {
     return this->children.data();
   }
 
-  const llfs::PackedPageId* children_end() const noexcept
+  const llfs::PackedPageId* children_end() const
   {
     return this->children_begin() + this->pivot_count;
   }
 
-  Slice<const llfs::PackedPageId> children_slice() const noexcept
+  Slice<const llfs::PackedPageId> children_slice() const
   {
     return as_const_slice(this->children_begin(), this->children_end());
   }
 
-  Subtree get_child(i32 pivot_i) const noexcept;
+  Subtree get_child(i32 pivot_i) const;
 
   //----- --- -- -  -  -   -
 
-  usize index_of_key_lower_bound() const noexcept
+  usize index_of_key_lower_bound() const
   {
     return 0;
   }
 
-  usize index_of_key_upper_bound() const noexcept
+  usize index_of_key_upper_bound() const
   {
     return this->pivot_count;
   }
 
-  usize index_of_min_key() const noexcept
+  usize index_of_min_key() const
   {
     return 0;
   }
 
-  usize index_of_max_key() const noexcept
+  usize index_of_max_key() const
   {
     return this->pivot_count + 1;
   }
 
-  usize index_of_common_key_prefix() const noexcept
+  usize index_of_common_key_prefix() const
   {
     return this->pivot_count + 2;
   }
 
-  usize index_of_final_key_end() const noexcept
+  usize index_of_final_key_end() const
   {
     return this->pivot_count + 3;
   }
 
   //----- --- -- -  -  -   -
 
-  usize pivot_keys_size() const noexcept
+  usize pivot_keys_size() const
   {
     return this->pivot_count + 1;
   }
 
-  KeyIterator pivot_keys_begin() const noexcept
+  KeyIterator pivot_keys_begin() const
   {
     return KeyIterator{this->pivot_keys_.data(), 0};
   }
 
-  KeyIterator pivot_keys_end() const noexcept
+  KeyIterator pivot_keys_end() const
   {
     return this->pivot_keys_begin() + this->pivot_keys_size();
   }
 
-  boost::iterator_range<KeyIterator> get_pivot_keys() const noexcept
+  boost::iterator_range<KeyIterator> get_pivot_keys() const
   {
     return boost::iterator_range<KeyIterator>{
         this->pivot_keys_begin(),
@@ -343,7 +342,7 @@ struct PackedNodePage {
     };
   }
 
-  KeyView get_pivot_key(usize pivot_i) const noexcept
+  KeyView get_pivot_key(usize pivot_i) const
   {
     KeyIterator iter{std::addressof(this->pivot_keys_[pivot_i]), static_cast<isize>(pivot_i)};
     return iter.dereference();
@@ -351,24 +350,24 @@ struct PackedNodePage {
 
   //----- --- -- -  -  -   -
 
-  KeyView min_key() const noexcept
+  KeyView min_key() const
   {
     return this->get_pivot_key(this->index_of_min_key());
   }
 
-  KeyView max_key() const noexcept
+  KeyView max_key() const
   {
     return this->get_pivot_key(this->index_of_max_key());
   }
 
-  KeyView common_key_prefix() const noexcept
+  KeyView common_key_prefix() const
   {
     return this->get_pivot_key(this->index_of_common_key_prefix());
   }
 
   //----- --- -- -  -  -   -
 
-  usize get_level_count() const noexcept
+  usize get_level_count() const
   {
     // TODO [tastolfi 2025-03-22] optimize using log2_ceil(pivot_count) here?
     //
@@ -377,17 +376,17 @@ struct PackedNodePage {
 
   StatusOr<ValueView> find_key(llfs::PageLoader& page_loader,
                                llfs::PinnedPage& pinned_page_out,
-                               const KeyView& key) const noexcept;
+                               const KeyView& key) const;
 
   StatusOr<ValueView> find_key_in_level(usize level_i,                      //
                                         llfs::PageLoader& page_loader,      //
                                         llfs::PinnedPage& pinned_page_out,  //
                                         i32 key_pivot_i,                    //
-                                        const KeyView& key) const noexcept;
+                                        const KeyView& key) const;
 
   //----- --- -- -  -  -   -
 
-  std::function<void(std::ostream&)> dump() const noexcept;
+  std::function<void(std::ostream&)> dump() const;
 };
 
 // Verify the packed structure of PackedNodePage::UpdateBuffer::Segment.
@@ -433,7 +432,7 @@ struct InMemoryNode;
  * Panics if src_node is *not* in a packable state (i.e., it must contain no MergedLevels and all
  * subtrees must be serialized).
  */
-PackedNodePage* build_node_page(const MutableBuffer& buffer, const InMemoryNode& src_node) noexcept;
+PackedNodePage* build_node_page(const MutableBuffer& buffer, const InMemoryNode& src_node);
 
 //=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
 

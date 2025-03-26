@@ -67,9 +67,11 @@ using turtle_kv::testing::RandomResultSetGenerator;
 
 using llfs::StableStringStore;
 
+using batt::getenv_as;
+
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status update_table(Table& table, const ResultSet<false>& result_set) noexcept
+Status update_table(Table& table, const ResultSet<false>& result_set)
 {
   for (const EditView& edit : result_set.get()) {
     if (edit.value.is_delete()) {
@@ -82,7 +84,7 @@ Status update_table(Table& table, const ResultSet<false>& result_set) noexcept
   return OkStatus();
 }
 
-void verify_table_point_queries(Table& expected_table, Table& actual_table) noexcept
+void verify_table_point_queries(Table& expected_table, Table& actual_table)
 {
   std::array<std::pair<KeyView, ValueView>, 256> buffer;
 
@@ -212,6 +214,7 @@ TEST(InMemoryNodeTest, Subtree)
   // runner.n_threads(1);
   runner.n_seeds(64);
   runner.n_updates(1000);
+  runner.n_updates(0);
   runner.run(batt::StaticType<SubtreeBatchUpdateScenario>{});
 }
 
@@ -222,7 +225,7 @@ void SubtreeBatchUpdateScenario::run()
   static std::atomic<int> id{1};
   thread_local int my_id = id.fetch_add(1);
 
-  const usize max_i = 250;
+  const usize max_i = getenv_as<usize>("TURTLE_TREE_TEST_BATCH_COUNT").value_or(250);
   const usize chi = 4;
   const usize key_size = 24;
   const usize value_size = 100;
@@ -295,12 +298,12 @@ void SubtreeBatchUpdateScenario::run()
     StatusOr<i32> tree_height = tree.get_height(*page_loader);
     ASSERT_TRUE(tree_height.ok()) << BATT_INSPECT(tree_height);
 
-    Status status =                                                    //
-        tree.apply_batch_update(tree_options,                          //
-                                /*parent_height=*/*tree_height + 1,    //
-                                update,                                //
-                                /*key_upper_bound=*/global_max_key(),  //
-                                /*is_root=*/true);
+    Status status =  //
+        tree.apply_batch_update(tree_options,
+                                /*parent_height=*/*tree_height + 1,
+                                update,
+                                /*key_upper_bound=*/global_max_key(),
+                                IsRoot{true});
 
     ASSERT_TRUE(status.ok()) << BATT_INSPECT(status) << BATT_INSPECT(this->seed) << BATT_INSPECT(i);
 

@@ -2,6 +2,8 @@
 
 #include <turtle_kv/core/edit_view.hpp>
 
+#include <batteries/utility.hpp>
+
 namespace turtle_kv {
 
 template <bool kValue>
@@ -19,7 +21,7 @@ struct DecayToItem<false> {
   }
 
   template <typename T>
-  __attribute__((always_inline)) static bool keep_item(const T&) noexcept
+  BATT_ALWAYS_INLINE static bool keep_item(const T&)
   {
     return true;
   }
@@ -37,7 +39,7 @@ struct DecayToItem<true> {
   }
 
   template <typename T>
-  __attribute__((always_inline)) static bool keep_item(const T& obj) noexcept
+  BATT_ALWAYS_INLINE static bool keep_item(const T& obj)
   {
     return decays_to_item(obj);
   }

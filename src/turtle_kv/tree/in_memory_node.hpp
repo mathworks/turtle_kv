@@ -54,9 +54,9 @@ struct InMemoryNode {
 
       //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-      void check_invariants(const char* file, int line) const noexcept;
+      void check_invariants(const char* file, int line) const;
 
-      auto dump() const noexcept
+      auto dump() const
       {
         return [this](std::ostream& out) {
           out << "Segment:" << std::endl
@@ -66,31 +66,31 @@ struct InMemoryNode {
         };
       }
 
-      u32 get_flushed_item_upper_bound(const SegmentedLevel&, i32 pivot_i) const noexcept;
+      u32 get_flushed_item_upper_bound(const SegmentedLevel&, i32 pivot_i) const;
 
-      void set_flushed_item_upper_bound(i32 pivot_i, u32 upper_bound) noexcept;
+      void set_flushed_item_upper_bound(i32 pivot_i, u32 upper_bound);
 
-      u64 get_active_pivots() const noexcept
+      u64 get_active_pivots() const
       {
         return this->active_pivots;
       }
 
-      u64 get_flushed_pivots() const noexcept
+      u64 get_flushed_pivots() const
       {
         return this->flushed_pivots;
       }
 
-      void set_pivot_active(i32 pivot_i, bool active) noexcept
+      void set_pivot_active(i32 pivot_i, bool active)
       {
         this->active_pivots = set_bit(this->active_pivots, pivot_i, active);
       }
 
-      bool is_pivot_active(i32 pivot_i) const noexcept
+      bool is_pivot_active(i32 pivot_i) const
       {
         return get_bit(this->active_pivots, pivot_i);
       }
 
-      void insert_pivot(i32 pivot_i, bool is_active) noexcept
+      void insert_pivot(i32 pivot_i, bool is_active)
       {
         this->check_invariants(__FILE__, __LINE__);
         auto on_scope_exit = batt::finally([&] {
@@ -101,7 +101,7 @@ struct InMemoryNode {
         this->flushed_pivots = insert_bit(this->flushed_pivots, pivot_i, false);
       }
 
-      void pop_front_pivots(i32 count) noexcept
+      void pop_front_pivots(i32 count)
       {
         if (count < 1) {
           return;
@@ -123,7 +123,7 @@ struct InMemoryNode {
         this->flushed_pivots = (this->flushed_pivots >> count);
       }
 
-      bool is_inactive() const noexcept
+      bool is_inactive() const
       {
         const bool inactive = (this->active_pivots == 0);
         if (inactive) {
@@ -134,18 +134,18 @@ struct InMemoryNode {
       }
 
       StatusOr<llfs::PinnedPage> load_leaf_page(llfs::PageLoader& page_loader,
-                                                llfs::PinPageToJob pin_page_to_job) const noexcept;
+                                                llfs::PinPageToJob pin_page_to_job) const;
     };
 
     struct EmptyLevel {
       void drop_after_pivot(i32 split_pivot_i [[maybe_unused]],
-                            const KeyView& split_pivot_key [[maybe_unused]]) noexcept
+                            const KeyView& split_pivot_key [[maybe_unused]])
       {
         // Nothing to do!
       }
 
       void drop_before_pivot(i32 split_pivot_i [[maybe_unused]],
-                             const KeyView& split_pivot_key [[maybe_unused]]) noexcept
+                             const KeyView& split_pivot_key [[maybe_unused]])
       {
         // Nothing to do!
       }
@@ -158,37 +158,37 @@ struct InMemoryNode {
 
       //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-      bool empty() const noexcept
+      bool empty() const
       {
         return this->segments.empty();
       }
 
-      usize segment_count() const noexcept
+      usize segment_count() const
       {
         return this->segments.size();
       }
 
-      Segment& get_segment(usize i) noexcept
+      Segment& get_segment(usize i)
       {
         return this->segments[i];
       }
 
-      const Segment& get_segment(usize i) const noexcept
+      const Segment& get_segment(usize i) const
       {
         return this->segments[i];
       }
 
-      Slice<const Segment> get_segments_slice() const noexcept
+      Slice<const Segment> get_segments_slice() const
       {
         return as_const_slice(this->segments);
       }
 
-      void drop_segment(usize i) noexcept
+      void drop_segment(usize i)
       {
         this->segments.erase(this->segments.begin() + i);
       }
 
-      void drop_pivot_range(const Interval<i32>& pivot_range) noexcept
+      void drop_pivot_range(const Interval<i32>& pivot_range)
       {
         for (Segment& segment : this->segments) {
           in_segment(segment).drop_pivot_range(pivot_range);
@@ -205,18 +205,17 @@ struct InMemoryNode {
                              this->segments.end());
       }
 
-      void drop_before_pivot(i32 pivot_i, const KeyView& pivot_key [[maybe_unused]]) noexcept
+      void drop_before_pivot(i32 pivot_i, const KeyView& pivot_key [[maybe_unused]])
       {
         this->drop_pivot_range(Interval<i32>{0, pivot_i});
       }
 
-      void drop_after_pivot(i32 pivot_i, const KeyView& pivot_key [[maybe_unused]]) noexcept
+      void drop_after_pivot(i32 pivot_i, const KeyView& pivot_key [[maybe_unused]])
       {
         this->drop_pivot_range(Interval<i32>{pivot_i, 64});
       }
 
-      void check_items_sorted(const InMemoryNode& node,
-                              llfs::PageLoader& page_loader) const noexcept;
+      void check_items_sorted(const InMemoryNode& node, llfs::PageLoader& page_loader) const;
     };
 
     struct MergedLevel {
@@ -225,12 +224,12 @@ struct InMemoryNode {
 
       //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-      void drop_key_range(const Interval<KeyView>& key_drop_range) noexcept
+      void drop_key_range(const Interval<KeyView>& key_drop_range)
       {
         this->result_set.drop_key_range_half_open(key_drop_range);
       }
 
-      void drop_after_pivot(i32 pivot_i [[maybe_unused]], const KeyView& pivot_key) noexcept
+      void drop_after_pivot(i32 pivot_i [[maybe_unused]], const KeyView& pivot_key)
       {
         this->drop_key_range(Interval<KeyView>{
             .lower_bound = pivot_key,
@@ -238,7 +237,7 @@ struct InMemoryNode {
         });
       }
 
-      void drop_before_pivot(i32 pivot_i [[maybe_unused]], const KeyView& pivot_key) noexcept
+      void drop_before_pivot(i32 pivot_i [[maybe_unused]], const KeyView& pivot_key)
       {
         this->drop_key_range(Interval<KeyView>{
             .lower_bound = global_min_key(),
@@ -246,17 +245,17 @@ struct InMemoryNode {
         });
       }
 
-      usize estimate_segment_count(const TreeOptions& tree_options) const noexcept
+      usize estimate_segment_count(const TreeOptions& tree_options) const
       {
         const usize size_per_segment = tree_options.flush_size() - tree_options.max_item_size();
 
         return (this->result_set.get_packed_size() + size_per_segment - 1) / size_per_segment;
       }
 
-      Status start_serialize(TreeSerializeContext& context) noexcept;
+      Status start_serialize(TreeSerializeContext& context);
 
       StatusOr<SegmentedLevel> finish_serialize(const InMemoryNode& node,
-                                                TreeSerializeContext& context) noexcept;
+                                                TreeSerializeContext& context);
     };
 
     using Level = std::variant<EmptyLevel, MergedLevel, SegmentedLevel>;
@@ -286,14 +285,14 @@ struct InMemoryNode {
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   static StatusOr<std::unique_ptr<InMemoryNode>> unpack(const TreeOptions& tree_options,
-                                                        const PackedNodePage& packed_node) noexcept;
+                                                        const PackedNodePage& packed_node);
 
   static StatusOr<std::unique_ptr<InMemoryNode>> from_subtrees(llfs::PageLoader& page_loader,  //
                                                                const TreeOptions& tree_options,
                                                                Subtree&& first_subtree,
                                                                Subtree&& second_subtree,
                                                                const KeyView& key_upper_bound,
-                                                               IsRoot is_root) noexcept;
+                                                               IsRoot is_root);
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -304,131 +303,128 @@ struct InMemoryNode {
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  Slice<const KeyView> get_pivot_keys() const noexcept
+  Slice<const KeyView> get_pivot_keys() const
   {
     return as_slice(this->pivot_keys_);
   }
 
-  KeyView& min_key() noexcept
+  KeyView& min_key()
   {
     return this->pivot_keys_.front();
   }
 
-  const KeyView& get_min_key() const noexcept
+  const KeyView& get_min_key() const
   {
     return this->pivot_keys_.front();
   }
 
-  KeyView& max_key() noexcept
+  KeyView& max_key()
   {
     return this->max_key_;
   }
 
-  const KeyView& get_max_key() const noexcept
+  const KeyView& get_max_key() const
   {
     return this->max_key_;
   }
 
-  KeyView& key_upper_bound() noexcept
+  KeyView& key_upper_bound()
   {
     return this->pivot_keys_.back();
   }
 
-  const KeyView& get_key_upper_bound() const noexcept
+  const KeyView& get_key_upper_bound() const
   {
     return this->pivot_keys_.back();
   }
 
   StatusOr<ValueView> find_key(llfs::PageLoader& page_loader,      //
                                llfs::PinnedPage& pinned_page_out,  //
-                               const KeyView& key) const noexcept;
+                               const KeyView& key) const;
 
   StatusOr<ValueView> find_key_in_level(usize level_i,                      //
                                         llfs::PageLoader& page_loader,      //
                                         llfs::PinnedPage& pinned_page_out,  //
                                         i32 key_pivot_i,                    //
-                                        const KeyView& key) const noexcept;
+                                        const KeyView& key) const;
 
-  usize get_level_count() const noexcept
+  usize get_level_count() const
   {
     return this->update_buffer.levels.size();
   }
 
-  const Subtree& get_child(i32 pivot_i) const noexcept
+  const Subtree& get_child(i32 pivot_i) const
   {
     return this->children[pivot_i];
   }
 
   //----- --- -- -  -  -   -
 
-  Status apply_batch_update(BatchUpdate& update,
-                            const KeyView& key_upper_bound,
-                            IsRoot is_root) noexcept;
+  Status apply_batch_update(BatchUpdate& update, const KeyView& key_upper_bound, IsRoot is_root);
 
-  Status update_buffer_insert(BatchUpdate& update) noexcept;
+  Status update_buffer_insert(BatchUpdate& update);
 
-  Status flush_if_necessary(BatchUpdate& update, bool force_flush = false) noexcept;
+  Status flush_if_necessary(BatchUpdate& update, bool force_flush = false);
 
-  Status flush_to_pivot(BatchUpdate& update, i32 pivot_i) noexcept;
+  Status flush_to_pivot(BatchUpdate& update, i32 pivot_i);
 
-  MaxPendingBytes find_max_pending() const noexcept;
+  MaxPendingBytes find_max_pending() const;
 
   void push_levels_to_merge(MergeFrame& frame,
                             llfs::PageLoader& page_loader,
                             Status& segment_load_status,
                             HasPageRefs& has_page_refs,
                             const Slice<UpdateBuffer::Level>& levels_to_merge,
-                            i32 min_pivot_i = 0) noexcept;
+                            i32 min_pivot_i = 0);
 
   Status set_pivot_items_flushed(llfs::PageLoader& page_loader,
                                  usize pivot_i,
-                                 const CInterval<KeyView>& flush_key_crange) noexcept;
+                                 const CInterval<KeyView>& flush_key_crange);
 
-  const KeyView& get_pivot_key(usize i) const noexcept
+  const KeyView& get_pivot_key(usize i) const
   {
     return this->pivot_keys_[i];
   }
 
-  usize pivot_count() const noexcept
+  usize pivot_count() const
   {
     return this->children.size();
   }
 
-  usize key_data_byte_size() const noexcept;
+  usize key_data_byte_size() const;
 
-  usize flushed_item_counts_byte_size() const noexcept;
+  usize flushed_item_counts_byte_size() const;
 
-  usize segment_count() const noexcept;
+  usize segment_count() const;
 
-  void add_pending_bytes(usize pivot_i, usize byte_count) noexcept
+  void add_pending_bytes(usize pivot_i, usize byte_count)
   {
     this->pending_bytes[pivot_i] += byte_count;
   }
 
-  SubtreeViability get_viability() const noexcept;
+  SubtreeViability get_viability() const;
 
-  bool is_viable(IsRoot is_root) const noexcept;
+  bool is_viable(IsRoot is_root) const;
 
   /** \brief Split the node and return its new upper half (sibling).
    */
-  StatusOr<std::unique_ptr<InMemoryNode>> try_split(llfs::PageLoader& page_loader) noexcept;
+  StatusOr<std::unique_ptr<InMemoryNode>> try_split(llfs::PageLoader& page_loader);
 
   /** \brief Returns true iff there are no MergedLevels or unserialized Subtree children in this
    * node.
    */
-  bool is_packable() const noexcept;
+  bool is_packable() const;
 
-  Status start_serialize(TreeSerializeContext& context) noexcept;
+  Status start_serialize(TreeSerializeContext& context);
 
-  StatusOr<llfs::PinnedPage> finish_serialize(TreeSerializeContext& context) noexcept;
+  StatusOr<llfs::PinnedPage> finish_serialize(TreeSerializeContext& context);
 };
 
 //=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-inline void InMemoryNode::UpdateBuffer::Segment::check_invariants(const char* file,
-                                                                  int line) const noexcept
+inline void InMemoryNode::UpdateBuffer::Segment::check_invariants(const char* file, int line) const
 {
   // Make sure the flushed pivots bit set and flushed_item_upper_bound (non-zero values) are in
   // sync.
@@ -444,9 +440,8 @@ inline void InMemoryNode::UpdateBuffer::Segment::check_invariants(const char* fi
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-inline u32 InMemoryNode::UpdateBuffer::Segment::get_flushed_item_upper_bound(
-    const SegmentedLevel&,
-    i32 pivot_i) const noexcept
+inline u32 InMemoryNode::UpdateBuffer::Segment::get_flushed_item_upper_bound(const SegmentedLevel&,
+                                                                             i32 pivot_i) const
 {
   if (!get_bit(this->flushed_pivots, pivot_i)) {
     return 0;
@@ -465,9 +460,8 @@ inline u32 InMemoryNode::UpdateBuffer::Segment::get_flushed_item_upper_bound(
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-inline void InMemoryNode::UpdateBuffer::Segment::set_flushed_item_upper_bound(
-    i32 pivot_i,
-    u32 upper_bound) noexcept
+inline void InMemoryNode::UpdateBuffer::Segment::set_flushed_item_upper_bound(i32 pivot_i,
+                                                                              u32 upper_bound)
 {
   this->check_invariants(__FILE__, __LINE__);
   auto on_scope_exit = batt::finally([&] {

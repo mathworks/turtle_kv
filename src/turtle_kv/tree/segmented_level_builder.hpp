@@ -33,7 +33,7 @@ class SegmentedLevelBuilder
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   template <typename PinnedPageRangeT>
-  Self& add_segments_for_leaf_pages(const PinnedPageRangeT& pinned_pages) noexcept
+  Self& add_segments_for_leaf_pages(const PinnedPageRangeT& pinned_pages)
   {
     for (const PinnedPageT& pinned_page : pinned_pages) {
       this->add_segment(pinned_page);
@@ -41,7 +41,7 @@ class SegmentedLevelBuilder
     return *this;
   }
 
-  Self& add_segment(const PinnedPageT& pinned_page) noexcept
+  Self& add_segment(const PinnedPageT& pinned_page)
   {
     llfs::PageId page_id = pinned_page.page_id();
     std::shared_ptr<const llfs::PageBuffer> page_buffer = pinned_page.get_page_buffer();

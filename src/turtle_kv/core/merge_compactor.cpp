@@ -417,8 +417,7 @@ template <bool kDecayToItems>
 //
 template <bool kDecayToItems>
 /*static*/ auto MergeCompactor::ResultSet<kDecayToItems>::concat(ResultSet&& first,
-                                                                 ResultSet&& second) noexcept
-    -> ResultSet
+                                                                 ResultSet&& second) -> ResultSet
 {
   ResultSet ans;
 
@@ -564,7 +563,7 @@ void MergeCompactor::ResultSet<kDecayToItems>::append(std::vector<EditView>&& bu
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <bool kDecayToItems>
-void MergeCompactor::ResultSet<kDecayToItems>::check_items_sorted() const noexcept
+void MergeCompactor::ResultSet<kDecayToItems>::check_items_sorted() const
 {
   const auto items_slice = this->get();
 
@@ -587,8 +586,7 @@ void MergeCompactor::ResultSet<kDecayToItems>::check_items_sorted() const noexce
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <bool kDecayToItems>
-StatusOr<ValueView> MergeCompactor::ResultSet<kDecayToItems>::find_key(
-    const KeyView& key) const noexcept
+StatusOr<ValueView> MergeCompactor::ResultSet<kDecayToItems>::find_key(const KeyView& key) const
 {
   const auto items_slice = this->get();
   const auto result = std::equal_range(items_slice.begin(), items_slice.end(), key, KeyOrder{});
@@ -603,8 +601,7 @@ StatusOr<ValueView> MergeCompactor::ResultSet<kDecayToItems>::find_key(
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <bool kDecayToItems>
-batt::SmallFn<void(std::ostream&)> MergeCompactor::ResultSet<kDecayToItems>::debug_dump()
-    const noexcept
+batt::SmallFn<void(std::ostream&)> MergeCompactor::ResultSet<kDecayToItems>::debug_dump() const
 {
   return [this](std::ostream& out) {
     for (const auto& chunk : this->chunks_) {
@@ -803,7 +800,7 @@ void MergeCompactor::ResultSet<kDecayToItems>::drop_key_range_half_open(
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <bool kDecayToItems>
-void MergeCompactor::ResultSet<kDecayToItems>::drop_after_n(usize n_to_take) noexcept
+void MergeCompactor::ResultSet<kDecayToItems>::drop_after_n(usize n_to_take)
 {
   const isize new_end_offset = n_to_take;
 
@@ -824,7 +821,7 @@ void MergeCompactor::ResultSet<kDecayToItems>::drop_after_n(usize n_to_take) noe
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <bool kDecayToItems>
-void MergeCompactor::ResultSet<kDecayToItems>::drop_before_n(usize n_to_drop) noexcept
+void MergeCompactor::ResultSet<kDecayToItems>::drop_before_n(usize n_to_drop)
 {
   auto first_chunk = this->chunks_.begin();
   auto next_chunk = first_chunk;
@@ -851,7 +848,7 @@ void MergeCompactor::ResultSet<kDecayToItems>::drop_before_n(usize n_to_drop) no
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <bool kDecayToItems>
-void MergeCompactor::ResultSet<kDecayToItems>::check_invariants() const noexcept
+void MergeCompactor::ResultSet<kDecayToItems>::check_invariants() const
 {
   isize expect_offset = 0;
   bool seen_last = false;
@@ -870,7 +867,7 @@ void MergeCompactor::ResultSet<kDecayToItems>::check_invariants() const noexcept
 //
 template <bool kDecayToItems>
 BoxedSeq<EditSlice> MergeCompactor::ResultSet<kDecayToItems>::live_edit_slices(
-    const KeyView& lower_bound) const noexcept
+    const KeyView& lower_bound) const
 {
   const Chunk<const EditView*>* chunks_begin =  //
       (const Chunk<const EditView*>*)this->chunks_.data();
@@ -910,7 +907,7 @@ BoxedSeq<EditSlice> MergeCompactor::ResultSet<kDecayToItems>::live_edit_slices(
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <bool kDecayToItems>
-KeyView MergeCompactor::ResultSet<kDecayToItems>::get_min_key() const noexcept
+KeyView MergeCompactor::ResultSet<kDecayToItems>::get_min_key() const
 {
   BATT_CHECK(!this->empty());
   BATT_CHECK_GT(this->chunks_.size(), 0u);
@@ -927,7 +924,7 @@ KeyView MergeCompactor::ResultSet<kDecayToItems>::get_min_key() const noexcept
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <bool kDecayToItems>
-KeyView MergeCompactor::ResultSet<kDecayToItems>::get_max_key() const noexcept
+KeyView MergeCompactor::ResultSet<kDecayToItems>::get_max_key() const
 {
   BATT_CHECK_GT(this->chunks_.size(), 0u);
   for (usize i = this->chunks_.size() - 1;; --i) {
@@ -943,7 +940,7 @@ KeyView MergeCompactor::ResultSet<kDecayToItems>::get_max_key() const noexcept
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <bool kDecayToItems>
-bool MergeCompactor::ResultSet<kDecayToItems>::empty() const noexcept
+bool MergeCompactor::ResultSet<kDecayToItems>::empty() const
 {
   return this->chunks_.size() < 2;
 }
@@ -951,7 +948,7 @@ bool MergeCompactor::ResultSet<kDecayToItems>::empty() const noexcept
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <bool kDecayToItems>
-void MergeCompactor::ResultSet<kDecayToItems>::invalidate_packed_size() noexcept
+void MergeCompactor::ResultSet<kDecayToItems>::invalidate_packed_size()
 {
   this->packed_size().store(~u64{0});
 }
@@ -959,7 +956,7 @@ void MergeCompactor::ResultSet<kDecayToItems>::invalidate_packed_size() noexcept
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <bool kDecayToItems>
-u64 MergeCompactor::ResultSet<kDecayToItems>::get_packed_size() const noexcept
+u64 MergeCompactor::ResultSet<kDecayToItems>::get_packed_size() const
 {
   u64 observed = this->packed_size().load();
   if (observed != ~u64{0}) {

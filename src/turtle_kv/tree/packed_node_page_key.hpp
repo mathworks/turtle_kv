@@ -7,6 +7,7 @@
 #include <llfs/packed_pointer.hpp>
 
 #include <batteries/static_assert.hpp>
+#include <batteries/utility.hpp>
 
 namespace turtle_kv {
 
@@ -18,7 +19,7 @@ struct PackedNodePageKey {
 //
 BATT_STATIC_ASSERT_EQ(sizeof(PackedNodePageKey), 2);
 
-inline KeyView get_key(const PackedNodePageKey& key_ref) noexcept
+inline KeyView get_key(const PackedNodePageKey& key_ref)
 {
   const PackedNodePageKey* this_key = std::addressof(key_ref);
   const PackedNodePageKey* next_key = this_key + 1;

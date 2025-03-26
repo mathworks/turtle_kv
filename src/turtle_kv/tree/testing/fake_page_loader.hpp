@@ -30,7 +30,7 @@ class FakePageLoader : public llfs::BasicPageLoader<FakePinnedPage>
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  llfs::PageSize get_page_size() const noexcept
+  llfs::PageSize get_page_size() const
   {
     return this->page_size_;
   }

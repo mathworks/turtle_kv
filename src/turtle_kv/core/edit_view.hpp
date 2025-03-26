@@ -219,7 +219,7 @@ inline bool decays_to_item(const ItemView&)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-inline const KeyView& get_key(const EditView& edit)
+BATT_ALWAYS_INLINE inline const KeyView& get_key(const EditView& edit)
 {
   return edit.key;
 }
@@ -231,14 +231,14 @@ inline const ValueView& get_value(const EditView& edit)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-inline Optional<ItemView> to_item_view(const PackedKeyValue& kv) noexcept
+inline Optional<ItemView> to_item_view(const PackedKeyValue& kv)
 {
   return to_item_view(EditView{get_key(kv), get_value(kv)});
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-inline const EditView& to_edit_view(const EditView& edit) noexcept
+inline const EditView& to_edit_view(const EditView& edit)
 {
   return edit;
 }

@@ -17,7 +17,7 @@ struct PackedSizeOfEdit {
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   template <typename T>
-  usize operator()(const T& item) const noexcept
+  usize operator()(const T& item) const
   {
     return
         // Key metadata

@@ -54,7 +54,7 @@ std::ostream& operator<<(std::ostream& out, const TreeOptions& t)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-usize TreeOptions::leaf_data_size() const noexcept
+usize TreeOptions::leaf_data_size() const
 {
   return leaf_max_space_from_size(this->leaf_size());
 }

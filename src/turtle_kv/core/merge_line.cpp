@@ -27,7 +27,7 @@ MergeLine::MergeLine(MergeFrame* frame, BoxedSeq<EditSlice>&& edit_slices) noexc
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-bool MergeLine::empty() noexcept
+bool MergeLine::empty()
 {
   return batt::case_of(this->first_, [&](const auto& first_slice) -> bool {
     return first_slice.empty() && !this->rest_.peek();
@@ -36,7 +36,7 @@ bool MergeLine::empty() noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-void MergeLine::advance() noexcept
+void MergeLine::advance()
 {
   // Set `first_` to the next non-empty slice.
   //
@@ -56,7 +56,7 @@ void MergeLine::advance() noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-EditSlice MergeLine::cut(const KeyView& last_key) noexcept
+EditSlice MergeLine::cut(const KeyView& last_key)
 {
   return batt::case_of(this->first_, [&](auto& first_slice) -> EditSlice {
     if (first_slice.empty()) {
@@ -81,7 +81,7 @@ EditSlice MergeLine::cut(const KeyView& last_key) noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-bool MergeLine::begins_after(const KeyView& key) const noexcept
+bool MergeLine::begins_after(const KeyView& key) const
 {
   return batt::case_of(this->first_, [&](const auto& first_slice) -> bool {
     // By convention, empty lines begin at +inf.
@@ -96,7 +96,7 @@ bool MergeLine::begins_after(const KeyView& key) const noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-usize MergeLine::get_index_in_frame() const noexcept
+usize MergeLine::get_index_in_frame() const
 {
   BATT_CHECK_NOT_NULLPTR(this->frame_);
   BATT_CHECK_GE(this, this->frame_->lines_.data());

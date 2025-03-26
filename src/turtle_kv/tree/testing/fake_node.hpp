@@ -22,19 +22,19 @@ struct FakeNode {
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  usize pivot_count() const noexcept
+  usize pivot_count() const
   {
     return this->pivot_keys_.size() - 1;
   }
 
-  std::string_view get_pivot_key(usize i) const noexcept
+  std::string_view get_pivot_key(usize i) const
   {
     BATT_CHECK_LT(i, this->pivot_keys_.size());
 
     return this->pivot_keys_[i];
   }
 
-  Slice<const std::string_view> get_pivot_keys() const noexcept
+  Slice<const std::string_view> get_pivot_keys() const
   {
     return as_slice(this->pivot_keys_);
   }

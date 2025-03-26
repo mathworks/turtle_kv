@@ -135,7 +135,7 @@ class MergeCompactor
     /** \brief Returns the concatenation of the passed ResultSet objects, consuming them in the
      * process.
      */
-    static ResultSet concat(ResultSet&& first, ResultSet&& second) noexcept;
+    static ResultSet concat(ResultSet&& first, ResultSet&& second);
 
     //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -149,17 +149,17 @@ class MergeCompactor
 
     auto get() const
     {
-      return flatten(this->chunks_.begin(), std::prev(this->chunks_.end()));
+      return flatten(this->chunks_.data(), this->chunks_.data() + this->chunks_.size() - 1);
     }
 
-    void clear() noexcept
+    void clear()
     {
       *this = ResultSet{};
     }
 
     /** \brief Returns the number of live edits in this result set.
      */
-    usize size() const noexcept
+    usize size() const
     {
       const usize n = this->chunks_.back().offset;
       BATT_CHECK_EQ(n, this->get().size());
@@ -174,7 +174,7 @@ class MergeCompactor
 
     /** \brief Queries the live item set for the given key.
      */
-    StatusOr<ValueView> find_key(const KeyView& key) const noexcept;
+    StatusOr<ValueView> find_key(const KeyView& key) const;
 
     /** \brief Filters out the passed key range from the result set.
      */
@@ -186,36 +186,36 @@ class MergeCompactor
 
     /** \brief Filters out all edits/items after the specified position.
      */
-    void drop_after_n(usize n_to_take) noexcept;
+    void drop_after_n(usize n_to_take);
 
     /** \brief Drops the specified number of items from the beginning of the result set.
      */
-    void drop_before_n(usize n_to_skip) noexcept;
+    void drop_before_n(usize n_to_skip);
 
     /** \brief Verify that all internal invariants hold; if not, panic.
      */
-    void check_invariants() const noexcept;
+    void check_invariants() const;
 
     /** \brief Returns a function that dumps detailed information about this result set, for
      * diagnostic/debug purposes.
      */
-    batt::SmallFn<void(std::ostream&)> debug_dump() const noexcept;
+    batt::SmallFn<void(std::ostream&)> debug_dump() const;
 
     /** \brief Returns the result set as a sequence of EditSlice instances.
      */
-    BoxedSeq<EditSlice> live_edit_slices(const KeyView& lower_bound = KeyView{}) const noexcept;
+    BoxedSeq<EditSlice> live_edit_slices(const KeyView& lower_bound = KeyView{}) const;
 
     /** \brief Returns the min key in the live range.
      */
-    KeyView get_min_key() const noexcept;
+    KeyView get_min_key() const;
 
     /** \brief Returns the max key in the live range.
      */
-    KeyView get_max_key() const noexcept;
+    KeyView get_max_key() const;
 
     /** \brief Returns the closed interval of keys in the live range.
      */
-    CInterval<KeyView> get_key_crange() const noexcept
+    CInterval<KeyView> get_key_crange() const
     {
       return {this->get_min_key(), this->get_max_key()};
     }
@@ -223,22 +223,22 @@ class MergeCompactor
     /** \brief Returns true iff this result set has no items (or all items have been
      * dropped/filtered).
      */
-    bool empty() const noexcept;
+    bool empty() const;
 
     /** \brief Returns the number of packed bytes in this result set.
      */
-    u64 get_packed_size() const noexcept;
+    u64 get_packed_size() const;
 
     /** \brief Returns whether this ResultSet is marked as having page ref values.
      */
-    HasPageRefs has_page_refs() const noexcept
+    HasPageRefs has_page_refs() const
     {
       return this->has_page_refs_;
     }
 
     /** \brief Sets whether this ResultSet is marked as having page ref values.
      */
-    void set_has_page_refs(bool b) noexcept
+    void set_has_page_refs(bool b)
     {
       this->has_page_refs_ = HasPageRefs{b};
     }
@@ -246,22 +246,22 @@ class MergeCompactor
     /** \brief Sets this->has_page_refs() to true if the passed value is true; leaves it unchanged
      * otherwise.
      */
-    void update_has_page_refs(bool b) noexcept
+    void update_has_page_refs(bool b)
     {
       this->set_has_page_refs(this->has_page_refs_ || b);
     }
 
     /** \brief Verifies that the active set is sorted in key order; panics if not.
      */
-    void check_items_sorted() const noexcept;
+    void check_items_sorted() const;
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
    private:
     static constexpr u64 kInvalidPackedSize = ~u64{0};
 
-    void invalidate_packed_size() noexcept;
+    void invalidate_packed_size();
 
-    std::atomic<u64>& packed_size() const noexcept
+    std::atomic<u64>& packed_size() const
     {
       return *(std::atomic<u64>*)(&this->packed_size_);
     }

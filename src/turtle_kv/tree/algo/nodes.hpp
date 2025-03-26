@@ -32,7 +32,7 @@ struct NodeAlgorithms {
 
   /** \brief Returns the half-open key interval for the given pivot.
    */
-  Interval<KeyView> get_pivot_key_range(usize pivot_i) const noexcept
+  Interval<KeyView> get_pivot_key_range(usize pivot_i) const
   {
     return Interval<KeyView>{
         this->node_.get_pivot_key(pivot_i),
@@ -42,7 +42,7 @@ struct NodeAlgorithms {
 
   /** \brief Returns the index of the pivot containing the given key.
    */
-  usize find_pivot_containing(const KeyView& key) const noexcept
+  usize find_pivot_containing(const KeyView& key) const
   {
     // pivot_keys:     k0-----k1-----k2-----k3 ... kN
     //                  |  0   |  1   |  2   |  3   |
@@ -70,7 +70,7 @@ struct NodeAlgorithms {
   /** \brief Returns the minimal closed key interval that completely contains the given closed key
    * interval.
    */
-  CInterval<usize> find_pivot_crange_containing(const CInterval<KeyView>& key_crange) const noexcept
+  CInterval<usize> find_pivot_crange_containing(const CInterval<KeyView>& key_crange) const
   {
     const usize lower_pivot = this->find_pivot_containing(this->node_, key_crange.lower_bound);
     const usize upper_pivot = this->find_pivot_containing(this->node_, key_crange.upper_bound);
@@ -81,7 +81,7 @@ struct NodeAlgorithms {
   /** \brief Returns the minimal half-open key interval that completely contains the given half-open
    * key interval.
    */
-  Interval<usize> find_pivot_range_containing(const Interval<KeyView>& key_range) const noexcept
+  Interval<usize> find_pivot_range_containing(const Interval<KeyView>& key_range) const
   {
     usize lower_pivot = this->find_pivot_containing(this->node_, key_range.lower_bound);
     usize upper_pivot = this->find_pivot_containing(this->node_, key_range.upper_bound);
@@ -103,7 +103,7 @@ struct NodeAlgorithms {
   template <typename Edits, typename SizeOfEditFn /*= usize(const EditView&)*/>
   void update_pending_bytes(batt::WorkerPool& worker_pool,
                             const Edits& edits,
-                            const SizeOfEditFn& size_of_edit) noexcept
+                            const SizeOfEditFn& size_of_edit)
   {
     const ParallelAlgoDefaults& algo_defaults = parallel_algo_defaults();
 
@@ -154,7 +154,7 @@ struct NodeAlgorithms {
   template <typename PageLoaderT, typename PinnedPageT>
   StatusOr<ValueView> find_key(PageLoaderT& page_loader,
                                PinnedPageT& pinned_page_out,
-                               const KeyView& key) noexcept
+                               const KeyView& key)
   {
     Optional<ValueView> value;
 
@@ -209,7 +209,7 @@ struct NodeAlgorithms {
   void split_level(const LevelCaseT& whole_level,
                    i32 split_pivot_i,
                    LevelVariantT& lower_half_level,
-                   LevelVariantT& upper_half_level) noexcept
+                   LevelVariantT& upper_half_level)
   {
     const KeyView split_pivot_key = this->node_.get_pivot_key(split_pivot_i);
 
@@ -222,7 +222,7 @@ struct NodeAlgorithms {
 };
 
 template <typename NodeT>
-NodeAlgorithms<NodeT> in_node(NodeT& node) noexcept
+NodeAlgorithms<NodeT> in_node(NodeT& node)
 {
   return NodeAlgorithms<NodeT>{node};
 }

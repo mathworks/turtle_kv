@@ -5,7 +5,7 @@ namespace turtle_kv {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-std::ostream& operator<<(std::ostream& out, const HexBinaryView& t) noexcept
+std::ostream& operator<<(std::ostream& out, const HexBinaryView& t)
 {
   static const char hex_digits[16] = {
       '0',

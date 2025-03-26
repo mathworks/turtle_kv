@@ -34,7 +34,7 @@ class ValueView
     END_OP_UNDEFINED = 0x7fff,
   };
 
-  friend inline std::ostream& operator<<(std::ostream& out, OpCode code) noexcept
+  friend inline std::ostream& operator<<(std::ostream& out, OpCode code)
   {
     switch (code) {
       case OP_DELETE:
@@ -61,7 +61,7 @@ class ValueView
 
   using OpCodePair = u32;
 
-  static constexpr OpCodePair op_pair(OpCode first, OpCode second) noexcept
+  static constexpr OpCodePair op_pair(OpCode first, OpCode second)
   {
     return (u32{first} << 16) | u32{second};
   }
@@ -74,7 +74,7 @@ class ValueView
   static constexpr u64 kInlineMask = u64{1} << kInlineShift;
   static constexpr u64 kOpMask = ~(kSizeMask | kInlineMask);
 
-  static u64 tag_from_op_and_size(bool is_inline, u64 op, u64 size) noexcept
+  static u64 tag_from_op_and_size(bool is_inline, u64 op, u64 size)
   {
     // TODO [tastolfi 2022-06-14] Add a one-time post read validation function to do all these
     // checks, in case of corrupted/malicious data.
@@ -86,23 +86,23 @@ class ValueView
     return (u64{is_inline} << kInlineShift) | ((op << kOpShift) & kOpMask) | (size & kSizeMask);
   }
 
-  static constexpr OpCode op_from_tag(u64 tag) noexcept
+  static constexpr OpCode op_from_tag(u64 tag)
   {
     return static_cast<OpCode>((tag & kOpMask) >> kOpShift);
   }
 
-  static constexpr u64 size_from_tag(u64 tag) noexcept
+  static constexpr u64 size_from_tag(u64 tag)
   {
     return tag & kSizeMask;
   }
 
-  static ValueView deleted() noexcept
+  static ValueView deleted()
   {
     static const char* empty_str_ = "";
     return ValueView{OP_DELETE, PtrData{}, empty_str_, 0};
   }
 
-  static ValueView from_packed(OpCode op, const std::string_view& str) noexcept
+  static ValueView from_packed(OpCode op, const std::string_view& str)
   {
     if (str.size() <= kMaxSmallStrSize) {
       return ValueView{op, InlineData{}, str.data(), str.size()};
@@ -271,7 +271,7 @@ class ValueView
     return static_cast<OpCode>(op_from_tag(this->size_tag_));
   }
 
-  bool is_delete() const noexcept
+  bool is_delete() const
   {
     return this->op() == OP_DELETE;
   }
@@ -313,7 +313,7 @@ BATT_STATIC_ASSERT_EQ(sizeof(ValueView), sizeof(std::string_view));
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-inline ValueView combine(const ValueView& newer, const ValueView& older) noexcept
+inline ValueView combine(const ValueView& newer, const ValueView& older)
 {
   if (!newer.needs_combine()) {
     return newer;
@@ -336,8 +336,7 @@ inline ValueView combine(const ValueView& newer, const ValueView& older) noexcep
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-inline [[nodiscard]] bool combine_in_place(Optional<ValueView>* newer,
-                                           const ValueView& older) noexcept
+inline [[nodiscard]] bool combine_in_place(Optional<ValueView>* newer, const ValueView& older)
 {
   if (!*newer) {
     newer->emplace(older);
@@ -350,8 +349,7 @@ inline [[nodiscard]] bool combine_in_place(Optional<ValueView>* newer,
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-inline StatusOr<bool> combine_in_place(Optional<ValueView>* newer,
-                                       const StatusOr<ValueView>& older) noexcept
+inline StatusOr<bool> combine_in_place(Optional<ValueView>* newer, const StatusOr<ValueView>& older)
 {
   if (older.ok()) {
     return combine_in_place(newer, *older);

@@ -16,7 +16,7 @@ using KeyViewRange = Interval<KeyView>;
 //
 using CKeyViewRange = CInterval<KeyView>;
 
-inline KeyViewRange key_range(const KeyView& lower_bound, const KeyView& upper_bound) noexcept
+inline KeyViewRange key_range(const KeyView& lower_bound, const KeyView& upper_bound)
 {
   return {
       .lower_bound = lower_bound,
@@ -24,7 +24,7 @@ inline KeyViewRange key_range(const KeyView& lower_bound, const KeyView& upper_b
   };
 }
 
-inline CKeyViewRange ckey_range(const KeyView& lower_bound, const KeyView& upper_bound) noexcept
+inline CKeyViewRange ckey_range(const KeyView& lower_bound, const KeyView& upper_bound)
 {
   return {
       .lower_bound = lower_bound,
@@ -32,7 +32,7 @@ inline CKeyViewRange ckey_range(const KeyView& lower_bound, const KeyView& upper
   };
 }
 
-inline KeyViewRange full_key_range() noexcept
+inline KeyViewRange full_key_range()
 {
   return {
       .lower_bound = global_min_key(),
@@ -40,7 +40,7 @@ inline KeyViewRange full_key_range() noexcept
   };
 }
 
-inline CKeyViewRange full_key_crange() noexcept
+inline CKeyViewRange full_key_crange()
 {
   return {
       .lower_bound = global_min_key(),
@@ -48,7 +48,7 @@ inline CKeyViewRange full_key_crange() noexcept
   };
 }
 
-inline auto dump_key_range(const Interval<KeyView>& key_range) noexcept
+inline auto dump_key_range(const Interval<KeyView>& key_range)
 {
   return [&key_range](std::ostream& out) {
     out << "["                                         //
@@ -59,7 +59,7 @@ inline auto dump_key_range(const Interval<KeyView>& key_range) noexcept
   };
 }
 
-inline auto dump_key_range(const CInterval<KeyView>& key_range) noexcept
+inline auto dump_key_range(const CInterval<KeyView>& key_range)
 {
   return [&key_range](std::ostream& out) {
     out << "["                                         //

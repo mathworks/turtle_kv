@@ -35,7 +35,7 @@ struct SegmentAlgorithms {
   template <typename LevelT>
   [[nodiscard]] bool split_pivot(i32 pivot_i,
                                  Optional<usize> split_offset_in_leaf,
-                                 const LevelT& level) const noexcept
+                                 const LevelT& level) const
   {
     using batt::BoolStatus;
 
@@ -117,7 +117,7 @@ struct SegmentAlgorithms {
    * reference to the segment and the pivot index (i32).
    */
   template <typename Fn /* = void(SegmentT& segment, i32 pivot_i) */>
-  void for_each_active_pivot_in(const Interval<i32>& pivot_range, Fn&& fn) noexcept
+  void for_each_active_pivot_in(const Interval<i32>& pivot_range, Fn&& fn)
   {
     // IMPORTANT: we capture a copy of the entire active bitset so that we can iterate the pivots as
     // they were when this function was entered, regardless of what `fn` may do to change the state
@@ -138,7 +138,7 @@ struct SegmentAlgorithms {
    * and the pivot index (i32).
    */
   template <typename Fn /* = void(SegmentT& segment, i32 pivot_i) */>
-  void for_each_active_pivot(Fn&& fn) noexcept
+  void for_each_active_pivot(Fn&& fn)
   {
     // Call the general version with the full pivot range.
     //
@@ -148,11 +148,11 @@ struct SegmentAlgorithms {
   /** \brief Drops all pivots within the specified `drop_range` from the segment.
    */
   // TODO [tastolfi 2025-03-26] rename deactivate_pivot_range.
-  void drop_pivot_range(const Interval<i32>& drop_range) noexcept
+  void drop_pivot_range(const Interval<i32>& drop_range)
   {
     this->for_each_active_pivot_in(  //
         drop_range,                  //
-        [&drop_range](SegmentT& segment, i32 pivot_i) noexcept {
+        [&drop_range](SegmentT& segment, i32 pivot_i) {
           BATT_CHECK(drop_range.contains(pivot_i));
 
           segment.set_flushed_item_upper_bound(pivot_i, 0);
@@ -164,7 +164,7 @@ struct SegmentAlgorithms {
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 
 template <typename SegmentT>
-SegmentAlgorithms<SegmentT> in_segment(SegmentT& segment) noexcept
+SegmentAlgorithms<SegmentT> in_segment(SegmentT& segment)
 {
   return SegmentAlgorithms<SegmentT>{segment};
 }
