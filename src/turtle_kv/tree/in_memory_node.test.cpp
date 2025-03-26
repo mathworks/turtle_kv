@@ -213,7 +213,6 @@ TEST(InMemoryNodeTest, Subtree)
 
   // runner.n_threads(1);
   runner.n_seeds(64);
-  runner.n_updates(1000);
   runner.n_updates(0);
   runner.run(batt::StaticType<SubtreeBatchUpdateScenario>{});
 }

@@ -50,6 +50,7 @@ class TurtleKvRecipe(ConanFile):
         self.requires("glog/[>=0.7.0]", **VISIBLE)
         self.requires("llfs/0.41.1-devel", **VISIBLE)
         self.requires("pcg-cpp/[>=cci.20220409]", **VISIBLE)
+        self.requires("zlib/[>=1.3]", **OVERRIDE)
 
         if platform.system() == "Linux":
             self.requires("libfuse/[>=3.16.2]", **VISIBLE)
@@ -59,7 +60,11 @@ class TurtleKvRecipe(ConanFile):
         self.test_requires("gtest/[>=1.14.0]")
 
     def configure(self):
+        self.options["gtest"].shared = False
+        self.options["boost"].shared = False
         self.options["boost"].without_test = True
+        self.options["batteries"].with_glog = True
+        self.options["batteries"].header_only = False
 
     #+++++++++++-+-+--+----- --- -- -  -  -   -
 

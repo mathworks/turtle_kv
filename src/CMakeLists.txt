@@ -5,19 +5,22 @@ cxx_library(turtle_kv)
 target_link_libraries(
   turtle_kv
   PUBLIC
-  abseil::abseil
   batteries::batteries
   boost::boost
   llfs::llfs
-  #
-  # Add other library -> library dependencies here.
-  #
   )
 
 target_link_libraries(
   turtle_kv_Test
-  PRIVATE gtest::gtest
-  #
-  # Add other test -> library dependencies here
-  #
+  PRIVATE
+  GTest::gtest_main
+  GTest::gtest
+  GTest::gmock
+  turtle_kv
+  batteries::batteries
+  Boost::context
+  Boost::stacktrace
+  backtrace
+  dl
+  stdc++fs
   )
