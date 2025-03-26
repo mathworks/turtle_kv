@@ -16,10 +16,10 @@ using batt::bit_count;
  */
 inline i32 first_bit(u64 bit_set) noexcept
 {
-    if (bit_set == 0) {
-        return 64;
-    }
-    return __builtin_ctzll(bit_set);
+  if (bit_set == 0) {
+    return 64;
+  }
+  return __builtin_ctzll(bit_set);
 }
 
 /** \brief Returns the 0-based index of the last 1 bit in the set, or -1 if there are no 1 bits
@@ -27,33 +27,33 @@ inline i32 first_bit(u64 bit_set) noexcept
  */
 inline i32 last_bit(u64 bit_set) noexcept
 {
-    if (bit_set == 0) {
-        return -1;
-    }
-    return 63 - __builtin_clzll(bit_set);
+  if (bit_set == 0) {
+    return -1;
+  }
+  return 63 - __builtin_clzll(bit_set);
 }
 
 /** \brief Returns the index of the next 1 bit, after `index`.
  */
 inline i32 next_bit(u64 bit_set, i32 index) noexcept
 {
-    const u64 mask = (u64{2} << index) - 1;
-    return first_bit(bit_set & ~mask);
+  const u64 mask = (u64{2} << index) - 1;
+  return first_bit(bit_set & ~mask);
 }
 
 /** \brief Returns the one past the index of the previous 1 bit before `index`.
  */
 inline i32 prev_bit(u64 bit_set, i32 index) noexcept
 {
-    const u64 mask = ((u64{1} << index) - 1);
-    return last_bit(bit_set & mask);
+  const u64 mask = ((u64{1} << index) - 1);
+  return last_bit(bit_set & mask);
 }
 
 /** \brief Reads the bit at index within bit_set, returning true iff it is set.
  */
 inline bool get_bit(u64 bit_set, i32 index) noexcept
 {
-    return (bit_set & (u64{1} << index)) != 0;
+  return (bit_set & (u64{1} << index)) != 0;
 }
 
 /** \brief Returns a copy of `bit_set` with the specified bit (`index`) set to 0 (false) or 1 (true)
@@ -61,12 +61,12 @@ inline bool get_bit(u64 bit_set, i32 index) noexcept
  */
 inline [[nodiscard]] u64 set_bit(u64 bit_set, i32 index, bool value) noexcept
 {
-    const u64 mask = u64{1} << index;
-    if (value) {
-        return bit_set | mask;
-    } else {
-        return bit_set & ~mask;
-    }
+  const u64 mask = u64{1} << index;
+  if (value) {
+    return bit_set | mask;
+  } else {
+    return bit_set & ~mask;
+  }
 }
 
 /** \brief Inserts a bit into `bit_set` at the given index, shifting (up) all bits at that point and
@@ -74,30 +74,30 @@ inline [[nodiscard]] u64 set_bit(u64 bit_set, i32 index, bool value) noexcept
  */
 inline [[nodiscard]] u64 insert_bit(u64 bit_set, i32 index, bool value) noexcept
 {
-    const u64 lower_mask = (u64{1} << index) - 1;
-    const u64 upper_mask = ~lower_mask;
+  const u64 lower_mask = (u64{1} << index) - 1;
+  const u64 upper_mask = ~lower_mask;
 
-    bit_set = (bit_set & lower_mask) | ((bit_set & upper_mask) << 1);
-    bit_set = set_bit(bit_set, index, value);
+  bit_set = (bit_set & lower_mask) | ((bit_set & upper_mask) << 1);
+  bit_set = set_bit(bit_set, index, value);
 
-    return bit_set;
+  return bit_set;
 }
 
 /** \brief Removes the bit at the given index, shifting all those above down by one position.
  */
 inline [[nodiscard]] u64 remove_bit(u64 bit_set, i32 index) noexcept
 {
-    const u64 lower_mask = (u64{1} << index) - 1;
-    const u64 upper_mask = (~lower_mask) << 1;
+  const u64 lower_mask = (u64{1} << index) - 1;
+  const u64 upper_mask = (~lower_mask) << 1;
 
-    return (bit_set & lower_mask) | ((bit_set & upper_mask) >> 1);
+  return (bit_set & lower_mask) | ((bit_set & upper_mask) >> 1);
 }
 
 template <typename IntT>
 inline u64 mask_from_interval(const CInterval<IntT>& i) noexcept
 {
-    u64 mask = (u64{1} << i.size()) - 1;
-    return mask << i.lower_bound;
+  u64 mask = (u64{1} << i.size()) - 1;
+  return mask << i.lower_bound;
 }
 
 /** \brief Returns _one less than_ the number of 1's in `bit_set` at or before position `index`.
@@ -128,7 +128,7 @@ inline u64 mask_from_interval(const CInterval<IntT>& i) noexcept
  */
 inline i32 bit_rank(u64 bit_set, i32 index) noexcept
 {
-    return __builtin_popcountll(bit_set & ((u64{2} << index) - 1)) - 1;
+  return __builtin_popcountll(bit_set & ((u64{2} << index) - 1)) - 1;
 }
 
 /** \brief Returns the lowest bit index with the given rank.
@@ -172,7 +172,7 @@ inline i32 bit_rank(u64 bit_set, i32 index) noexcept
  */
 inline i32 bit_select(u64 bit_set, i32 rank) noexcept
 {
-    return 63 - __builtin_clzll(_pdep_u64((u64{1} << (rank + 1)) - 1, bit_set));
+  return 63 - __builtin_clzll(_pdep_u64((u64{1} << (rank + 1)) - 1, bit_set));
 }
 
 }  // namespace turtle_kv

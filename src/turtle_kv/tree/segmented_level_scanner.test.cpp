@@ -274,7 +274,6 @@ void SegmentedLevelScannerTest::Scenario::run_with_pivot_count(usize pivot_count
   const usize leaf_count = (size_per_item * item_count + space_per_leaf - 1) / space_per_leaf;
 
   this->string_store.emplace();
-  // this->set_random_seed(std::random_device{}());
   this->set_key_size(key_size);
   this->set_value_size(value_size);
   this->set_item_count(item_count);

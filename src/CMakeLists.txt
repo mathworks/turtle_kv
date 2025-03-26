@@ -5,6 +5,7 @@ cxx_library(turtle_kv)
 target_link_libraries(
   turtle_kv
   PUBLIC
+  abseil::abseil
   batteries::batteries
   boost::boost
   llfs::llfs

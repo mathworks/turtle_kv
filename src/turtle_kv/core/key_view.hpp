@@ -14,12 +14,6 @@ using ::llfs::KeyOrder;
 using ::llfs::KeyRangeOrder;
 using ::llfs::KeyView;
 
-template <typename T, typename Result = decltype(get_key(std::declval<T*>()))>
-inline decltype(auto) get_key(T* ptr) noexcept
-{
-  return get_key(*ptr);
-}
-
 inline KeyView get_key(const char* c_str) noexcept
 {
   return KeyView{c_str};
