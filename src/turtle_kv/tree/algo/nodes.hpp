@@ -101,7 +101,8 @@ struct NodeAlgorithms {
    * used to update the node.
    */
   template <typename Edits, typename SizeOfEditFn /*= usize(const EditView&)*/>
-  void update_pending_bytes(batt::WorkerPool& worker_pool, const Edits& edits,
+  void update_pending_bytes(batt::WorkerPool& worker_pool,
+                            const Edits& edits,
                             const SizeOfEditFn& size_of_edit) noexcept
   {
     const ParallelAlgoDefaults& algo_defaults = parallel_algo_defaults();
@@ -118,27 +119,31 @@ struct NodeAlgorithms {
 
     // First compute prefix sum of the edits.
     //
-    batt::RunningTotal total_item_bytes = batt::parallel_running_total(
-        worker_pool, edits_begin, edits_end, size_of_edit, running_total_params);
+    batt::RunningTotal total_item_bytes = batt::parallel_running_total(worker_pool,
+                                                                       edits_begin,
+                                                                       edits_end,
+                                                                       size_of_edit,
+                                                                       running_total_params);
 
     // Now find the lower_bound position of each pivot key in the prefix sum and subtract the
     // difference to get bytes per pivot.
     //
-    usize pivot_edits_begin_i =
-        std::distance(edits_begin,                              //
-                      std::lower_bound(edits_begin, edits_end,  //
-                                       this->node_.get_pivot_key(0), KeyOrder{}));
+    usize pivot_edits_begin_i = std::distance(
+        edits_begin,
+        std::lower_bound(edits_begin, edits_end, this->node_.get_pivot_key(0), KeyOrder{}));
 
     const usize pivot_count = this->node_.pivot_count();
     for (usize pivot_i = 0; pivot_i < pivot_count; ++pivot_i) {
-      const usize pivot_edits_end_i =  //
+      const usize pivot_edits_end_i =
           std::distance(edits_begin,
-                        std::lower_bound(edits_begin, edits_end,
-                                         this->node_.get_pivot_key(pivot_i + 1), KeyOrder{}));
+                        std::lower_bound(edits_begin,
+                                         edits_end,
+                                         this->node_.get_pivot_key(pivot_i + 1),
+                                         KeyOrder{}));
 
-      this->node_.add_pending_bytes(pivot_i,                             //
-                                    total_item_bytes[pivot_edits_end_i]  //
-                                        - total_item_bytes[pivot_edits_begin_i]);
+      this->node_.add_pending_bytes(
+          pivot_i,
+          total_item_bytes[pivot_edits_end_i] - total_item_bytes[pivot_edits_begin_i]);
 
       pivot_edits_begin_i = pivot_edits_end_i;
     }
@@ -147,7 +152,8 @@ struct NodeAlgorithms {
   /** \brief Executes a point query for the given key, returning the value (if found).
    */
   template <typename PageLoaderT, typename PinnedPageT>
-  StatusOr<ValueView> find_key(PageLoaderT& page_loader, PinnedPageT& pinned_page_out,
+  StatusOr<ValueView> find_key(PageLoaderT& page_loader,
+                               PinnedPageT& pinned_page_out,
                                const KeyView& key) noexcept
   {
     Optional<ValueView> value;
@@ -173,10 +179,8 @@ struct NodeAlgorithms {
     //
     PinnedPageT subtree_pinned_page;
 
-    StatusOr<ValueView> subtree_result =  //
-        this->node_                       //
-            .get_child(key_pivot_i)       //
-            .find_key(page_loader, subtree_pinned_page, key);
+    StatusOr<ValueView> subtree_result =
+        this->node_.get_child(key_pivot_i).find_key(page_loader, subtree_pinned_page, key);
 
     BATT_REQUIRE_OK(combine_in_place(&value, subtree_result));
 
@@ -202,8 +206,10 @@ struct NodeAlgorithms {
    * `lower_half_level` and `upper_half_level` respectively.
    */
   template <typename LevelCaseT, typename LevelVariantT>
-  void split_level(const LevelCaseT& whole_level, i32 split_pivot_i,
-                   LevelVariantT& lower_half_level, LevelVariantT& upper_half_level) noexcept
+  void split_level(const LevelCaseT& whole_level,
+                   i32 split_pivot_i,
+                   LevelVariantT& lower_half_level,
+                   LevelVariantT& upper_half_level) noexcept
   {
     const KeyView split_pivot_key = this->node_.get_pivot_key(split_pivot_i);
 

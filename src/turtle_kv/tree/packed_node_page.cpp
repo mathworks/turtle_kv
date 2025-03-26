@@ -237,17 +237,20 @@ StatusOr<ValueView> PackedNodePage::find_key_in_level(usize level_i,            
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 StatusOr<llfs::PinnedPage> PackedNodePage::UpdateBuffer::Segment::load_leaf_page(
-    llfs::PageLoader& page_loader, llfs::PinPageToJob pin_page_to_job) const noexcept
+    llfs::PageLoader& page_loader,
+    llfs::PinPageToJob pin_page_to_job) const noexcept
 {
   return page_loader.get_page_with_layout_in_job(this->leaf_page_id.unpack(),
-                                                 NodePageView::page_layout_id(), pin_page_to_job,
+                                                 NodePageView::page_layout_id(),
+                                                 pin_page_to_job,
                                                  llfs::OkIfNotFound{false});
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 usize PackedNodePage::UpdateBuffer::Segment::get_flushed_item_upper_bound(
-    const SegmentedLevel& level, i32 pivot_i) const noexcept
+    const SegmentedLevel& level,
+    i32 pivot_i) const noexcept
 {
   if (!get_bit(this->flushed_pivots, pivot_i)) {
     return 0;

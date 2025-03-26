@@ -11,20 +11,31 @@
 namespace turtle_kv {
 
 template <typename Src, typename Dst, typename GroupEq, typename CompactFn, bool kDecayValue>
-Dst parallel_compact(batt::WorkerPool& worker_pool, Src src_begin, Src src_end,
-                     const Dst& dst_begin, const GroupEq& group_eq, const CompactFn& compact_fn,
-                     DecayToItem<kDecayValue> decay_to_item,  //
-                     batt::TaskSize min_task_size,            //
+Dst parallel_compact(batt::WorkerPool& worker_pool,
+                     Src src_begin,
+                     Src src_end,
+                     const Dst& dst_begin,
+                     const GroupEq& group_eq,
+                     const CompactFn& compact_fn,
+                     DecayToItem<kDecayValue> decay_to_item,
+                     batt::TaskSize min_task_size,
                      batt::TaskCount max_tasks);
 
-template <typename Src, typename Dst, typename ChunksOut, typename GroupEq, typename CompactFn,
+template <typename Src,
+          typename Dst,
+          typename ChunksOut,
+          typename GroupEq,
+          typename CompactFn,
           bool kDecayValue>
-ChunksOut parallel_compact_into_chunks(batt::WorkerPool& worker_pool, Src src_begin, Src src_end,
-                                       const Dst& dst_begin,    //
-                                       ChunksOut chunks_begin,  //
-                                       const GroupEq& group_eq, const CompactFn& compact_fn,
-                                       DecayToItem<kDecayValue> decay_to_item,  //
-                                       batt::TaskSize min_task_size,            //
+ChunksOut parallel_compact_into_chunks(batt::WorkerPool& worker_pool,
+                                       Src src_begin,
+                                       Src src_end,
+                                       const Dst& dst_begin,
+                                       ChunksOut chunks_begin,
+                                       const GroupEq& group_eq,
+                                       const CompactFn& compact_fn,
+                                       DecayToItem<kDecayValue> decay_to_item,
+                                       batt::TaskSize min_task_size,
                                        batt::TaskCount max_tasks);
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
@@ -53,7 +64,10 @@ struct CompactShardBase : GroupEqBase<GroupEq> {
 
 template <typename Src, typename Dst, typename GroupEq, typename CompactFn, typename Decay>
 struct CompactShard : CompactShardBase<GroupEq, CompactFn> {
-  explicit CompactShard(Src src_begin, Src src_end, Dst dst_begin, const GroupEq& group_eq,
+  explicit CompactShard(Src src_begin,
+                        Src src_end,
+                        Dst dst_begin,
+                        const GroupEq& group_eq,
                         const CompactFn& compact_fn) noexcept
       : CompactShardBase<GroupEq, CompactFn>{group_eq, compact_fn}
       , src_begin_{src_begin}
@@ -107,12 +121,22 @@ struct CompactShard : CompactShardBase<GroupEq, CompactFn> {
   Dst dst_end_;
 };
 
-template <typename Src, typename Dst, typename GroupEq, typename CompactFn, typename Shards,
+template <typename Src,
+          typename Dst,
+          typename GroupEq,
+          typename CompactFn,
+          typename Shards,
           bool kDecayValue>
-void parallel_compact_impl(batt::WorkerPool& worker_pool, Src src_begin, Src src_end,
-                           const Dst& dst_begin, const GroupEq& group_eq,
-                           const CompactFn& compact_fn, Shards& shards, DecayToItem<kDecayValue>,
-                           batt::TaskSize min_task_size, batt::TaskCount max_tasks)
+void parallel_compact_impl(batt::WorkerPool& worker_pool,
+                           Src src_begin,
+                           Src src_end,
+                           const Dst& dst_begin,
+                           const GroupEq& group_eq,
+                           const CompactFn& compact_fn,
+                           Shards& shards,
+                           DecayToItem<kDecayValue>,
+                           batt::TaskSize min_task_size,
+                           batt::TaskCount max_tasks)
 {
   auto src_size = std::distance(src_begin, src_end);
 
@@ -182,10 +206,14 @@ void parallel_compact_impl(batt::WorkerPool& worker_pool, Src src_begin, Src src
    //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 
 template <typename Src, typename Dst, typename GroupEq, typename CompactFn, bool kDecayValue>
-Dst parallel_compact(batt::WorkerPool& worker_pool, Src src_begin, Src src_end,
-                     const Dst& dst_begin, const GroupEq& group_eq, const CompactFn& compact_fn,
-                     DecayToItem<kDecayValue> decay_to_item,  //
-                     batt::TaskSize min_task_size,            //
+Dst parallel_compact(batt::WorkerPool& worker_pool,
+                     Src src_begin,
+                     Src src_end,
+                     const Dst& dst_begin,
+                     const GroupEq& group_eq,
+                     const CompactFn& compact_fn,
+                     DecayToItem<kDecayValue> decay_to_item,
+                     batt::TaskSize min_task_size,
                      batt::TaskCount max_tasks)
 {
   batt::SmallVec<batt::CpuCacheLineIsolated<
@@ -193,13 +221,16 @@ Dst parallel_compact(batt::WorkerPool& worker_pool, Src src_begin, Src src_end,
                  64>
       shards;
 
-  detail::parallel_compact_impl(worker_pool,           //
-                                src_begin, src_end,    //
-                                dst_begin,             //
-                                group_eq, compact_fn,  //
-                                shards,                //
-                                decay_to_item,         //
-                                min_task_size, max_tasks);
+  detail::parallel_compact_impl(worker_pool,
+                                src_begin,
+                                src_end,
+                                dst_begin,
+                                group_eq,
+                                compact_fn,
+                                shards,
+                                decay_to_item,
+                                min_task_size,
+                                max_tasks);
 
   if (shards.empty()) {
     return dst_begin;
@@ -219,14 +250,21 @@ Dst parallel_compact(batt::WorkerPool& worker_pool, Src src_begin, Src src_end,
   return min_dst_begin;
 }
 
-template <typename Src, typename Dst, typename ChunksOut, typename GroupEq, typename CompactFn,
+template <typename Src,
+          typename Dst,
+          typename ChunksOut,
+          typename GroupEq,
+          typename CompactFn,
           bool kDecayValue>
-ChunksOut parallel_compact_into_chunks(batt::WorkerPool& worker_pool, Src src_begin, Src src_end,
-                                       const Dst& dst_begin,    //
-                                       ChunksOut chunks_begin,  //
-                                       const GroupEq& group_eq, const CompactFn& compact_fn,
-                                       DecayToItem<kDecayValue> decay_to_item,  //
-                                       batt::TaskSize min_task_size,            //
+ChunksOut parallel_compact_into_chunks(batt::WorkerPool& worker_pool,
+                                       Src src_begin,
+                                       Src src_end,
+                                       const Dst& dst_begin,
+                                       ChunksOut chunks_begin,
+                                       const GroupEq& group_eq,
+                                       const CompactFn& compact_fn,
+                                       DecayToItem<kDecayValue> decay_to_item,
+                                       batt::TaskSize min_task_size,
                                        batt::TaskCount max_tasks)
 {
   batt::SmallVec<batt::CpuCacheLineIsolated<
@@ -234,14 +272,16 @@ ChunksOut parallel_compact_into_chunks(batt::WorkerPool& worker_pool, Src src_be
                  64>
       shards;
 
-  detail::parallel_compact_impl(worker_pool,           //
-                                src_begin, src_end,    //
-                                dst_begin,             //
-                                group_eq, compact_fn,  //
-                                shards,                //
-                                decay_to_item,         //
-                                min_task_size, max_tasks);
-
+  detail::parallel_compact_impl(worker_pool,
+                                src_begin,
+                                src_end,
+                                dst_begin,
+                                group_eq,
+                                compact_fn,
+                                shards,
+                                decay_to_item,
+                                min_task_size,
+                                max_tasks);
   isize offset = 0;
   Dst dst_end = dst_begin;
 

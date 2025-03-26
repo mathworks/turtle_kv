@@ -27,8 +27,10 @@ class PinningPageLoader : public llfs::PageLoader
   }
 
   StatusOr<llfs::PinnedPage> get_page_with_layout_in_job(
-      llfs::PageId page_id, const Optional<llfs::PageLayoutId>& required_layout,
-      llfs::PinPageToJob pin_page_to_job, llfs::OkIfNotFound ok_if_not_found) override
+      llfs::PageId page_id,
+      const Optional<llfs::PageLayoutId>& required_layout,
+      llfs::PinPageToJob pin_page_to_job,
+      llfs::OkIfNotFound ok_if_not_found) override
   {
     auto iter = this->pinned_pages_.find(page_id.int_value());
     if (iter != this->pinned_pages_.end()) {
@@ -37,8 +39,10 @@ class PinningPageLoader : public llfs::PageLoader
     }
 
     BATT_ASSIGN_OK_RESULT(llfs::PinnedPage pinned_page,
-                          this->base_loader_.get_page_with_layout_in_job(
-                              page_id, required_layout, pin_page_to_job, ok_if_not_found));
+                          this->base_loader_.get_page_with_layout_in_job(page_id,
+                                                                         required_layout,
+                                                                         pin_page_to_job,
+                                                                         ok_if_not_found));
 
     if (pin_page_to_job != llfs::PinPageToJob::kFalse) {
       this->pinned_pages_.emplace(page_id.int_value(), pinned_page);

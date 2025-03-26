@@ -32,7 +32,8 @@ MergeCompactor::~MergeCompactor() noexcept
 //
 void MergeCompactor::set_generator(GeneratorFn&& fn)
 {
-  this->inside_ = callcc(batt::StackSize{512 * kKiB}, batt::StackType::kFixedSize,
+  this->inside_ = callcc(batt::StackSize{512 * kKiB},
+                         batt::StackType::kFixedSize,
                          [this, fn = std::move(fn)](batt::Continuation&& origin) {
                            this->outside_ = origin.resume();
                            {
@@ -128,7 +129,8 @@ Status MergeCompactor::read_some_impl(OutputBuffer<kDecayToItems>& output,
     // Copy slice data into buffer_[0] as ItemT (EditView or ItemView) to prepare for merge.
     //
     this->collect_edits(as_slice(edit_slices_to_merge),
-                        as_slice(output.buffer_[0].data(), total_items), collected_edit_slices);
+                        as_slice(output.buffer_[0].data(), total_items),
+                        collected_edit_slices);
 
     LOG_IF(INFO, debug_log_on()) << "merge_compact_edits(collected_edit_slices="
                                  << batt::dump_range(as_const_slice(collected_edit_slices),
@@ -137,7 +139,8 @@ Status MergeCompactor::read_some_impl(OutputBuffer<kDecayToItems>& output,
 
     // Do the merge/compact.
     //
-    output.merged_ = merge_compact_edits(this->worker_pool_, as_const_slice(collected_edit_slices),
+    output.merged_ = merge_compact_edits(this->worker_pool_,
+                                         as_const_slice(collected_edit_slices),
                                          as_slice(output.buffer_[1].data(), total_items),
                                          as_slice(output.buffer_[2].data(), total_items),
                                          DecayToItem<kDecayToItems>{});
@@ -224,7 +227,8 @@ void MergeCompactor::pop_lines(const KeyView& max_key, SmallVecBase<Ref<MergeLin
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 usize MergeCompactor::cut_lines(const Slice<const Ref<MergeLine>>& src_lines,
-                                SmallVecBase<EditSlice>& dst_slices, const KeyView& max_key)
+                                SmallVecBase<EditSlice>& dst_slices,
+                                const KeyView& max_key)
 {
   // Cut each line at the least max_key we calculated above, updating both priority heaps as we go.
   //
@@ -298,7 +302,10 @@ void MergeCompactor::collect_edits(const Slice<const EditSlice>& src_slices,
     auto work_fn = [edit_slice, dst, &context, this] {
       batt::case_of(edit_slice, [&](const auto& slice) {
         const ParallelAlgoDefaults& algo_defaults = parallel_algo_defaults();
-        parallel_copy(context, slice.begin(), slice.end(), dst,
+        parallel_copy(context,
+                      slice.begin(),
+                      slice.end(),
+                      dst,
                       /*min_task_size = */ algo_defaults.copy_edits.min_task_size,
                       /*max_tasks = */ batt::TaskCount{this->worker_pool_.size() - 1});
       });
@@ -465,7 +472,8 @@ template <bool kDecayToItems>
 
   // Shift the offsets for all chunks from `second` by the final offset of `first`.
   //
-  std::for_each(iter2, std::prev(ans.chunks_.end()),
+  std::for_each(iter2,
+                std::prev(ans.chunks_.end()),
                 [first_size](Chunk<const value_type*>& chunk_from_second) {
                   chunk_from_second.offset += first_size;
                 });
@@ -504,7 +512,8 @@ void MergeCompactor::ResultSet<kDecayToItems>::append(OutputBuffer<kDecayToItems
     return;
   }
 
-  auto it = std::find_if(output.buffer_.begin(), output.buffer_.end(),
+  auto it = std::find_if(output.buffer_.begin(),
+                         output.buffer_.end(),
                          [&](const std::vector<EditView>& b) {
                            return static_cast<const void*>(b.data()) ==
                                   static_cast<const void*>(output.merged_.begin());
@@ -625,9 +634,10 @@ void MergeCompactor::ResultSet<kDecayToItems>::drop_key_range_impl(
            << batt::c_str_literal(dropped_key_range.lower_bound) << ".."
            << batt::c_str_literal(dropped_key_range.upper_bound) << ")" << this->debug_dump();
 
-  auto [outer_first, outer_last] =
-      std::equal_range(this->chunks_.begin(), std::prev(this->chunks_.end()), dropped_key_range,
-                       ExtendedKeyRangeOrder{});
+  auto [outer_first, outer_last] = std::equal_range(this->chunks_.begin(),
+                                                    std::prev(this->chunks_.end()),
+                                                    dropped_key_range,
+                                                    ExtendedKeyRangeOrder{});
 
   // Base case 1: no match, do nothing.
   //
@@ -647,8 +657,10 @@ void MergeCompactor::ResultSet<kDecayToItems>::drop_key_range_impl(
 
     BATT_CHECK_NE(chunk_items_begin, chunk_items_end);
 
-    const auto [inner_first, inner_last] = std::equal_range(
-        chunk_items_begin, chunk_items_end, dropped_key_range, ExtendedKeyRangeOrder{});
+    const auto [inner_first, inner_last] = std::equal_range(chunk_items_begin,
+                                                            chunk_items_end,
+                                                            dropped_key_range,
+                                                            ExtendedKeyRangeOrder{});
 
     const isize n_dropped = std::distance(inner_first, inner_last);
     if (n_dropped == 0) {
@@ -680,7 +692,8 @@ void MergeCompactor::ResultSet<kDecayToItems>::drop_key_range_impl(
       }
     }
 
-    std::for_each(outer_last, this->chunks_.end(),
+    std::for_each(outer_last,
+                  this->chunks_.end(),
                   [&](Chunk<const value_type*>& chunk_after_insert) {
                     chunk_after_insert.offset -= n_dropped;
                   });
@@ -704,8 +717,10 @@ void MergeCompactor::ResultSet<kDecayToItems>::drop_key_range_impl(
     auto chunk_items_begin = front_chunk.items.begin();
     auto chunk_items_end = front_chunk.items.end();
 
-    auto inner_first = std::lower_bound(chunk_items_begin, chunk_items_end,
-                                        dropped_key_range.lower_bound, KeyOrder{});
+    auto inner_first = std::lower_bound(chunk_items_begin,
+                                        chunk_items_end,
+                                        dropped_key_range.lower_bound,
+                                        KeyOrder{});
 
     if (inner_first != chunk_items_begin) {
       ++middle_first;
@@ -723,8 +738,10 @@ void MergeCompactor::ResultSet<kDecayToItems>::drop_key_range_impl(
     auto chunk_items_begin = back_chunk.items.begin();
     auto chunk_items_end = back_chunk.items.end();
 
-    auto inner_last = std::lower_bound(chunk_items_begin, chunk_items_end,
-                                       dropped_key_range.upper_bound, KeyOrder{});
+    auto inner_last = std::lower_bound(chunk_items_begin,
+                                       chunk_items_end,
+                                       dropped_key_range.upper_bound,
+                                       KeyOrder{});
 
     while (inner_last != chunk_items_end &&
            !IntervalTraits::x_excluded_by_upper(get_key(*inner_last),  //
@@ -744,7 +761,8 @@ void MergeCompactor::ResultSet<kDecayToItems>::drop_key_range_impl(
 
   // Count dropped items in middle and erase.
   //
-  std::for_each(middle_first, middle_last,
+  std::for_each(middle_first,
+                middle_last,
                 [&n_dropped](const Chunk<const value_type*>& middle_chunk) {
                   n_dropped += middle_chunk.items.size();
                 });
@@ -753,7 +771,8 @@ void MergeCompactor::ResultSet<kDecayToItems>::drop_key_range_impl(
 
   // Shift offsets down (after matched range).
   //
-  std::for_each(middle_last, this->chunks_.end(),
+  std::for_each(middle_last,
+                this->chunks_.end(),
                 [n_dropped](Chunk<const value_type*>& chunk_after_dropped) {
                   chunk_after_dropped.offset -= n_dropped;
                 });

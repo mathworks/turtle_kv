@@ -45,14 +45,16 @@ struct BatchUpdate {
    */
   template <typename GeneratorFn>
   StatusOr<MergeCompactor::ResultSet</*decay_to_items=*/false>> merge_compact_edits(
-      const KeyView& max_key, GeneratorFn&& generator_fn) noexcept;
+      const KeyView& max_key,
+      GeneratorFn&& generator_fn) noexcept;
 
   /** \brief Does the same as `this->merge_compact_edits`, but pushes a single MergeFrame first and
    * passes that to `frame_push_fn`.
    */
   template <typename FramePushFn>
   StatusOr<MergeCompactor::ResultSet</*decay_to_items=*/false>> merge_compact_edits_in_frame(
-      const KeyView& max_key, FramePushFn&& frame_push_fn) noexcept;
+      const KeyView& max_key,
+      FramePushFn&& frame_push_fn) noexcept;
 
   /** \brief Resets `this->edit_size_totals` to reflect `this->result_set`.
    */

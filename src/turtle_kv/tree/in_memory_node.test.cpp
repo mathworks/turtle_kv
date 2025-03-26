@@ -241,8 +241,10 @@ void SubtreeBatchUpdateScenario::run()
               << BATT_INSPECT(tree_options.max_item_size()) << std::endl;
   }
 
-  std::shared_ptr<llfs::PageCache> page_cache = make_memory_page_cache(
-      batt::Runtime::instance().default_scheduler(), tree_options, /*byte_capacity=*/1500 * kMiB);
+  std::shared_ptr<llfs::PageCache> page_cache =
+      make_memory_page_cache(batt::Runtime::instance().default_scheduler(),
+                             tree_options,
+                             /*byte_capacity=*/1500 * kMiB);
 
   StableStringStore strings;
   RandomResultSetGenerator result_set_generator;
@@ -312,8 +314,12 @@ void SubtreeBatchUpdateScenario::run()
           << BATT_INSPECT(this->seed) << BATT_INSPECT(i);
 
       StatusOr<std::unique_ptr<InMemoryNode>> new_root =
-          InMemoryNode::from_subtrees(*page_loader, tree_options, std::move(tree),
-                                      std::move(*next_sibling), global_max_key(), IsRoot{true});
+          InMemoryNode::from_subtrees(*page_loader,
+                                      tree_options,
+                                      std::move(tree),
+                                      std::move(*next_sibling),
+                                      global_max_key(),
+                                      IsRoot{true});
 
       ASSERT_TRUE(new_root.ok()) << BATT_INSPECT(new_root.status());
 

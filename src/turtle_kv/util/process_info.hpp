@@ -153,11 +153,14 @@ class ProcessInfo
   std::atomic<usize> memory_usage_{0};
 
   const std::string get_memory_command_ =
-      batt::to_string("expr $(cat /proc/", this->target_pid_,
+      batt::to_string("expr $(cat /proc/",
+                      this->target_pid_,
                       "/status | grep VmRSS | grep kB | awk \'{print $2}\') \\* 1024");
 
-  const std::string get_cpu_seconds_command_ = batt::to_string(
-      "expr $(cat /proc/", this->target_pid_, "/stat | awk \'{print $14 \" + \" $15}\')");
+  const std::string get_cpu_seconds_command_ =
+      batt::to_string("expr $(cat /proc/",
+                      this->target_pid_,
+                      "/stat | awk \'{print $14 \" + \" $15}\')");
 
   std::thread thread_{[this] {
     this->thread_main();

@@ -14,7 +14,10 @@
 
 namespace turtle_kv {
 
-template <typename NodeT, typename LevelT, typename SegmentT, typename PageLoaderT,
+template <typename NodeT,
+          typename LevelT,
+          typename SegmentT,
+          typename PageLoaderT,
           typename PinnedPageT>
 class SegmentedLevelBuilder
 {

@@ -12,7 +12,7 @@ using batt::status_from_retval;
 using batt::StatusOr;
 
 enum struct StatusCode {
-    kOk = 0,
+  kOk = 0,
 };
 
 bool initialize_status_codes();

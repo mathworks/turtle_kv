@@ -332,7 +332,8 @@ class MergeCompactor
   // Return the total number of items in all slices pushed onto the output vec,
   // `edit_slices_to_merge`.
   //
-  usize cut_lines(const Slice<const Ref<MergeLine>>& src_lines, SmallVecBase<EditSlice>& dst_slices,
+  usize cut_lines(const Slice<const Ref<MergeLine>>& src_lines,
+                  SmallVecBase<EditSlice>& dst_slices,
                   const KeyView& max_key);
 
   // For each line `l` in the passed slice:
@@ -345,7 +346,8 @@ class MergeCompactor
   // merge/compact.
   //
   template <typename T>
-  void collect_edits(const Slice<const EditSlice>& src_slices, const Slice<T>& dst_edit_buffer,
+  void collect_edits(const Slice<const EditSlice>& src_slices,
+                     const Slice<T>& dst_edit_buffer,
                      SmallVecBase<Slice<const T>>& dst_slices);
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

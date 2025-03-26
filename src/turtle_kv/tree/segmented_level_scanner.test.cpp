@@ -92,7 +92,9 @@ class SegmentedLevelScannerTest : public ::testing::Test
     template <bool kDecayToItems>
     RandomLeafGenerator::Result<kDecayToItems> generate_leaf_pages() noexcept
     {
-      return this->leaf_generator(DecayToItem<kDecayToItems>{}, *this->rng, *this->fake_page_loader,
+      return this->leaf_generator(DecayToItem<kDecayToItems>{},
+                                  *this->rng,
+                                  *this->fake_page_loader,
                                   *this->string_store);
     }
 
@@ -132,9 +134,11 @@ class SegmentedLevelScannerTest : public ::testing::Test
 
         std::vector<usize> prefix_sum;
         for (usize pivot_i = 0; pivot_i < pivot_count; ++pivot_i) {
-          prefix_sum.push_back(std::distance(
-              items_slice.begin(), std::lower_bound(items_slice.begin(), items_slice.end(),
-                                                    fake_node.get_pivot_key(pivot_i), KeyOrder{})));
+          prefix_sum.push_back(std::distance(items_slice.begin(),
+                                             std::lower_bound(items_slice.begin(),
+                                                              items_slice.end(),
+                                                              fake_node.get_pivot_key(pivot_i),
+                                                              KeyOrder{})));
         }
         prefix_sum.push_back(items_slice.size());
 
@@ -175,7 +179,10 @@ class SegmentedLevelScannerTest : public ::testing::Test
       //
       {
         SegmentedLevelScanner<const FakeNode, const FakeLevel, FakePageLoader> scanner{
-            actual, actual.level_, *this->fake_page_loader, llfs::PinPageToJob::kDefault};
+            actual,
+            actual.level_,
+            *this->fake_page_loader,
+            llfs::PinPageToJob::kDefault};
 
         std::move(scanner) | seq::for_each([&](const EditSlice& edit_slice) {
           batt::case_of(   //
@@ -206,7 +213,10 @@ class SegmentedLevelScannerTest : public ::testing::Test
           std::vector<std::string_view> actual_keys2;
           {
             SegmentedLevelScanner<const FakeNode, const FakeLevel, FakePageLoader> scanner2{
-                actual, actual.level_, *this->fake_page_loader, llfs::PinPageToJob::kDefault,
+                actual,
+                actual.level_,
+                *this->fake_page_loader,
+                llfs::PinPageToJob::kDefault,
                 /*min_pivot=*/pivot_i};
 
             std::move(scanner2) | seq::for_each([&](const EditSlice& edit_slice) {
@@ -365,8 +375,10 @@ void SegmentedLevelScannerTest::Scenario::run_with_pivot_count(usize pivot_count
                 << std::endl;
     }
 
-    auto unflushed_begin = std::lower_bound(all_items_slice.begin(), all_items_slice.end(),
-                                            min_unflushed_key[pivot_i], KeyOrder{});
+    auto unflushed_begin = std::lower_bound(all_items_slice.begin(),
+                                            all_items_slice.end(),
+                                            min_unflushed_key[pivot_i],
+                                            KeyOrder{});
 
     auto flush_end = unflushed_begin + n_items_to_drop;
 

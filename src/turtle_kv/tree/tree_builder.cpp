@@ -144,7 +144,8 @@ StatusOr<std::unique_ptr<llfs::PageCacheJob>> TreeBuilder::serialize(
 Status TreeBuilder::grow_tree() noexcept
 {
   BATT_ASSIGN_OK_RESULT(  //
-      Subtree upper_half_subtree, this->tree_.try_split(*this->page_loader_));
+      Subtree upper_half_subtree,
+      this->tree_.try_split(*this->page_loader_));
 
   Subtree lower_half_subtree = std::move(this->tree_);
 

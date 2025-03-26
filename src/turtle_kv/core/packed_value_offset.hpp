@@ -29,4 +29,4 @@ struct PackedValueOffset {
 BATT_STATIC_ASSERT_EQ(sizeof(PackedValueOffset), 4);
 BATT_STATIC_ASSERT_EQ(alignof(PackedValueOffset), 1);
 
-}  //namespace turtle_kv
+}  // namespace turtle_kv

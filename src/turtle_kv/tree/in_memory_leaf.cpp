@@ -161,7 +161,8 @@ Status InMemoryLeaf::start_serialize(TreeSerializeContext& context) noexcept
       context.async_build_page([this](TreeSerializeContext& context) -> StatusOr<llfs::PinnedPage> {
         // TODO [tastolfi 2025-03-23] - pass DecayToItem<true> to build leaf page.
         //
-        return build_leaf_page_in_job(context.page_job(), this->result_set.get(),
+        return build_leaf_page_in_job(context.page_job(),
+                                      this->result_set.get(),
                                       this->tree_options.leaf_size());
       });
 

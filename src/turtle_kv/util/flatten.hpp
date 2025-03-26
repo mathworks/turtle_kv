@@ -84,7 +84,8 @@ class Flatten
 
   bool equal(const Flatten& that) const
   {
-    return this->chunk_iter_ == that.chunk_iter_ && this->cached_chunk_.offset == that.cached_chunk_.offset;
+    return this->chunk_iter_ == that.chunk_iter_ &&
+           this->cached_chunk_.offset == that.cached_chunk_.offset;
   }
 
   void increment()
@@ -115,7 +116,8 @@ class Flatten
         this->to_prev_chunk_last();
       }
       const isize step =
-          std::min(static_cast<isize>(this->cached_chunk_.offset - this->chunk_iter_->offset), -delta);
+          std::min(static_cast<isize>(this->cached_chunk_.offset - this->chunk_iter_->offset),
+                   -delta);
       delta += step;
       this->cached_chunk_.items.advance_begin(-step);
       this->cached_chunk_.offset -= step;
@@ -172,7 +174,8 @@ inline std::ostream& operator<<(std::ostream& out, const Flatten<OuterIter, Inne
 //
 template <typename OuterIter,
           typename InnerIter = typename std::iterator_traits<OuterIter>::value_type::iterator>
-boost::iterator_range<Flatten<OuterIter, InnerIter>> flatten(const OuterIter& begin, const OuterIter& end)
+boost::iterator_range<Flatten<OuterIter, InnerIter>> flatten(const OuterIter& begin,
+                                                             const OuterIter& end)
 {
   using Iter = Flatten<OuterIter, InnerIter>;
   return boost::make_iterator_range(Iter{begin}, Iter{end});
@@ -186,15 +189,18 @@ namespace std {
 
 template <typename OuterIter, typename InnerIter, typename EachFn>
 void for_each(::turtle_kv::Flatten<OuterIter, InnerIter> first,
-              const ::turtle_kv::Flatten<OuterIter, InnerIter>& last, EachFn&& each_fn)
+              const ::turtle_kv::Flatten<OuterIter, InnerIter>& last,
+              EachFn&& each_fn)
 {
   for (;;) {
     if (first == last) {
       return;
     }
     if (last.cached_chunk_.offset <
-        first.cached_chunk_.offset + static_cast<::turtle_kv::isize>(first.cached_chunk_.items.size())) {
-      for (::turtle_kv::isize offset = first.cached_chunk_.offset; offset < last.cached_chunk_.offset;
+        first.cached_chunk_.offset +
+            static_cast<::turtle_kv::isize>(first.cached_chunk_.items.size())) {
+      for (::turtle_kv::isize offset = first.cached_chunk_.offset;
+           offset < last.cached_chunk_.offset;
            ++offset) {
         each_fn(*first);
         first.cached_chunk_.items.pop_front();
@@ -211,15 +217,18 @@ void for_each(::turtle_kv::Flatten<OuterIter, InnerIter> first,
 
 template <typename OuterIter, typename InnerIter, typename DstIter>
 DstIter copy(::turtle_kv::Flatten<OuterIter, InnerIter> first,
-             const ::turtle_kv::Flatten<OuterIter, InnerIter>& last, DstIter dst)
+             const ::turtle_kv::Flatten<OuterIter, InnerIter>& last,
+             DstIter dst)
 {
   for (;;) {
     if (first == last) {
       break;
     }
     if (last.cached_chunk_.offset <
-        first.cached_chunk_.offset + static_cast<::turtle_kv::isize>(first.cached_chunk_.items.size())) {
-      for (::turtle_kv::isize offset = first.cached_chunk_.offset; offset < last.cached_chunk_.offset;
+        first.cached_chunk_.offset +
+            static_cast<::turtle_kv::isize>(first.cached_chunk_.items.size())) {
+      for (::turtle_kv::isize offset = first.cached_chunk_.offset;
+           offset < last.cached_chunk_.offset;
            ++offset) {
         *dst = *first;
         ++dst;

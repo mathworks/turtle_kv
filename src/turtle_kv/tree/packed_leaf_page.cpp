@@ -17,7 +17,8 @@ llfs::PageLayoutId packed_leaf_page_layout_id() noexcept
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 StatusOr<llfs::PinnedPage> pin_leaf_page_to_job(
-    llfs::PageCacheJob& page_job, std::shared_ptr<llfs::PageBuffer>&& page_buffer) noexcept
+    llfs::PageCacheJob& page_job,
+    std::shared_ptr<llfs::PageBuffer>&& page_buffer) noexcept
 {
   BATT_CHECK_OK(LeafPageView::register_layout(page_job.cache()));
 

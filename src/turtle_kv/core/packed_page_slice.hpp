@@ -27,7 +27,8 @@ inline llfs::PageId get_page_id(const PackedPageSlice& page_slice)
   return get_page_id(page_slice.page_id);
 }
 
-inline batt::Status validate_packed_value(const PackedPageSlice& packed, const void* buffer_data,
+inline batt::Status validate_packed_value(const PackedPageSlice& packed,
+                                          const void* buffer_data,
                                           usize buffer_size)
 {
   return llfs::validate_packed_struct(packed, buffer_data, buffer_size);

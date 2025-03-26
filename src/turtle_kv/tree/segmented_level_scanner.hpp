@@ -61,14 +61,24 @@ class SegmentedLevelScanner : private SegmentedLevelScannerBase
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  explicit SegmentedLevelScanner(Node& node, Level& level, PageLoader& loader,
-                                 llfs::PinPageToJob pin_pages_to_job, Status& status,
+  explicit SegmentedLevelScanner(Node& node,
+                                 Level& level,
+                                 PageLoader& loader,
+                                 llfs::PinPageToJob pin_pages_to_job,
+                                 Status& status,
                                  i32 min_pivot_i = 0) noexcept;
 
-  explicit SegmentedLevelScanner(Node& node, Level& level, PageLoader& loader,
-                                 llfs::PinPageToJob pin_pages_to_job, i32 min_pivot_i = 0) noexcept
-      : SegmentedLevelScanner{
-            node, level, loader, pin_pages_to_job, this->Super::self_contained_status_, min_pivot_i}
+  explicit SegmentedLevelScanner(Node& node,
+                                 Level& level,
+                                 PageLoader& loader,
+                                 llfs::PinPageToJob pin_pages_to_job,
+                                 i32 min_pivot_i = 0) noexcept
+      : SegmentedLevelScanner{node,
+                              level,
+                              loader,
+                              pin_pages_to_job,
+                              this->Super::self_contained_status_,
+                              min_pivot_i}
   {
   }
 
@@ -111,7 +121,8 @@ class SegmentedLevelScanner : private SegmentedLevelScannerBase
 
   void advance_segment() noexcept;
 
-  void advance_to_pivot(usize target_pivot_i, const Segment& segment,
+  void advance_to_pivot(usize target_pivot_i,
+                        const Segment& segment,
                         const PackedLeafPage& leaf_page) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -134,8 +145,12 @@ class SegmentedLevelScanner : private SegmentedLevelScannerBase
 //
 template <typename NodeT, typename LevelT, typename PageLoaderT>
 inline /*explicit*/ SegmentedLevelScanner<NodeT, LevelT, PageLoaderT>::SegmentedLevelScanner(
-    Node& node, Level& level, PageLoader& loader, llfs::PinPageToJob pin_pages_to_job,
-    Status& status, i32 min_pivot_i) noexcept
+    Node& node,
+    Level& level,
+    PageLoader& loader,
+    llfs::PinPageToJob pin_pages_to_job,
+    Status& status,
+    i32 min_pivot_i) noexcept
     : node_{std::addressof(node)}
     , level_{std::addressof(level)}
     , loader_{std::addressof(loader)}
@@ -223,7 +238,8 @@ inline auto SegmentedLevelScanner<NodeT, LevelT, PageLoaderT>::peek_next_impl(bo
 
     const i32 target_pivot_i = std::max(first_bit(active_pivots), this->min_pivot_i_);
 
-    this->advance_to_pivot(target_pivot_i, *segment,
+    this->advance_to_pivot(target_pivot_i,
+                           *segment,
                            PackedLeafPage::view_of(this->pinned_leaf_.get_page_buffer()));
   }
 
@@ -286,7 +302,9 @@ inline void SegmentedLevelScanner<NodeT, LevelT, PageLoaderT>::advance_segment()
 //
 template <typename NodeT, typename LevelT, typename PageLoaderT>
 inline void SegmentedLevelScanner<NodeT, LevelT, PageLoaderT>::advance_to_pivot(
-    usize target_pivot_i, const Segment& segment, const PackedLeafPage& leaf_page) noexcept
+    usize target_pivot_i,
+    const Segment& segment,
+    const PackedLeafPage& leaf_page) noexcept
 {
   BATT_CHECK_LT(target_pivot_i, this->node_->pivot_count());
 

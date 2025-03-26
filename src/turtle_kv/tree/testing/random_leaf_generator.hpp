@@ -49,7 +49,8 @@ class RandomLeafGenerator
   }
 
   template <bool kDecayToItems, typename Rng>
-  Result<kDecayToItems> operator()(DecayToItem<kDecayToItems> decay_to_items, Rng& rng,
+  Result<kDecayToItems> operator()(DecayToItem<kDecayToItems> decay_to_items,
+                                   Rng& rng,
                                    FakePageLoader& fake_loader,
                                    llfs::StableStringStore& store) noexcept
   {
@@ -89,14 +90,17 @@ class RandomLeafGenerator
 
       // Use the fake loader to allocate a page buffer that will be fake-loadable later on.
       //
-      FakePinnedPage fake_pinned_page = BATT_OK_RESULT_OR_PANIC(fake_loader.get_page_with_layout(
-          page_id, LeafPageView::page_layout_id(), llfs::OkIfNotFound{false}));
+      FakePinnedPage fake_pinned_page =
+          BATT_OK_RESULT_OR_PANIC(fake_loader.get_page_with_layout(page_id,
+                                                                   LeafPageView::page_layout_id(),
+                                                                   llfs::OkIfNotFound{false}));
 
       // Grab the PageBuffer so we can build the page.
       //
       std::shared_ptr<llfs::PageBuffer> page_buffer = fake_pinned_page.get_page_buffer();
 
-      auto page_plan = PackedLeafLayoutPlan::from_items(page_buffer->size(), page_items,
+      auto page_plan = PackedLeafLayoutPlan::from_items(page_buffer->size(),
+                                                        page_items,
                                                         /*use_trie_index=*/true);
 
       // Build the page from the item slice assigned to it by the multi-page plan.

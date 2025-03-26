@@ -170,18 +170,21 @@ struct PackedLeafPage {
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
   //
-  const PackedKeyValue* find_key_in_range(const std::string_view& key, Interval<usize> search_range,
+  const PackedKeyValue* find_key_in_range(const std::string_view& key,
+                                          Interval<usize> search_range,
                                           usize skip_n = 0) const noexcept
   {
     auto [first, last] = [&] {
       if (skip_n) {
         return std::equal_range(this->items->data() + search_range.lower_bound,  //
                                 this->items->data() + search_range.upper_bound,  //
-                                key, KeySuffixOrder{.skip_n = skip_n});
+                                key,
+                                KeySuffixOrder{.skip_n = skip_n});
       }
       return std::equal_range(this->items->data() + search_range.lower_bound,  //
                               this->items->data() + search_range.upper_bound,  //
-                              key, [](const auto& l, const auto& r) {
+                              key,
+                              [](const auto& l, const auto& r) {
                                 return batt::compare(get_key(l), get_key(r)) == batt::Order::Less;
                               });
     }();
@@ -212,11 +215,13 @@ struct PackedLeafPage {
       if (skip_n) {
         return std::lower_bound(this->items->data() + search_range.lower_bound,  //
                                 this->items->data() + search_range.upper_bound,  //
-                                key, KeySuffixOrder{.skip_n = skip_n});
+                                key,
+                                KeySuffixOrder{.skip_n = skip_n});
       }
       return std::lower_bound(this->items->data() + search_range.lower_bound,  //
                               this->items->data() + search_range.upper_bound,  //
-                              key, [](const auto& l, const auto& r) {
+                              key,
+                              [](const auto& l, const auto& r) {
                                 return batt::compare(get_key(l), get_key(r)) == batt::Order::Less;
                               });
     }();
@@ -305,12 +310,25 @@ struct PackedLeafLayoutPlan {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-BATT_OBJECT_PRINT_IMPL((inline), PackedLeafLayoutPlan,
-                       (page_size, key_count, use_trie_index, trie_index_begin, trie_index_end,
-                        leaf_header_begin, leaf_header_end, key_array_header_begin,
-                        key_array_header_end, key_headers_begin, key_headers_end, key_data_begin,
-                        key_data_end, final_value_offset_begin, final_value_offset_end,
-                        value_data_begin, value_data_end))
+BATT_OBJECT_PRINT_IMPL((inline),
+                       PackedLeafLayoutPlan,
+                       (page_size,
+                        key_count,
+                        use_trie_index,
+                        trie_index_begin,
+                        trie_index_end,
+                        leaf_header_begin,
+                        leaf_header_end,
+                        key_array_header_begin,
+                        key_array_header_end,
+                        key_headers_begin,
+                        key_headers_end,
+                        key_data_begin,
+                        key_data_end,
+                        final_value_offset_begin,
+                        final_value_offset_end,
+                        value_data_begin,
+                        value_data_end))
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
@@ -471,7 +489,9 @@ template <typename ItemsRangeT>
                                                                  const ItemsRangeT& items,
                                                                  bool use_trie_index) noexcept
 {
-  LeafItemsSummary summary = std::accumulate(std::begin(items), std::end(items), LeafItemsSummary{},
+  LeafItemsSummary summary = std::accumulate(std::begin(items),
+                                             std::end(items),
+                                             LeafItemsSummary{},
                                              AddLeafItemsSummary{});
 
   BATT_CHECK_EQ(summary.drop_count, 0);
@@ -516,7 +536,8 @@ struct BufferBoundsChecker {
 // NOTE: `buffer` is the *entire* page buffer, including 64-byte llfs::PackedPageHeader.
 //
 template <typename Items>
-inline PackedLeafPage* build_leaf_page(MutableBuffer buffer, const PackedLeafLayoutPlan& plan,
+inline PackedLeafPage* build_leaf_page(MutableBuffer buffer,
+                                       const PackedLeafLayoutPlan& plan,
                                        const Items& items) noexcept
 {
   BATT_CHECK_EQ(plan.key_count, std::end(items) - std::begin(items));
@@ -641,7 +662,8 @@ inline PackedLeafPage* build_leaf_page(MutableBuffer buffer, const PackedLeafLay
 llfs::PageLayoutId packed_leaf_page_layout_id() noexcept;
 
 StatusOr<llfs::PinnedPage> pin_leaf_page_to_job(
-    llfs::PageCacheJob& page_job, std::shared_ptr<llfs::PageBuffer>&& page_buffer) noexcept;
+    llfs::PageCacheJob& page_job,
+    std::shared_ptr<llfs::PageBuffer>&& page_buffer) noexcept;
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 //

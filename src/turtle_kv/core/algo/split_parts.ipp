@@ -10,8 +10,10 @@
 namespace turtle_kv {
 
 template <typename SubTotals>
-inline SplitParts split_parts(const SubTotals& sub_totals, MinPartSize min_part_size,
-                              MaxPartSize max_part_size, MaxItemSize max_item_size)
+inline SplitParts split_parts(const SubTotals& sub_totals,
+                              MinPartSize min_part_size,
+                              MaxPartSize max_part_size,
+                              MaxItemSize max_item_size)
 {
   BATT_CHECK_GE(max_part_size, min_part_size);
 
@@ -100,7 +102,8 @@ inline SplitParts split_parts(const SubTotals& sub_totals, MinPartSize min_part_
       //
       const usize part_size_lower_bound = std::clamp<usize>(
           total_remaining - (n_remaining - 1) * (max_part_size - max_waste_per_part),
-          /*lower_bound=*/min_part_size, /*upper_bound=*/max_part_size);
+          /*lower_bound=*/min_part_size,
+          /*upper_bound=*/max_part_size);
 
       // We would prefer to pack an amount equal to the average across all parts, but this goal must
       // never be less than the lower bound we calculated above.

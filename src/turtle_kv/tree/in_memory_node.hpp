@@ -197,7 +197,8 @@ struct InMemoryNode {
           }
         }
 
-        this->segments.erase(std::remove_if(this->segments.begin(), this->segments.end(),
+        this->segments.erase(std::remove_if(this->segments.begin(),
+                                            this->segments.end(),
                                             [](const Segment& segment) {
                                               return segment.is_inactive();
                                             }),
@@ -360,7 +361,8 @@ struct InMemoryNode {
 
   //----- --- -- -  -  -   -
 
-  Status apply_batch_update(BatchUpdate& update, const KeyView& key_upper_bound,
+  Status apply_batch_update(BatchUpdate& update,
+                            const KeyView& key_upper_bound,
                             IsRoot is_root) noexcept;
 
   Status update_buffer_insert(BatchUpdate& update) noexcept;
@@ -371,12 +373,15 @@ struct InMemoryNode {
 
   MaxPendingBytes find_max_pending() const noexcept;
 
-  void push_levels_to_merge(MergeFrame& frame, llfs::PageLoader& page_loader,
-                            Status& segment_load_status, HasPageRefs& has_page_refs,
+  void push_levels_to_merge(MergeFrame& frame,
+                            llfs::PageLoader& page_loader,
+                            Status& segment_load_status,
+                            HasPageRefs& has_page_refs,
                             const Slice<UpdateBuffer::Level>& levels_to_merge,
                             i32 min_pivot_i = 0) noexcept;
 
-  Status set_pivot_items_flushed(llfs::PageLoader& page_loader, usize pivot_i,
+  Status set_pivot_items_flushed(llfs::PageLoader& page_loader,
+                                 usize pivot_i,
                                  const CInterval<KeyView>& flush_key_crange) noexcept;
 
   const KeyView& get_pivot_key(usize i) const noexcept
@@ -440,7 +445,8 @@ inline void InMemoryNode::UpdateBuffer::Segment::check_invariants(const char* fi
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 inline u32 InMemoryNode::UpdateBuffer::Segment::get_flushed_item_upper_bound(
-    const SegmentedLevel&, i32 pivot_i) const noexcept
+    const SegmentedLevel&,
+    i32 pivot_i) const noexcept
 {
   if (!get_bit(this->flushed_pivots, pivot_i)) {
     return 0;
@@ -460,7 +466,8 @@ inline u32 InMemoryNode::UpdateBuffer::Segment::get_flushed_item_upper_bound(
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 inline void InMemoryNode::UpdateBuffer::Segment::set_flushed_item_upper_bound(
-    i32 pivot_i, u32 upper_bound) noexcept
+    i32 pivot_i,
+    u32 upper_bound) noexcept
 {
   this->check_invariants(__FILE__, __LINE__);
   auto on_scope_exit = batt::finally([&] {

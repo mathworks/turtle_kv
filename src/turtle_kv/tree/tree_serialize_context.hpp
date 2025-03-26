@@ -29,7 +29,8 @@ class TreeSerializeContext
   TreeSerializeContext(const TreeSerializeContext&) = delete;
   TreeSerializeContext& operator=(const TreeSerializeContext&) = delete;
 
-  explicit TreeSerializeContext(const TreeOptions& tree_options, llfs::PageCacheJob& page_job,
+  explicit TreeSerializeContext(const TreeOptions& tree_options,
+                                llfs::PageCacheJob& page_job,
                                 batt::WorkerPool& worker_pool) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -

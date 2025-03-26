@@ -375,7 +375,8 @@ struct PackedNodePage {
     return kMaxLevels;
   }
 
-  StatusOr<ValueView> find_key(llfs::PageLoader& page_loader, llfs::PinnedPage& pinned_page_out,
+  StatusOr<ValueView> find_key(llfs::PageLoader& page_loader,
+                               llfs::PinnedPage& pinned_page_out,
                                const KeyView& key) const noexcept;
 
   StatusOr<ValueView> find_key_in_level(usize level_i,                      //

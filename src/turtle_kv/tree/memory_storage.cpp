@@ -29,15 +29,21 @@ std::shared_ptr<llfs::PageCache> make_memory_page_cache(batt::TaskScheduler& sch
 
   std::vector<llfs::PageArena> arenas;
 
-  arenas.emplace_back(llfs::make_memory_page_arena(scheduler, n_leaf_pages, opts.leaf_size(),
+  arenas.emplace_back(llfs::make_memory_page_arena(scheduler,
+                                                   n_leaf_pages,
+                                                   opts.leaf_size(),
                                                    /*name=*/"Leaf",
                                                    /*device_id=*/0));
 
-  arenas.emplace_back(llfs::make_memory_page_arena(scheduler, n_node_pages, opts.node_size(),
+  arenas.emplace_back(llfs::make_memory_page_arena(scheduler,
+                                                   n_node_pages,
+                                                   opts.node_size(),
                                                    /*name=*/"Node",
                                                    /*device_id=*/1));
 
-  arenas.emplace_back(llfs::make_memory_page_arena(scheduler, n_leaf_pages, opts.filter_page_size(),
+  arenas.emplace_back(llfs::make_memory_page_arena(scheduler,
+                                                   n_leaf_pages,
+                                                   opts.filter_page_size(),
                                                    /*name=*/"Filter",
                                                    /*device_id=*/2));
 

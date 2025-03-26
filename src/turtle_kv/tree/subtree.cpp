@@ -49,8 +49,10 @@ namespace turtle_kv {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status Subtree::apply_batch_update(const TreeOptions& tree_options, i32 parent_height,
-                                   BatchUpdate& update, const KeyView& key_upper_bound,
+Status Subtree::apply_batch_update(const TreeOptions& tree_options,
+                                   i32 parent_height,
+                                   BatchUpdate& update,
+                                   const KeyView& key_upper_bound,
                                    IsRoot is_root) noexcept
 {
   BATT_CHECK_GT(parent_height, 0);
@@ -88,10 +90,11 @@ Status Subtree::apply_batch_update(const TreeOptions& tree_options, i32 parent_h
 
         llfs::PageLayoutId expected_layout = Subtree::expected_layout_for_height(parent_height - 1);
 
-        BATT_ASSIGN_OK_RESULT(
-            llfs::PinnedPage pinned_page,
-            page_id_slot.load_through(update.page_loader, expected_layout,
-                                      llfs::PinPageToJob::kDefault, llfs::OkIfNotFound{false}));
+        BATT_ASSIGN_OK_RESULT(llfs::PinnedPage pinned_page,
+                              page_id_slot.load_through(update.page_loader,
+                                                        expected_layout,
+                                                        llfs::PinPageToJob::kDefault,
+                                                        llfs::OkIfNotFound{false}));
 
         if (parent_height == 2) {
           //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -139,16 +142,16 @@ Status Subtree::apply_batch_update(const TreeOptions& tree_options, i32 parent_h
 
         BATT_CHECK_EQ(parent_height, 2);
 
-        BATT_ASSIGN_OK_RESULT(
-            in_memory_leaf->result_set,
-            update.merge_compact_edits(
-                global_max_key(), [&](MergeCompactor::GeneratorContext& context) -> Status {
-                  MergeFrame frame;
-                  frame.push_line(update.result_set.live_edit_slices());
-                  frame.push_line(in_memory_leaf->result_set.live_edit_slices());
-                  context.push_frame(&frame);
-                  return context.await_frame_consumed(&frame);
-                }));
+        BATT_ASSIGN_OK_RESULT(in_memory_leaf->result_set,
+                              update.merge_compact_edits(
+                                  global_max_key(),
+                                  [&](MergeCompactor::GeneratorContext& context) -> Status {
+                                    MergeFrame frame;
+                                    frame.push_line(update.result_set.live_edit_slices());
+                                    frame.push_line(in_memory_leaf->result_set.live_edit_slices());
+                                    context.push_frame(&frame);
+                                    return context.await_frame_consumed(&frame);
+                                  }));
 
         in_memory_leaf->result_set.update_has_page_refs(update.result_set.has_page_refs());
         in_memory_leaf->set_edit_size_totals(
@@ -187,13 +190,14 @@ StatusOr<i32> Subtree::get_height(llfs::PageLoader& page_loader) const noexcept
         if (!page_id_slot.page_id) {
           return 0;
         }
-        return visit_tree_page(         //
-            page_loader, page_id_slot,  //
-            //
+        return visit_tree_page(  //
+            page_loader,
+            page_id_slot,
+
             [](const PackedLeafPage&) -> StatusOr<i32> {
               return 1;
             },
-            //
+
             [](const PackedNodePage& packed_node) -> StatusOr<i32> {
               return (i32)packed_node.height;
             });
@@ -214,13 +218,15 @@ StatusOr<KeyView> Subtree::get_min_key(llfs::PageLoader& page_loader,
   return batt::case_of(
       this->impl,
       [&](const llfs::PageIdSlot& page_id_slot) -> StatusOr<KeyView> {
-        return visit_tree_page(                          //
-            page_loader, pinned_page_out, page_id_slot,  //
-            //
+        return visit_tree_page(  //
+            page_loader,
+            pinned_page_out,
+            page_id_slot,
+
             [](const PackedLeafPage& packed_leaf) -> StatusOr<KeyView> {
               return packed_leaf.min_key();
             },
-            //
+
             [](const PackedNodePage& packed_node) -> StatusOr<KeyView> {
               return packed_node.min_key();
             });
@@ -241,13 +247,15 @@ StatusOr<KeyView> Subtree::get_max_key(llfs::PageLoader& page_loader,
   return batt::case_of(
       this->impl,
       [&](const llfs::PageIdSlot& page_id_slot) -> StatusOr<KeyView> {
-        return visit_tree_page(                          //
-            page_loader, pinned_page_out, page_id_slot,  //
-            //
+        return visit_tree_page(  //
+            page_loader,
+            pinned_page_out,
+            page_id_slot,
+
             [](const PackedLeafPage& packed_leaf) -> StatusOr<KeyView> {
               return packed_leaf.max_key();
             },
-            //
+
             [](const PackedNodePage& packed_node) -> StatusOr<KeyView> {
               return packed_node.max_key();
             });
@@ -283,9 +291,11 @@ StatusOr<ValueView> Subtree::find_key(llfs::PageLoader& page_loader,
   return batt::case_of(
       this->impl,
       [&](const llfs::PageIdSlot& page_id_slot) -> StatusOr<ValueView> {
-        return visit_tree_page(                          //
-            page_loader, pinned_page_out, page_id_slot,  //
-            //
+        return visit_tree_page(  //
+            page_loader,
+            pinned_page_out,
+            page_id_slot,
+
             [&](const PackedLeafPage& packed_leaf) -> StatusOr<ValueView> {
               const PackedKeyValue* found = packed_leaf.find_key(key);
               if (!found) {
@@ -293,7 +303,7 @@ StatusOr<ValueView> Subtree::find_key(llfs::PageLoader& page_loader,
               }
               return get_value(*found);
             },
-            //
+
             [&](const PackedNodePage& packed_node) -> StatusOr<ValueView> {
               return packed_node.find_key(page_loader, pinned_page_out, key);
             });
@@ -321,7 +331,7 @@ std::function<void(std::ostream&)> Subtree::dump(i32 detail_level) const noexcep
           }
         },
         [&](const std::unique_ptr<InMemoryLeaf>& leaf) {
-          out << "Leaf{"                                  //
+          out << "Leaf{"
               << "n_items=" << leaf->get_item_count()     //
               << ", size=" << leaf->get_items_size()      //
               << ", height=" << 1                         //
@@ -422,8 +432,10 @@ StatusOr<llfs::PinnedPage> Subtree::finish_serialize(TreeSerializeContext& conte
   StatusOr<llfs::PinnedPage> pinned_page = batt::case_of(
       this->impl,
       [&context](llfs::PageIdSlot& page_id_slot) -> StatusOr<llfs::PinnedPage> {
-        return page_id_slot.load_through(context.page_job(), /*required_layout=*/None,
-                                         llfs::PinPageToJob::kDefault, llfs::OkIfNotFound{false});
+        return page_id_slot.load_through(context.page_job(),
+                                         /*required_layout=*/None,
+                                         llfs::PinPageToJob::kDefault,
+                                         llfs::OkIfNotFound{false});
       },
       [&context](std::unique_ptr<InMemoryLeaf>& leaf) -> StatusOr<llfs::PinnedPage> {
         return leaf->finish_serialize(context);

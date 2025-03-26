@@ -433,11 +433,15 @@ TEST(MergeCompactor, ResultSetDropKeyRange)
         result_set.drop_key_range(dropped_key_range);
         result_set.check_invariants();
 
-        const auto first = std::lower_bound(expected.begin(), expected.end(),
-                                            dropped_key_range.lower_bound, KeyOrder{});
+        const auto first = std::lower_bound(expected.begin(),
+                                            expected.end(),
+                                            dropped_key_range.lower_bound,
+                                            KeyOrder{});
 
-        const auto last = std::upper_bound(expected.begin(), expected.end(),
-                                           dropped_key_range.upper_bound, KeyOrder{});
+        const auto last = std::upper_bound(expected.begin(),
+                                           expected.end(),
+                                           dropped_key_range.upper_bound,
+                                           KeyOrder{});
 
         expected.erase(first, last);
 

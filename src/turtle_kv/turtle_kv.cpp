@@ -5,7 +5,7 @@ namespace turtle_kv {
 
 bool entry_point()
 {
-    return true;
+  return true;
 }
 
-}  // turtle_kv
+}  // namespace turtle_kv

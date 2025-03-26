@@ -288,7 +288,8 @@ struct SegmentedLevelAlgorithms {
    * \param old_pivot_key_range The key range of the pivot prior to the split
    * \param split_key The minimum actual key in the upper half of the split
    */
-  Status split_pivot(i32 pivot_i, const Interval<KeyView>& old_pivot_key_range,
+  Status split_pivot(i32 pivot_i,
+                     const Interval<KeyView>& old_pivot_key_range,
                      const KeyView& split_key) noexcept
   {
     static_assert(node_available());
@@ -346,7 +347,8 @@ struct SegmentedLevelAlgorithms {
    *   - Interval<i32>: a half-open interval range of pivot indices
    *   - CInterval<i32>: a closed interval range of pivot indices
    */
-  template <typename PivotSelector, typename Fn,
+  template <typename PivotSelector,
+            typename Fn,
             typename = std::enable_if_t<!std::is_convertible_v<std::decay_t<PivotSelector>, i32>>>
   void for_each_active_segment_in(const PivotSelector& pivot_selector, Fn&& fn) noexcept
   {
@@ -358,8 +360,10 @@ struct SegmentedLevelAlgorithms {
     // the search key's pivot.  Note: this does *not* mean all segments which are actually active
     // for key_pivot_i.  (Example: key_pivot_i = 7, segment active pivots = {4, 5, 8})
     //
-    const auto matching_segments = std::equal_range(all_segments.begin(), all_segments.end(),
-                                                    pivot_selector, SegmentActivePivotOrder{});
+    const auto matching_segments = std::equal_range(all_segments.begin(),
+                                                    all_segments.end(),
+                                                    pivot_selector,
+                                                    SegmentActivePivotOrder{});
 
     // Iterate through the matching segments to try to find the query key.
     //
@@ -388,7 +392,8 @@ struct SegmentedLevelAlgorithms {
 
   /** \brief Finds the given key in the segments of this level.
    */
-  StatusOr<ValueView> find_key(PinnedPageT& pinned_page_out, i32 key_pivot_i,
+  StatusOr<ValueView> find_key(PinnedPageT& pinned_page_out,
+                               i32 key_pivot_i,
                                const KeyView& key) noexcept
   {
     static_assert(page_loader_available());
@@ -396,7 +401,8 @@ struct SegmentedLevelAlgorithms {
     StatusOr<ValueView> result{Status{batt::StatusCode::kNotFound}};
 
     this->for_each_active_segment_in(
-        key_pivot_i, [&](const SegmentT& segment) -> Optional<batt::seq::LoopControl> {
+        key_pivot_i,
+        [&](const SegmentT& segment) -> Optional<batt::seq::LoopControl> {
           // We need the actual page at this point to go proceed.
           //
           StatusOr<PinnedPageT> pinned_leaf_page =
@@ -451,8 +457,8 @@ struct SegmentedLevelAlgorithms {
 /** \brief Access algorithms for segmented update buffer level.
  */
 template <typename NodeT, typename LevelT, typename PageLoaderT>
-inline SegmentedLevelAlgorithms<NodeT, LevelT, PageLoaderT> in_segmented_level(
-    NodeT& node, LevelT& level, PageLoaderT& page_loader) noexcept
+inline SegmentedLevelAlgorithms<NodeT, LevelT, PageLoaderT>
+in_segmented_level(NodeT& node, LevelT& level, PageLoaderT& page_loader) noexcept
 {
   return SegmentedLevelAlgorithms<NodeT, LevelT, PageLoaderT>{
       node,

@@ -26,7 +26,9 @@ namespace turtle_kv {
 /*static*/ batt::Status NodePageView::register_layout(llfs::PageCache& cache)
 {
   LOG_FIRST_N(INFO, 1) << "Registering page layout: " << NodePageView::page_layout_id();
-  return cache.register_page_reader(NodePageView::page_layout_id(), __FILE__, __LINE__,
+  return cache.register_page_reader(NodePageView::page_layout_id(),
+                                    __FILE__,
+                                    __LINE__,
                                     NodePageView::page_reader());
 }
 

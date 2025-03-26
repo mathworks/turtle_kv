@@ -91,13 +91,14 @@ TEST(AlgoTest_ParallelCompact, Test)
     };
 
     actual_output.erase(turtle_kv::parallel_compact(
-                            WorkerPool::default_pool(),                                   //
-                            input.cbegin(), input.cend(),                                 //
-                            actual_output.begin(),                                        //
-                            group_eq,                                                     //
-                            compact_fn,                                                   //
-                            turtle_kv::DecayToItem<false>{},                              //
-                            /*min_task_size=*/algo_defaults.compact_edits.min_task_size,  //
+                            WorkerPool::default_pool(),
+                            input.cbegin(),
+                            input.cend(),
+                            actual_output.begin(),
+                            group_eq,
+                            compact_fn,
+                            turtle_kv::DecayToItem<false>{},
+                            /*min_task_size=*/algo_defaults.compact_edits.min_task_size,
                             /*max_tasks=*/batt::TaskCount{std::thread::hardware_concurrency()}),
                         actual_output.end());
 
@@ -107,16 +108,16 @@ TEST(AlgoTest_ParallelCompact, Test)
     std::vector<Chunk<std::vector<Entry>::iterator>> output_chunks(input.size());
 
     output_chunks.erase(
-        turtle_kv::parallel_compact_into_chunks(WorkerPool::default_pool(),                 //
-                                                input.cbegin(), input.cend(),               //
-                                                actual_output2.begin(),                     //
-                                                output_chunks.begin(),                      //
-                                                group_eq,                                   //
-                                                compact_fn,                                 //
-                                                turtle_kv::DecayToItem<false>{},            //
-                                                algo_defaults.compact_edits.min_task_size,  //
-                                                algo_defaults.compact_edits.max_tasks       //
-                                                ),
+        turtle_kv::parallel_compact_into_chunks(WorkerPool::default_pool(),
+                                                input.cbegin(),
+                                                input.cend(),
+                                                actual_output2.begin(),
+                                                output_chunks.begin(),
+                                                group_eq,
+                                                compact_fn,
+                                                turtle_kv::DecayToItem<false>{},
+                                                algo_defaults.compact_edits.min_task_size,
+                                                algo_defaults.compact_edits.max_tasks),
         output_chunks.end());
 
     auto flattened = turtle_kv::flatten(output_chunks.begin(), std::prev(output_chunks.end()));

@@ -33,7 +33,8 @@ struct SegmentAlgorithms {
    * `split_offset_in_leaf` set to non-None.
    */
   template <typename LevelT>
-  [[nodiscard]] bool split_pivot(i32 pivot_i, Optional<usize> split_offset_in_leaf,
+  [[nodiscard]] bool split_pivot(i32 pivot_i,
+                                 Optional<usize> split_offset_in_leaf,
                                  const LevelT& level) const noexcept
   {
     using batt::BoolStatus;

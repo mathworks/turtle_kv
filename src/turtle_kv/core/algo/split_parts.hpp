@@ -148,8 +148,10 @@ struct SplitParts {
 // returned parts will be 1, 2, or 3.
 //
 template <typename SubTotals>
-SplitParts split_parts(const SubTotals& sub_totals, MinPartSize min_part_size,
-                       MaxPartSize max_part_size, MaxItemSize max_item_size);
+SplitParts split_parts(const SubTotals& sub_totals,
+                       MinPartSize min_part_size,
+                       MaxPartSize max_part_size,
+                       MaxItemSize max_item_size);
 
 }  // namespace turtle_kv
 

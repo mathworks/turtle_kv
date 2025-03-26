@@ -58,7 +58,9 @@ TEST(SplitParts, Randomized)
 
     // Split out edge case: 0 items.
     //
-    EXPECT_THAT(split_parts(make_totals(/*n=*/0, kMaxItemSize, rng), kMinPartSize, kMaxPartSize,
+    EXPECT_THAT(split_parts(make_totals(/*n=*/0, kMaxItemSize, rng),
+                            kMinPartSize,
+                            kMaxPartSize,
                             kMaxItemSize)
                     .offsets,
                 ElementsAre(0));
@@ -93,7 +95,8 @@ TEST(SplitParts, Randomized)
     }
 
     std::uniform_int_distribution<usize> pick_n_items(
-        (kMinPartSize + kMinItemSize - 1) / kMinItemSize, 179);
+        (kMinPartSize + kMinItemSize - 1) / kMinItemSize,
+        179);
 
     for (usize loop = 0; loop < (extra_testing ? 10 * 1000 * 1000 : 100 * 1000); ++loop) {
       VLOG_EVERY_N(1, (extra_testing ? 100 * 1000 : 10 * 1000))

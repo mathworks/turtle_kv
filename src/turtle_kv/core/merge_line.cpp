@@ -65,14 +65,16 @@ EditSlice MergeLine::cut(const KeyView& last_key) noexcept
 
     using EditT = std::decay_t<decltype(first_slice.front())>;
 
-    const EditT* slice_end = std::upper_bound(first_slice.begin(), first_slice.end(), last_key, KeyOrder{});
+    const EditT* slice_end =
+        std::upper_bound(first_slice.begin(), first_slice.end(), last_key, KeyOrder{});
     Slice<const EditT> prefix = as_slice(first_slice.begin(), slice_end);
     first_slice = as_slice(slice_end, first_slice.end());
     if (first_slice.empty()) {
       this->advance();
     }
-    VLOG(1) << "cut(key=" << last_key << ") -> [" << prefix.size() << " items]; (empty=" << this->empty()
-            << ") -> " << batt::dump_range(prefix) << " (this_after = " << debug_print(*this) << ")";
+    VLOG(1) << "cut(key=" << last_key << ") -> [" << prefix.size()
+            << " items]; (empty=" << this->empty() << ") -> " << batt::dump_range(prefix)
+            << " (this_after = " << debug_print(*this) << ")";
     return prefix;
   });
 }

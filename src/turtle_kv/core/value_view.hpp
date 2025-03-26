@@ -112,7 +112,9 @@ class ValueView
 
   static ValueView from_page_slice(const PackedPageSlice& page_slice)
   {
-    return ValueView{OP_PAGE_SLICE, PtrData{}, reinterpret_cast<const char*>(&page_slice),
+    return ValueView{OP_PAGE_SLICE,
+                     PtrData{},
+                     reinterpret_cast<const char*>(&page_slice),
                      packed_sizeof(page_slice)};
   }
 

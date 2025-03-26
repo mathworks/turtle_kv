@@ -27,7 +27,8 @@ template <bool kDecayToItem>
 inline std::conditional_t<kDecayToItem, Slice<const ItemView>, Slice<const EditView>>
 merge_compact_edits(batt::WorkerPool& worker_pool,
                     const Slice<const Slice<const EditView>>& input_segments,
-                    Slice<EditView> output_buffer_1, Slice<EditView> output_buffer_2,
+                    Slice<EditView> output_buffer_1,
+                    Slice<EditView> output_buffer_2,
                     DecayToItem<kDecayToItem> decay_to_item)
 {
   using ResultT = std::conditional_t<kDecayToItem, Slice<const ItemView>, Slice<const EditView>>;
@@ -63,8 +64,11 @@ merge_compact_edits(batt::WorkerPool& worker_pool,
             BATT_CHECK_LE(dst.end(), output_buffer_1.end());
             dst_segments->emplace_back(dst);
 
-            parallel_copy(context, src_0.begin(), src_0.end(), dst.begin(),          //
-                          /*min_task_size=*/algo_defaults.copy_edits.min_task_size,  //
+            parallel_copy(context,
+                          src_0.begin(),
+                          src_0.end(),
+                          dst.begin(),
+                          /*min_task_size=*/algo_defaults.copy_edits.min_task_size,
                           /*max_tasks=*/batt::TaskCount{n_threads});
             break;
           }
@@ -78,11 +82,13 @@ merge_compact_edits(batt::WorkerPool& worker_pool,
           dst_segment_begin += dst.size();
 
           auto work_fn = [&context, &algo_defaults, src_0, src_1, dst, n_threads] {
-            parallel_merge(context,                     //
-                           src_0.begin(), src_0.end(),  //
-                           src_1.begin(), src_1.end(),  //
-                           dst.begin(),                 //
-                           KeyOrder{},                  //
+            parallel_merge(context,
+                           src_0.begin(),
+                           src_0.end(),
+                           src_1.begin(),
+                           src_1.end(),
+                           dst.begin(),
+                           KeyOrder{},
                            /*min_task_size=*/algo_defaults.merge_edits.min_task_size,
                            /*max_tasks=*/batt::TaskCount{n_threads});
           };
@@ -106,16 +112,16 @@ merge_compact_edits(batt::WorkerPool& worker_pool,
   SmallVec<Chunk<EditView*>, 64> compacted_chunks(/*max chunks=*/n_threads + 1);
 
   compacted_chunks.erase(
-      parallel_compact_into_chunks(worker_pool,                                                  //
-                                   merged_edits.begin(), merged_edits.end(),                     //
-                                   chunked_compacted_edits.begin(),                              //
-                                   compacted_chunks.begin(),                                     //
-                                   KeyEqual{},                                                   //
-                                   BATT_OVERLOADS_OF(combine),                                   //
-                                   decay_to_item,                                                //
-                                   /*min_task_size=*/algo_defaults.compact_edits.min_task_size,  //
-                                   /*max_tasks=*/batt::TaskCount{n_threads}                      //
-                                   ),
+      parallel_compact_into_chunks(worker_pool,
+                                   merged_edits.begin(),
+                                   merged_edits.end(),
+                                   chunked_compacted_edits.begin(),
+                                   compacted_chunks.begin(),
+                                   KeyEqual{},
+                                   BATT_OVERLOADS_OF(combine),
+                                   decay_to_item,
+                                   /*min_task_size=*/algo_defaults.compact_edits.min_task_size,
+                                   /*max_tasks=*/batt::TaskCount{n_threads}),
       compacted_chunks.end());
 
   auto flat_compacted_edits = flatten(compacted_chunks.begin(), std::prev(compacted_chunks.end()));
@@ -125,10 +131,11 @@ merge_compact_edits(batt::WorkerPool& worker_pool,
   {
     batt::ScopedWorkContext context{worker_pool};
 
-    parallel_copy(context,                                                   //
-                  flat_compacted_edits.begin(), flat_compacted_edits.end(),  //
-                  compacted_edits.begin(),                                   //
-                  /*min_task_size=*/algo_defaults.copy_edits.min_task_size,  //
+    parallel_copy(context,
+                  flat_compacted_edits.begin(),
+                  flat_compacted_edits.end(),
+                  compacted_edits.begin(),
+                  /*min_task_size=*/algo_defaults.copy_edits.min_task_size,
                   /*max_tasks=*/batt::TaskCount{n_threads});
   }
 

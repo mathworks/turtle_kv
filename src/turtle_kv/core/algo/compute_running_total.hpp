@@ -35,7 +35,9 @@ inline batt::RunningTotal compute_running_total(
   worker_pool.reset();
 
   return batt::parallel_running_total(
-      worker_pool, merged_edits.begin(), merged_edits.end(),
+      worker_pool,
+      merged_edits.begin(),
+      merged_edits.end(),
       [](const auto& edit) noexcept -> usize {
         if (DecayToItem<kDecayValue>::keep_item(edit)) {
           return PackedSizeOfEdit{}(edit);

@@ -70,7 +70,8 @@ class Checkpoint
 
   /** \brief Serializes all pages in the Checkpoint to prepare to write it.
    */
-  StatusOr<Checkpoint> serialize(const TreeOptions& tree_options, llfs::PageCacheJob& job,
+  StatusOr<Checkpoint> serialize(const TreeOptions& tree_options,
+                                 llfs::PageCacheJob& job,
                                  batt::WorkerPool& worker_pool) const noexcept;
 
   /** \brief Returns the in-memory view of the checkpoint tree.
@@ -113,7 +114,8 @@ class Checkpoint
 
   /** \brief Applys a batch update to this Checkpoint's tree to produce a new Checkpoint.
    */
-  StatusOr<Checkpoint> flush_batch(batt::WorkerPool& worker_pool, llfs::PageCacheJob& job,
+  StatusOr<Checkpoint> flush_batch(batt::WorkerPool& worker_pool,
+                                   llfs::PageCacheJob& job,
                                    const TreeOptions& tree_options,
                                    std::unique_ptr<DeltaBatch>&& batch,
                                    const batt::CancelToken& cancel_token) noexcept;
