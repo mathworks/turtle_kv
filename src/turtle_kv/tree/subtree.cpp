@@ -175,7 +175,52 @@ Status Subtree::apply_batch_update(const TreeOptions& tree_options,
 
   BATT_REQUIRE_OK(new_subtree);
 
+  // If this is the root level and tree needs to grow/shrink in height, do so now.
+  //
+  if (is_root) {
+    BATT_REQUIRE_OK(batt::case_of(
+        new_subtree->get_viability(),
+        [](const Viable&) -> Status {
+          // Nothing to fix; tree is viable!
+          return OkStatus();
+        },
+        [&](const NeedsSplit&) {
+          return new_subtree->split_and_grow(update.page_loader, tree_options, key_upper_bound);
+        },
+        [&](const NeedsMerge& needs_merge) {
+          BATT_CHECK(!needs_merge.single_pivot)
+              << "TODO [tastolfi 2025-03-26] implement flush and shrink";
+          return OkStatus();
+        }));
+  }
+
   subtree = std::move(*new_subtree);
+
+  return OkStatus();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Status Subtree::split_and_grow(llfs::PageLoader& page_loader,
+                               const TreeOptions& tree_options,
+                               const KeyView& key_upper_bound)
+{
+  BATT_ASSIGN_OK_RESULT(  //
+      Subtree upper_half_subtree,
+      this->try_split(page_loader));
+
+  Subtree& lower_half_subtree = *this;
+
+  BATT_ASSIGN_OK_RESULT(  //
+      std::unique_ptr<InMemoryNode> new_root,
+      InMemoryNode::from_subtrees(page_loader,
+                                  tree_options,
+                                  std::move(lower_half_subtree),
+                                  std::move(upper_half_subtree),
+                                  key_upper_bound,
+                                  IsRoot{true}));
+
+  this->impl = std::move(new_root);
 
   return OkStatus();
 }
@@ -197,7 +242,6 @@ StatusOr<i32> Subtree::get_height(llfs::PageLoader& page_loader) const
             [](const PackedLeafPage&) -> StatusOr<i32> {
               return 1;
             },
-
             [](const PackedNodePage& packed_node) -> StatusOr<i32> {
               return (i32)packed_node.height;
             });

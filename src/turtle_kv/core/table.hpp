@@ -38,9 +38,12 @@ class Table
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 //
-class StdMapTable : public Table
+template <typename MapT>
+class OrderedMapTable : public Table
 {
  public:
+  using Key = typename MapT::key_type;
+
   Status put(const KeyView& key, const ValueView& value) override
   {
     auto [iter, inserted] = this->state_.emplace(key, value.as_str());
@@ -53,7 +56,7 @@ class StdMapTable : public Table
 
   StatusOr<ValueView> get(const KeyView& key) override
   {
-    auto iter = this->state_.find(std::string{key});
+    auto iter = this->state_.find(Key{key});
     if (iter == this->state_.end()) {
       return {batt::StatusCode::kNotFound};
     }
@@ -66,7 +69,7 @@ class StdMapTable : public Table
   {
     usize n = 0;
 
-    auto iter = this->state_.lower_bound(std::string{min_key});
+    auto iter = this->state_.lower_bound(Key{min_key});
     while (iter != this->state_.end()) {
       if (n == items_out.size()) {
         break;
@@ -84,10 +87,13 @@ class StdMapTable : public Table
 
   Status remove(const KeyView& key) override
   {
+    this->state_.erase(Key{key});
     return OkStatus();
   }
 
-  std::map<std::string, std::string> state_;
+  MapT state_;
 };
+
+using StdMapTable = OrderedMapTable<std::map<std::string, std::string>>;
 
 }  // namespace turtle_kv

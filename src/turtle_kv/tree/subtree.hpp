@@ -26,6 +26,7 @@ struct InMemoryLeaf;
 struct InMemoryNode;
 
 struct Subtree {
+ public:
   std::variant<llfs::PageIdSlot, std::unique_ptr<InMemoryLeaf>, std::unique_ptr<InMemoryNode>> impl;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -76,6 +77,11 @@ struct Subtree {
   Status start_serialize(TreeSerializeContext& context);
 
   StatusOr<llfs::PinnedPage> finish_serialize(TreeSerializeContext& context);
+
+ private:
+  Status split_and_grow(llfs::PageLoader& page_loader,
+                        const TreeOptions& tree_options,
+                        const KeyView& key_upper_bound);
 };
 
 //=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++

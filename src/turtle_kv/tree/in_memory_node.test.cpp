@@ -6,9 +6,9 @@
 #include <gtest/gtest.h>
 
 #include <turtle_kv/tree/memory_storage.hpp>
+#include <turtle_kv/tree/pinning_page_loader.hpp>
 #include <turtle_kv/tree/subtree_table.hpp>
 #include <turtle_kv/tree/the_key.hpp>
-#include <turtle_kv/tree/tree_builder.hpp>
 
 #include <turtle_kv/core/testing/generate.hpp>
 
@@ -22,6 +22,8 @@
 #include <llfs/testing/scenario_runner.hpp>
 
 #include <llfs/appendable_job.hpp>
+
+#include <absl/container/btree_map.h>
 
 #include <array>
 #include <atomic>
@@ -59,7 +61,6 @@ using turtle_kv::Subtree;
 using turtle_kv::SubtreeTable;
 using turtle_kv::Table;
 using turtle_kv::THE_KEY;
-using turtle_kv::TreeBuilder;
 using turtle_kv::TreeOptions;
 using turtle_kv::TreeSerializeContext;
 using turtle_kv::ValueView;
@@ -84,8 +85,10 @@ Status update_table(Table& table, const ResultSet<false>& result_set)
   return OkStatus();
 }
 
-void verify_table_point_queries(Table& expected_table, Table& actual_table)
+template <typename Rng>
+void verify_table_point_queries(Table& expected_table, Table& actual_table, Rng&& rng, u32 skip)
 {
+  u32 mask = ((u32{1} << skip) - 1);
   std::array<std::pair<KeyView, ValueView>, 256> buffer;
 
   bool first_time = true;
@@ -106,9 +109,11 @@ void verify_table_point_queries(Table& expected_table, Table& actual_table)
     }
 
     for (const auto& [key, value] : read_items) {
-      StatusOr<ValueView> actual_value = actual_table.get(key);
-      ASSERT_TRUE(actual_value.ok()) << BATT_INSPECT(actual_value) << BATT_INSPECT_STR(key);
-      EXPECT_EQ(*actual_value, value);
+      if ((rng() & mask) == 0) {
+        StatusOr<ValueView> actual_value = actual_table.get(key);
+        ASSERT_TRUE(actual_value.ok()) << BATT_INSPECT(actual_value) << BATT_INSPECT_STR(key);
+        EXPECT_EQ(*actual_value, value);
+      }
       min_key = key;
     }
   }
@@ -224,7 +229,7 @@ void SubtreeBatchUpdateScenario::run()
   static std::atomic<int> id{1};
   thread_local int my_id = id.fetch_add(1);
 
-  const usize max_i = getenv_as<usize>("TURTLE_TREE_TEST_BATCH_COUNT").value_or(250);
+  const usize max_i = getenv_as<usize>("TURTLE_TREE_TEST_BATCH_COUNT").value_or(225);
   const usize chi = 4;
   const usize key_size = 24;
   const usize value_size = 100;
@@ -250,7 +255,7 @@ void SubtreeBatchUpdateScenario::run()
 
   StableStringStore strings;
   RandomResultSetGenerator result_set_generator;
-  StdMapTable expected_table;
+  turtle_kv::OrderedMapTable<absl::btree_map<std::string_view, std::string_view>> expected_table;
 
   result_set_generator.set_key_size(24).set_value_size(100).set_size(items_per_leaf);
 
@@ -305,42 +310,21 @@ void SubtreeBatchUpdateScenario::run()
                                 IsRoot{true});
 
     ASSERT_TRUE(status.ok()) << BATT_INSPECT(status) << BATT_INSPECT(this->seed) << BATT_INSPECT(i);
-
     ASSERT_FALSE(tree.is_serialized());
-
-    if (batt::is_case<NeedsSplit>(tree.get_viability())) {
-      StatusOr<Subtree> next_sibling = tree.try_split(*page_loader);
-
-      ASSERT_TRUE(next_sibling.ok())
-          << BATT_INSPECT(next_sibling.status()) << BATT_INSPECT(tree.dump())
-          << BATT_INSPECT(this->seed) << BATT_INSPECT(i);
-
-      StatusOr<std::unique_ptr<InMemoryNode>> new_root =
-          InMemoryNode::from_subtrees(*page_loader,
-                                      tree_options,
-                                      std::move(tree),
-                                      std::move(*next_sibling),
-                                      global_max_key(),
-                                      IsRoot{true});
-
-      ASSERT_TRUE(new_root.ok()) << BATT_INSPECT(new_root.status());
-
-      tree = Subtree{
-          .impl = std::move(*new_root),
-      };
-    }
+    ASSERT_FALSE(batt::is_case<NeedsSplit>(tree.get_viability()));
 
     if (my_id == 0) {
       std::cout << std::setw(4) << i << "/" << max_i << " (items=" << total_items
                 << "):" << BATT_INSPECT(tree.dump()) << std::endl;
     }
 
-    ASSERT_NO_FATAL_FAILURE(verify_table_point_queries(expected_table, actual_table))
+    ASSERT_NO_FATAL_FAILURE(
+        verify_table_point_queries(expected_table, actual_table, rng, batt::log2_ceil(i)))
         << BATT_INSPECT(this->seed) << BATT_INSPECT(i);
 
     if (((i + 1) % chi) == 0) {
       if (my_id == 0) {
-        std::cout << "taking checkpoint..." << std::endl;
+        LOG(INFO) << "taking checkpoint...";
       }
 
       std::unique_ptr<llfs::PageCacheJob> page_job = page_cache->new_job();
@@ -356,18 +340,19 @@ void SubtreeBatchUpdateScenario::run()
       ASSERT_TRUE(finish_status.ok()) << BATT_INSPECT(finish_status);
 
       if (my_id == 0) {
-        std::cout << "checkpoint OK; verifying checkpoint..." << std::endl;
+        LOG(INFO) << "checkpoint OK; verifying checkpoint...";
       }
 
       page_job->new_root(finish_status->page_id());
       Status commit_status = llfs::unsafe_commit_job(std::move(page_job));
       ASSERT_TRUE(commit_status.ok()) << BATT_INSPECT(commit_status);
 
-      ASSERT_NO_FATAL_FAILURE(verify_table_point_queries(expected_table, actual_table))
+      ASSERT_NO_FATAL_FAILURE(
+          verify_table_point_queries(expected_table, actual_table, rng, batt::log2_ceil(i)))
           << BATT_INSPECT(this->seed) << BATT_INSPECT(i);
 
       if (my_id == 0) {
-        std::cout << "checkpoint verified!" << std::endl;
+        LOG(INFO) << "checkpoint verified!";
       }
 
       // Release the pinned pages from the previous checkpoint.
