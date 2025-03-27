@@ -79,7 +79,7 @@ class Checkpoint
 
   /** \brief Returns the in-memory view of the checkpoint tree.
    */
-  std::shared_ptr<Subtree>& tree() const
+  const std::shared_ptr<Subtree>& tree() const
   {
     return this->tree_;
   }

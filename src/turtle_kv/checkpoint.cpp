@@ -1,6 +1,9 @@
 #include <turtle_kv/checkpoint.hpp>
 //
 
+#include <turtle_kv/tree/in_memory_leaf.hpp>
+#include <turtle_kv/tree/in_memory_node.hpp>
+
 #include <turtle_kv/core/key_view.hpp>
 #include <turtle_kv/core/value_view.hpp>
 
@@ -10,6 +13,7 @@
 
 namespace turtle_kv {
 
+#if 0  // TODO [tastolfi 2025-03-27] re-enable me!
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 /*static*/ StatusOr<Checkpoint> Checkpoint::recover(
@@ -40,13 +44,14 @@ namespace turtle_kv {
       CheckpointLock::make_durable(std::move(slot_read_lock)),
   };
 }
+#endif
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 /*static*/ Checkpoint Checkpoint::empty_at_batch(DeltaBatchId batch_id) noexcept
 {
   return Checkpoint{llfs::PageId{llfs::kInvalidPageId},
-                    TreeView::new_empty(),
+                    std::make_shared<Subtree>(Subtree::make_empty()),
                     batch_id,
                     CheckpointLock::make_durable_detached()};
 }
@@ -55,7 +60,7 @@ namespace turtle_kv {
 //
 Checkpoint::Checkpoint() noexcept
     : root_id_{llfs::PageId{llfs::kInvalidPageId}}
-    , tree_{TreeView::new_empty()}
+    , tree_{std::make_shared<Subtree>(Subtree::make_empty())}
     , batch_upper_bound_{0}
     , checkpoint_lock_{CheckpointLock::make_durable_detached()}
 {
@@ -64,7 +69,7 @@ Checkpoint::Checkpoint() noexcept
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 Checkpoint::Checkpoint(Optional<llfs::PageId> root_id,
-                       std::shared_ptr<const TreeView>&& tree,
+                       std::shared_ptr<Subtree>&& tree,
                        DeltaBatchId batch_upper_bound,
                        CheckpointLock&& checkpoint_lock) noexcept
     : root_id_{root_id}
