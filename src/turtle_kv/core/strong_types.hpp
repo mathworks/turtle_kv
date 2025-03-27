@@ -12,5 +12,6 @@ BATT_STRONG_TYPEDEF(bool, HasPageRefs);
 // BATT_STRONG_TYPEDEF(bool, IsDecayedToItems);
 // BATT_STRONG_TYPEDEF(usize, SplitSegments);
 BATT_STRONG_TYPEDEF(bool, IsRoot);
+BATT_STRONG_TYPEDEF(i32, ParentNodeHeight);
 
 }  // namespace turtle_kv

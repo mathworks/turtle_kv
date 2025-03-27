@@ -42,7 +42,7 @@ struct Subtree {
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   Status apply_batch_update(const TreeOptions& tree_options,  //
-                            i32 parent_height,                //
+                            ParentNodeHeight parent_height,   //
                             BatchUpdate& update,              //
                             const KeyView& key_upper_bound,   //
                             IsRoot is_root);
@@ -65,12 +65,12 @@ struct Subtree {
 
   Optional<llfs::PageId> get_page_id() const;
 
+  llfs::PackedPageId packed_page_id_or_panic() const;
+
   /** \brief Attempts to split the tree at the top level only; if successful, returns the new
    * right-sibling (i.e. key range _after_ this).
    */
   StatusOr<Subtree> try_split(llfs::PageLoader& page_loader);
-
-  llfs::PackedPageId packed_page_id_or_panic() const;
 
   bool is_serialized() const;
 
