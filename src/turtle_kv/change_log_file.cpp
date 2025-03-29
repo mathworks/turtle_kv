@@ -130,6 +130,8 @@ auto ChangeLogFile::PackedConfig::unpack() const noexcept -> ChangeLogFile::Conf
     , config_{config}
 {
   BATT_CHECK_EQ(this->config_.block_size & 511, 0);
+
+  this->metrics_.freed_blocks_count.add(this->free_block_tokens_.total_size());
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -143,7 +145,7 @@ ChangeLogFile::~ChangeLogFile() noexcept
 //
 void ChangeLogFile::lock_for_read(const Interval<i64>& block_range) noexcept
 {
-  this->for_block_range(block_range, [](ReadLockCounter& counter) {
+  this->for_block_range(block_range, [](i64 block_i [[maybe_unused]], ReadLockCounter& counter) {
     counter->fetch_add(1);
   });
 }
@@ -152,16 +154,16 @@ void ChangeLogFile::lock_for_read(const Interval<i64>& block_range) noexcept
 //
 void ChangeLogFile::unlock_for_read(const Interval<i64>& block_range) noexcept
 {
-  this->for_block_range(block_range, [](ReadLockCounter& counter) {
+  this->for_block_range(block_range, [](i64 block_i [[maybe_unused]], ReadLockCounter& counter) {
     const auto old_count = counter->fetch_sub(1);
     BATT_CHECK_GT(old_count, 0);
   });
-  this->update_lower_bound();
+  this->update_lower_bound(block_range.upper_bound);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-void ChangeLogFile::update_lower_bound() noexcept
+void ChangeLogFile::update_lower_bound(i64 update_upper_bound) noexcept
 {
   u64 n_blocks_freed = 0;
   i64 old_lower_bound = 0;
@@ -169,13 +171,16 @@ void ChangeLogFile::update_lower_bound() noexcept
   {
     absl::MutexLock lock{&this->lower_bound_mutex_};
 
-    i64 lower_bound_target = this->lower_bound_.get_value();
-    const i64 observed_upper_bound = this->upper_bound_.load();
+    i64 new_lower_bound = this->lower_bound_.load();
 
-    old_lower_bound = lower_bound_target;
+    old_lower_bound = new_lower_bound;
 
-    i64 addr = lower_bound_target % this->config_.block_count;
-    while (lower_bound_target < observed_upper_bound) {
+    i64 addr = new_lower_bound % this->config_.block_count;
+    for (;;) {
+      if (new_lower_bound >= update_upper_bound) {
+        BATT_CHECK_EQ(new_lower_bound, update_upper_bound);
+        break;
+      }
       if (this->read_lock_counter_per_block_[addr]->load() > 0) {
         break;
       }
@@ -183,20 +188,22 @@ void ChangeLogFile::update_lower_bound() noexcept
       if (addr == this->config_.block_count) {
         addr = 0;
       }
-      ++lower_bound_target;
+      ++new_lower_bound;
       ++n_blocks_freed;
     }
 
-    this->lower_bound_.clamp_min_value(lower_bound_target);
+    BATT_CHECK_EQ(old_lower_bound, this->lower_bound_.exchange(new_lower_bound));
+    BATT_CHECK_EQ(new_lower_bound - old_lower_bound, BATT_CHECKED_CAST(i64, n_blocks_freed));
   }
 
   StatusOr<batt::Grant> newly_freed =
-      this->token_pool_.issue_grant(n_blocks_freed, batt::WaitForResource::kFalse);
+      this->in_use_block_tokens_.spend(n_blocks_freed, batt::WaitForResource::kFalse);
 
   BATT_CHECK_OK(newly_freed) << BATT_INSPECT(n_blocks_freed) << BATT_INSPECT(old_lower_bound)
-                             << BATT_INSPECT(this->lower_bound_.get_value());
+                             << BATT_INSPECT(this->lower_bound_.load())
+                             << BATT_INSPECT(this->in_use_block_tokens_.size());
 
-  this->free_pool_.subsume(std::move(*newly_freed));
+  this->metrics_.freed_blocks_count.add(newly_freed->size());
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -205,7 +212,11 @@ StatusOr<batt::Grant> ChangeLogFile::reserve_blocks(
     BlockCount count,
     batt::WaitForResource wait_for_resource) noexcept
 {
-  return this->free_pool_.spend(count, wait_for_resource);
+  StatusOr<batt::Grant> grant = this->free_block_tokens_.issue_grant(count, wait_for_resource);
+  if (grant.ok()) {
+    this->metrics_.reserved_blocks_count.add(grant->size());
+  }
+  return grant;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -246,6 +257,7 @@ auto ChangeLogFile::append(batt::Grant& grant, batt::SmallVecBase<ConstBuffer>& 
       BATT_CHECK_LE(file_offset, this->last_block_offset_)
           << BATT_INSPECT(this->config_.block_size) << BATT_INSPECT(this->config_.block_count)
           << BATT_INSPECT(this->config_.block0_offset);
+
       if (file_offset == this->last_block_offset_) {
         file_offset = this->config_.block0_offset;
       }
@@ -266,7 +278,14 @@ auto ChangeLogFile::append(batt::Grant& grant, batt::SmallVecBase<ConstBuffer>& 
   {
     this->upper_bound_.fetch_add(blocks_written);
 
-    BATT_CHECK_OK(grant.spend(blocks_written, batt::WaitForResource::kFalse));
+    BATT_CHECK_EQ(grant.size(), blocks_written);
+
+    batt::Grant now_in_use =
+        BATT_OK_RESULT_OR_PANIC(grant.spend(blocks_written, batt::WaitForResource::kFalse));
+
+    this->in_use_block_tokens_.subsume(std::move(now_in_use));
+
+    BATT_CHECK_EQ(grant.size(), 0);
   }
 
   return {ReadLock{this, block_range}};

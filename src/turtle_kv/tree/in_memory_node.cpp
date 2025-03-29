@@ -392,9 +392,9 @@ Status InMemoryNode::flush_to_pivot(BatchUpdate& update, i32 pivot_i)
   //
   Subtree& child = this->children[pivot_i];
 
-  BATT_REQUIRE_OK(child.apply_batch_update(this->tree_options,  //
-                                           this->height,        //
-                                           child_update,        //
+  BATT_REQUIRE_OK(child.apply_batch_update(this->tree_options,              //
+                                           ParentNodeHeight{this->height},  //
+                                           child_update,                    //
                                            /*key_upper_bound=*/this->get_pivot_key(pivot_i + 1),
                                            IsRoot{false}));
 
@@ -1020,15 +1020,20 @@ Status MergedLevel::start_serialize(TreeSerializeContext& context)
                                       MaxItemSize{context.tree_options().max_item_size()});
 
   for (const Interval<usize>& part_extents : page_parts) {
-    this->segment_future_ids_.emplace_back(context.async_build_page(
-        [this, part_extents](TreeSerializeContext& context) -> StatusOr<llfs::PinnedPage> {
-          const auto items_slice = this->result_set.get();
-          const auto page_items = batt::slice_range(items_slice, part_extents);
+    BATT_ASSIGN_OK_RESULT(
+        TreeSerializeContext::BuildPageJobId id,
+        context.async_build_page(
+            context.tree_options().leaf_size(),
+            packed_leaf_page_layout_id(),
+            [this,
+             part_extents](llfs::PageBuffer& page_buffer) -> TreeSerializeContext::PinPageToJobFn {
+              const auto items_slice = this->result_set.get();
+              const auto page_items = batt::slice_range(items_slice, part_extents);
 
-          return build_leaf_page_in_job(context.page_job(),
-                                        page_items,
-                                        context.tree_options().leaf_size());
-        }));
+              return build_leaf_page_in_job(page_buffer, page_items);
+            }));
+
+    this->segment_future_ids_.emplace_back(id);
   }
 
   return OkStatus();

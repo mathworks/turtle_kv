@@ -52,6 +52,7 @@ using turtle_kv::NeedsSplit;
 using turtle_kv::None;
 using turtle_kv::OkStatus;
 using turtle_kv::Optional;
+using turtle_kv::ParentNodeHeight;
 using turtle_kv::PinningPageLoader;
 using turtle_kv::Slice;
 using turtle_kv::Status;
@@ -304,7 +305,7 @@ void SubtreeBatchUpdateScenario::run()
 
     Status status =  //
         tree.apply_batch_update(tree_options,
-                                /*parent_height=*/*tree_height + 1,
+                                ParentNodeHeight{*tree_height + 1},
                                 update,
                                 /*key_upper_bound=*/global_max_key(),
                                 IsRoot{true});

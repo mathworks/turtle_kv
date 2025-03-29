@@ -1,12 +1,17 @@
 #include <turtle_kv/kv_store.hpp>
 //
 
+#include <turtle_kv/tree/leaf_page_view.hpp>
+#include <turtle_kv/tree/node_page_view.hpp>
+
 #include <turtle_kv/checkpoint_log.hpp>
 #include <turtle_kv/file_utils.hpp>
 #include <turtle_kv/filters.hpp>
 #include <turtle_kv/page_file.hpp>
 
 #include <turtle_kv/import/constants.hpp>
+
+#include <llfs/bloom_filter_page_view.hpp>
 
 namespace turtle_kv {
 
@@ -209,7 +214,9 @@ std::string_view filter_page_file_name() noexcept
     , info_task_{this->task_scheduler_.schedule_task(),//
     [this]{this->info_task_main(); }, "KVStore::info_task",}
 {
-  BATT_CHECK_OK(TreeView::register_page_layouts(this->page_cache()));
+  BATT_CHECK_OK(NodePageView::register_layout(this->page_cache()));
+  BATT_CHECK_OK(LeafPageView::register_layout(this->page_cache()));
+  BATT_CHECK_OK(llfs::BloomFilterPageView::register_layout(this->page_cache()));
 
   if (this->tree_options_.filter_bits_per_key() != 0) {
     BATT_CHECK_OK(llfs::BloomFilterPageView::register_layout(this->page_cache()));
@@ -289,25 +296,30 @@ StatusOr<ValueView> KVStore::get(const KeyView& key) noexcept /*override*/
     }
   }
 
-  StatusOr<ItemView> item =
-      BATT_COLLECT_LATENCY_SAMPLE(batt::Every2ToTheConst<12>{},
-                                  this->metrics_.checkpoint_get_latency,
-                                  find_item_by_key(*this->reader_job_,              //
-                                                   *this->base_checkpoint_.tree(),  //
-                                                   key));
-  if (item.ok()) {
+  llfs::PinnedPage pinned_page_out;
+
+  BATT_CHECK(this->base_checkpoint_.tree()->is_serialized());
+
+  StatusOr<ValueView> value_from_checkpoint = BATT_COLLECT_LATENCY_SAMPLE(
+      batt::Every2ToTheConst<12>{},
+      this->metrics_.checkpoint_get_latency,
+      this->base_checkpoint_.tree()->find_key(*this->reader_job_, pinned_page_out, key));
+
+  if (value_from_checkpoint.ok()) {
     this->metrics_.checkpoint_get_count.add(1);
     if (value) {
-      return combine(*value, item->value);
+      return combine(*value, *value_from_checkpoint);
     }
-    return item->value;
+    return *value_from_checkpoint;
   }
 
-  if (value && item.status() == batt::StatusCode::kNotFound) {
+  if (value && value_from_checkpoint.status() == batt::StatusCode::kNotFound) {
     return *value;
   }
 
-  return {item.status()};
+  // Failed to find a value for the key.
+  //
+  return value_from_checkpoint.status();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -335,7 +347,7 @@ Status KVStore::remove(const KeyView& key) noexcept /*override*/
 //
 Status KVStore::update_checkpoint() noexcept
 {
-  this->metrics_.checkpoint_count.add(1);
+  this->metrics_.batch_count.add(1);
 
   // The current MemTable is done accepting new updates!
   //
@@ -354,16 +366,17 @@ Status KVStore::update_checkpoint() noexcept
   // Convert the MemTable to a DeltaBatch; this compacts all updates per key.
   //
   std::unique_ptr<DeltaBatch> delta_batch =
-      BATT_COLLECT_LATENCY(this->metrics_.compact_batch_latency,
-                           std::make_unique<DeltaBatch>(std::move(this->mem_table_)));
+      std::make_unique<DeltaBatch>(std::move(this->mem_table_));
 
-  this->metrics_.batch_edits_count.add(delta_batch->edits().size());
+  BATT_COLLECT_LATENCY(this->metrics_.compact_batch_latency, delta_batch->merge_compact_edits());
+
+  this->metrics_.batch_edits_count.add(delta_batch->result_set_size());
 
   // Create a new MemTable to accept more updates.
   //
   this->mem_table_.reset(new MemTable{
       std::move(change_log_writer),
-      /*max_byte_size=*/this->tree_options_.leaf_data_size(),
+      /*max_byte_size=*/this->tree_options_.flush_size(),
       next_batch_id.to_mem_table_id(),
   });
 
@@ -398,6 +411,8 @@ Status KVStore::update_checkpoint() noexcept
 //
 Status KVStore::flush_checkpoint() noexcept
 {
+  this->metrics_.checkpoint_count.add(1);
+
   // Allocate a token for the checkpoint job.
   //
   batt::Grant checkpoint_token = BATT_OK_RESULT_OR_PANIC(
@@ -476,38 +491,51 @@ std::function<void(std::ostream&)> KVStore::debug_info() noexcept
     auto& change_log_writer = this->mem_table_->change_log_writer().metrics();
 
     out << "\n"
-        << BATT_INSPECT(kv_store.mem_table_get_count) << "\n"                 //
-        << BATT_INSPECT(kv_store.mem_table_get_latency) << "\n"               //
-        << BATT_INSPECT(kv_store.delta_log2_get_count[0]) << "\n"             //
-        << BATT_INSPECT(kv_store.delta_log2_get_count[1]) << "\n"             //
-        << BATT_INSPECT(kv_store.delta_log2_get_count[2]) << "\n"             //
-        << BATT_INSPECT(kv_store.delta_log2_get_count[3]) << "\n"             //
-        << BATT_INSPECT(kv_store.delta_log2_get_count[4]) << "\n"             //
-        << BATT_INSPECT(kv_store.delta_log2_get_count[5]) << "\n"             //
-        << BATT_INSPECT(kv_store.delta_log2_get_count[6]) << "\n"             //
-        << BATT_INSPECT(kv_store.delta_log2_get_count[7]) << "\n"             //
-        << BATT_INSPECT(kv_store.delta_get_latency) << "\n"                   //
-        << BATT_INSPECT(kv_store.checkpoint_get_count) << "\n"                //
-        << BATT_INSPECT(kv_store.checkpoint_get_latency) << "\n"              //
-        << BATT_INSPECT(kv_store.checkpoint_count) << "\n"                    //
-        << BATT_INSPECT(kv_store.batch_edits_count) << "\n"                   //
-        << BATT_INSPECT(kv_store.avg_edits_per_batch()) << "\n"               //
-        << BATT_INSPECT(kv_store.compact_batch_latency) << "\n"               //
-        << BATT_INSPECT(kv_store.push_batch_latency) << "\n"                  //
-        << BATT_INSPECT(kv_store.finalize_checkpoint_latency) << "\n"         //
-        << BATT_INSPECT(kv_store.append_job_latency) << "\n"                  //
-        << BATT_INSPECT(checkpoint_log.root_log_space()) << "\n"              //
-        << BATT_INSPECT(checkpoint_log.root_log_size()) << "\n"               //
-        << BATT_INSPECT(checkpoint_log.root_log_capacity()) << "\n"           //
-        << BATT_INSPECT(change_log_file.active_blocks()) << "\n"              //
-        << BATT_INSPECT(change_log_writer.received_user_byte_count) << "\n"   //
-        << BATT_INSPECT(change_log_writer.received_block_byte_count) << "\n"  //
-        << BATT_INSPECT(change_log_writer.written_user_byte_count) << "\n"    //
-        << BATT_INSPECT(change_log_writer.written_block_byte_count) << "\n"   //
-        << BATT_INSPECT(change_log_writer.sleep_count) << "\n"                //
-        << BATT_INSPECT(change_log_writer.write_count) << "\n"                //
-        << BATT_INSPECT(change_log_writer.block_alloc_count) << "\n"          //
-        << BATT_INSPECT(change_log_writer.block_utilization_rate()) << "\n"   //
+        << BATT_INSPECT(kv_store.mem_table_get_count) << "\n"                      //
+        << BATT_INSPECT(kv_store.mem_table_get_latency) << "\n"                    //
+        << BATT_INSPECT(kv_store.delta_log2_get_count[0]) << "\n"                  //
+        << BATT_INSPECT(kv_store.delta_log2_get_count[1]) << "\n"                  //
+        << BATT_INSPECT(kv_store.delta_log2_get_count[2]) << "\n"                  //
+        << BATT_INSPECT(kv_store.delta_log2_get_count[3]) << "\n"                  //
+        << BATT_INSPECT(kv_store.delta_log2_get_count[4]) << "\n"                  //
+        << BATT_INSPECT(kv_store.delta_log2_get_count[5]) << "\n"                  //
+        << BATT_INSPECT(kv_store.delta_log2_get_count[6]) << "\n"                  //
+        << BATT_INSPECT(kv_store.delta_log2_get_count[7]) << "\n"                  //
+        << BATT_INSPECT(kv_store.delta_get_latency) << "\n"                        //
+        << BATT_INSPECT(kv_store.checkpoint_get_count) << "\n"                     //
+        << BATT_INSPECT(kv_store.checkpoint_get_latency) << "\n"                   //
+        << BATT_INSPECT(kv_store.checkpoint_count) << "\n"                         //
+        << BATT_INSPECT(kv_store.batch_edits_count) << "\n"                        //
+        << BATT_INSPECT(kv_store.avg_edits_per_batch()) << "\n"                    //
+        << BATT_INSPECT(kv_store.compact_batch_latency) << "\n"                    //
+        << BATT_INSPECT(kv_store.push_batch_latency) << "\n"                       //
+        << BATT_INSPECT(kv_store.finalize_checkpoint_latency) << "\n"              //
+        << BATT_INSPECT(kv_store.append_job_latency) << "\n"                       //
+        << BATT_INSPECT(PackedLeafPage::metrics().find_key_success_count) << "\n"  //
+        << BATT_INSPECT(PackedLeafPage::metrics().find_key_failure_count) << "\n"  //
+        << BATT_INSPECT(PackedLeafPage::metrics().find_key_latency) << "\n"        //
+        << BATT_INSPECT(checkpoint_log.root_log_space()) << "\n"                   //
+        << BATT_INSPECT(checkpoint_log.root_log_size()) << "\n"                    //
+        << BATT_INSPECT(checkpoint_log.root_log_capacity()) << "\n"                //
+        << BATT_INSPECT(change_log_file.active_blocks()) << "\n"                   //
+        << BATT_INSPECT(change_log_file.active_block_count()) << "\n"              //
+        << BATT_INSPECT(change_log_file.config().block_count) << "\n"              //
+        << BATT_INSPECT(change_log_file.capacity()) << "\n"                        //
+        << BATT_INSPECT(change_log_file.size()) << "\n"                            //
+        << BATT_INSPECT(change_log_file.space()) << "\n"                           //
+        << BATT_INSPECT(change_log_file.available_block_tokens()) << "\n"          //
+        << BATT_INSPECT(change_log_file.in_use_block_tokens()) << "\n"             //
+        << BATT_INSPECT(change_log_file.reserved_block_tokens()) << "\n"           //
+        << BATT_INSPECT(change_log_file.metrics().freed_blocks_count) << "\n"      //
+        << BATT_INSPECT(change_log_file.metrics().reserved_blocks_count) << "\n"   //
+        << BATT_INSPECT(change_log_writer.received_user_byte_count) << "\n"        //
+        << BATT_INSPECT(change_log_writer.received_block_byte_count) << "\n"       //
+        << BATT_INSPECT(change_log_writer.written_user_byte_count) << "\n"         //
+        << BATT_INSPECT(change_log_writer.written_block_byte_count) << "\n"        //
+        << BATT_INSPECT(change_log_writer.sleep_count) << "\n"                     //
+        << BATT_INSPECT(change_log_writer.write_count) << "\n"                     //
+        << BATT_INSPECT(change_log_writer.block_alloc_count) << "\n"               //
+        << BATT_INSPECT(change_log_writer.block_utilization_rate()) << "\n"        //
         ;
   };
 }

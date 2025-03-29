@@ -7,10 +7,11 @@ namespace turtle_kv {
 
 struct KVStoreMetrics {
   CountMetric<u64> checkpoint_count{0};
+  CountMetric<u64> batch_count{0};
   CountMetric<u64> batch_edits_count{0};
 
   DerivedMetric<double> avg_edits_per_batch{[this] {
-    return (double)this->batch_edits_count.load() / (double)this->checkpoint_count.load();
+    return (double)this->batch_edits_count.load() / (double)this->batch_count.load();
   }};
 
   CountMetric<u64> mem_table_get_count{0};

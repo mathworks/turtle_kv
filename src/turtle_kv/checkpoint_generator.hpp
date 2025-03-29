@@ -80,10 +80,6 @@ class CheckpointGenerator
    */
   StatusOr<usize> push_batch(std::unique_ptr<DeltaBatch>&& batch) noexcept;
 
-  /** \brief Queries the passed key in the current base checkpoint.
-   */
-  StatusOr<ItemView> query_key(const KeyView& key) noexcept;
-
   /** \brief Finalize the current checkpoint rollup and return a CheckpointJob that can be handed to
    * a checkpoint committer.
    *

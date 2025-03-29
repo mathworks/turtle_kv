@@ -51,6 +51,15 @@ class DeltaBatch
    */
   void merge_compact_edits();
 
+  /** \brief Returns the number of compacted edits in the result set.  this->merge_compact_edits()
+   * must be called before this function, or we panic.
+   */
+  usize result_set_size() const
+  {
+    BATT_CHECK(this->result_set_) << "Forgot to call this->merge_compact_edits()?";
+    return this->result_set_->size();
+  }
+
   /** \brief Returns the edits for this batch.
    */
   ResultSet consume_result_set()

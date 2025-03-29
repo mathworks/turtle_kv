@@ -1,6 +1,9 @@
 #include <turtle_kv/tree/filter_builder.hpp>
 //
 
+#include <turtle_kv/tree/leaf_page_view.hpp>
+#include <turtle_kv/tree/packed_leaf_page.hpp>
+
 #include <llfs/bloom_filter_page_view.hpp>
 #include <llfs/buffer.hpp>
 #include <llfs/packed_bloom_filter_page.hpp>
@@ -22,7 +25,7 @@ namespace turtle_kv {
 //
 bool FilterBuilder::accepts_page(const llfs::PinnedPage& pinned_page) const noexcept /*override*/
 {
-  return is_leaf_page(pinned_page);
+  return LeafPageView::layout_used_by_page(pinned_page);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -31,13 +34,13 @@ Status FilterBuilder::build_filter(
     const llfs::PinnedPage& src_pinned_page,
     const std::shared_ptr<llfs::PageBuffer>& dst_filter_page_buffer) noexcept /*override*/
 {
+  // Sanity check.
+  //
+  BATT_CHECK(LeafPageView::layout_used_by_page(src_pinned_page));
+
   // Unpack the cache slot to get the leaf page buffer.
   //
   const llfs::PageView& page_view = *src_pinned_page;
-
-  // Sanity check.
-  //
-  BATT_CHECK(is_leaf_page(page_view));
 
   // Set the page layout in the destination page buffer.
   //
@@ -60,11 +63,11 @@ Status FilterBuilder::build_filter(
 
   // Calculate the optimal number of hash functions to use.
   //
-  Slice<const PackedEdit> leaf_edits = get_leaf_edits(page_view);
+  const PackedLeafPage& packed_leaf = PackedLeafPage::view_of(page_view);
 
   // Grab the item count to figure out how to size the filter.
   //
-  const u64 item_count = leaf_edits.size();
+  const u64 item_count = packed_leaf.key_count;
 
   // Select the filter layout (flat, blocked-64, or blocked-512).
   //
@@ -106,20 +109,17 @@ Status FilterBuilder::build_filter(
 
   // Now the header is full initialized; build the full filter from the packed edits.
   //
-  llfs::parallel_build_bloom_filter(
-      this->worker_pool_,
-      leaf_edits.begin(),
-      leaf_edits.end(),
-      [](const PackedEdit& packed_edit) -> std::string_view {
-        return get_key(packed_edit);
-      },
-      &packed_filter_page->bloom_filter);
+  llfs::parallel_build_bloom_filter(this->worker_pool_,
+                                    packed_leaf.items_begin(),
+                                    packed_leaf.items_end(),
+                                    BATT_OVERLOADS_OF(get_key),
+                                    &packed_filter_page->bloom_filter);
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
   // PARANOID CHECK - remove in release builds! TODO [tastolfi 2025-02-02]
   //
   if (false) {
-    std::for_each(leaf_edits.begin(), leaf_edits.end(), [&](const auto& packed_item) {
+    std::for_each(packed_leaf.items_begin(), packed_leaf.items_end(), [&](const auto& packed_item) {
       const KeyView& key = get_key(packed_item);
       BATT_CHECK(packed_filter_page->bloom_filter.might_contain(key));
     });
@@ -127,14 +127,18 @@ Status FilterBuilder::build_filter(
     if (false) {
       LOG(INFO) << BATT_INSPECT(config) << " filter_page=" << dst_filter_page_buffer->page_id()
                 << packed_filter_page->bloom_filter.dump();
-      std::for_each(leaf_edits.begin(), leaf_edits.end(), [&](const auto& packed_item) {
-        const KeyView& key = get_key(packed_item);
-        auto& filter = packed_filter_page->bloom_filter;
-        llfs::BloomFilterQuery<const KeyView&> query{key};
-        query.update_mask(config.hash_count, 8);
-        LOG(INFO) << BATT_INSPECT_STR(key) << BATT_INSPECT(query) << BATT_INSPECT(config.hash_count)
-                  << BATT_INSPECT(filter.hash_count());
-      });
+
+      std::for_each(packed_leaf.items_begin(),
+                    packed_leaf.items_end(),
+                    [&](const auto& packed_item) {
+                      const KeyView& key = get_key(packed_item);
+                      auto& filter = packed_filter_page->bloom_filter;
+                      llfs::BloomFilterQuery<const KeyView&> query{key};
+                      query.update_mask(config.hash_count, 8);
+                      LOG(INFO) << BATT_INSPECT_STR(key) << BATT_INSPECT(query)
+                                << BATT_INSPECT(config.hash_count)
+                                << BATT_INSPECT(filter.hash_count());
+                    });
     }
   }
   //

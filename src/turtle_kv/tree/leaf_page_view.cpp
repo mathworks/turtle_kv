@@ -1,6 +1,8 @@
 #include <turtle_kv/tree/leaf_page_view.hpp>
 //
 
+#include <llfs/packed_page_header.hpp>
+
 namespace turtle_kv {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -30,6 +32,14 @@ namespace turtle_kv {
                                     __FILE__,
                                     __LINE__,
                                     LeafPageView::page_reader());
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+/*static*/ bool LeafPageView::layout_used_by_page(const llfs::PinnedPage& pinned_page)
+{
+  return pinned_page && (llfs::get_page_header(pinned_page.page_buffer()).layout_id ==
+                         LeafPageView::page_layout_id());
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

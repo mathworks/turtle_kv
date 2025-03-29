@@ -146,14 +146,6 @@ StatusOr<usize> CheckpointGenerator::push_batch(std::unique_ptr<DeltaBatch>&& ba
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<ItemView> CheckpointGenerator::query_key(const KeyView& key) noexcept
-{
-  this->initialize_job();
-  return find_item_by_key(*this->job_, *this->base_checkpoint_.tree(), key);
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
 void CheckpointGenerator::initialize_job()
 {
   if (this->job_ == nullptr) {

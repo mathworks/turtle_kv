@@ -1,6 +1,7 @@
 #pragma once
 
 #include <turtle_kv/api_types.hpp>
+#include <turtle_kv/change_log_file_metrics.hpp>
 #include <turtle_kv/change_log_read_lock.hpp>
 #include <turtle_kv/file_utils.hpp>
 
@@ -41,6 +42,7 @@ class ChangeLogFile
  public:
   using ReadLockCounter = batt::CpuCacheLineIsolated<std::atomic<i64>>;
   using ReadLock = ChangeLogReadLock;
+  using Metrics = ChangeLogFileMetrics;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -116,19 +118,60 @@ class ChangeLogFile
 
   Interval<i64> active_blocks() noexcept
   {
-    return {this->lower_bound_.get_value(), this->upper_bound_.load()};
+    return {this->lower_bound_.load(), this->upper_bound_.load()};
+  }
+
+  i64 active_block_count() const
+  {
+    return this->upper_bound_.load() - this->lower_bound_.load();
+  }
+
+  i64 size() const
+  {
+    return this->active_block_count() * this->config_.block_size;
+  }
+
+  i64 capacity() const
+  {
+    return this->config_.block_count * this->config_.block_size;
+  }
+
+  i64 space() const
+  {
+    return this->capacity() - this->size();
+  }
+
+  u64 available_block_tokens() const
+  {
+    return this->free_block_tokens_.available();
+  }
+
+  u64 in_use_block_tokens() const
+  {
+    return this->in_use_block_tokens_.size();
+  }
+
+  u64 reserved_block_tokens() const
+  {
+    return this->config_.block_count -
+           (this->available_block_tokens() + this->in_use_block_tokens());
+  }
+
+  const Metrics& metrics() const
+  {
+    return this->metrics_;
   }
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
-  template <typename Fn = void(ReadLockCounter& counter)>
+  template <typename Fn = void(i64 block_i, ReadLockCounter& counter)>
   void for_block_range(const Interval<i64>& block_range, Fn&& fn) noexcept;
 
   void lock_for_read(const Interval<i64>& block_range) noexcept;
 
   void unlock_for_read(const Interval<i64>& block_range) noexcept;
 
-  void update_lower_bound() noexcept;
+  void update_lower_bound(i64 update_upper_bound) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -138,17 +181,18 @@ class ChangeLogFile
 
   Config config_;
 
+  Metrics metrics_;
+
   const i64 last_block_offset_ = this->config_.block_offset_end();
 
   const usize max_batch_size_ = (16 * 1024 * 1024) / this->config_.block_size;
 
-  batt::Grant::Issuer token_pool_{BATT_CHECKED_CAST(u64, this->config_.block_count.value())};
+  batt::Grant::Issuer free_block_tokens_{BATT_CHECKED_CAST(u64, this->config_.block_count.value())};
 
-  batt::Grant free_pool_{BATT_OK_RESULT_OR_PANIC(
-      this->token_pool_.issue_grant(this->config_.block_count, batt::WaitForResource::kFalse))};
+  batt::Grant in_use_block_tokens_{BATT_OK_RESULT_OR_PANIC(
+      this->free_block_tokens_.issue_grant(0, batt::WaitForResource::kFalse))};
 
-  batt::Watch<i64> lower_bound_{0};
-
+  std::atomic<i64> lower_bound_{0};
   std::atomic<i64> upper_bound_{0};
 
   std::unique_ptr<ReadLockCounter[]> read_lock_counter_per_block_{
@@ -170,6 +214,7 @@ inline void ChangeLogFile::for_block_range(const Interval<i64>& block_range, Fn&
   BATT_CHECK_GE(block_range.upper_bound, 0);
   BATT_CHECK_LE(block_range.lower_bound, block_range.upper_bound);
 
+  i64 block_i = block_range.lower_bound;
   i64 first_addr = block_range.lower_bound % this->config_.block_count;
   i64 last_addr = first_addr + block_range.size();
   if (last_addr > this->config_.block_count) {
@@ -177,8 +222,9 @@ inline void ChangeLogFile::for_block_range(const Interval<i64>& block_range, Fn&
   }
 
   while (first_addr != last_addr) {
-    fn(this->read_lock_counter_per_block_[first_addr]);
+    fn(block_i, this->read_lock_counter_per_block_[first_addr]);
 
+    ++block_i;
     ++first_addr;
     if (first_addr > this->config_.block_count) {
       first_addr -= this->config_.block_count;

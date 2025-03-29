@@ -241,7 +241,7 @@ StatusOr<llfs::PinnedPage> PackedNodePage::UpdateBuffer::Segment::load_leaf_page
     llfs::PinPageToJob pin_page_to_job) const
 {
   return page_loader.get_page_with_layout_in_job(this->leaf_page_id.unpack(),
-                                                 NodePageView::page_layout_id(),
+                                                 LeafPageView::page_layout_id(),
                                                  pin_page_to_job,
                                                  llfs::OkIfNotFound{false});
 }

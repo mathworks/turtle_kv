@@ -11,6 +11,7 @@
 #include <turtle_kv/import/buffer.hpp>
 #include <turtle_kv/import/int_types.hpp>
 #include <turtle_kv/import/interval.hpp>
+#include <turtle_kv/import/metrics.hpp>
 #include <turtle_kv/import/seq.hpp>
 
 #include <llfs/packed_array.hpp>
@@ -31,6 +32,18 @@ namespace turtle_kv {
 //
 struct PackedLeafPage {
   static constexpr u64 kMagic = 0x14965f812f8a16c3ull;
+
+  struct Metrics {
+    LatencyMetric find_key_latency;
+    CountMetric<u64> find_key_success_count;
+    CountMetric<u64> find_key_failure_count;
+  };
+
+  static Metrics& metrics()
+  {
+    static Metrics metrics_;
+    return metrics_;
+  }
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -198,10 +211,20 @@ struct PackedLeafPage {
   //
   const PackedKeyValue* find_key(const std::string_view& key) const
   {
+    LatencyTimer timer{Every2ToTheConst<16>{}, PackedLeafPage::metrics().find_key_latency};
+
     usize key_prefix_match = 0;
     Interval<usize> search_range = this->calculate_search_range(key, key_prefix_match);
 
-    return this->find_key_in_range(key, search_range);
+    const PackedKeyValue* found = this->find_key_in_range(key, search_range);
+
+    if (found != nullptr) {
+      PackedLeafPage::metrics().find_key_success_count.add(1);
+    } else {
+      PackedLeafPage::metrics().find_key_failure_count.add(1);
+    }
+
+    return found;
   }
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -663,27 +686,21 @@ llfs::PageLayoutId packed_leaf_page_layout_id();
 StatusOr<llfs::PinnedPage> pin_leaf_page_to_job(llfs::PageCacheJob& page_job,
                                                 std::shared_ptr<llfs::PageBuffer>&& page_buffer);
 
-//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
-//
-template <typename Items>
-inline StatusOr<llfs::PinnedPage> build_leaf_page_in_job(llfs::PageCacheJob& page_job,
-                                                         const Items& items,
-                                                         usize page_size)
+template <typename ItemsRangeT>
+auto build_leaf_page_in_job(llfs::PageBuffer& page_buffer, const ItemsRangeT& items)
 {
-  auto plan = PackedLeafLayoutPlan::from_items(page_size, items, /*use_trie_index=*/true);
+  auto plan = PackedLeafLayoutPlan::from_items(page_buffer.size(),
+                                               items,
+                                               /*use_trie_index=*/true);
 
-  BATT_ASSIGN_OK_RESULT(std::shared_ptr<llfs::PageBuffer> page_buffer,
-                        page_job.new_page(llfs::PageSize{(u32)page_size},  //
-                                          batt::WaitForResource::kTrue,    //
-                                          packed_leaf_page_layout_id(),    //
-                                          /*callers=*/0,                   //
-                                          batt::CancelToken{}));
-
-  PackedLeafPage* packed_leaf_page = build_leaf_page(page_buffer->mutable_buffer(), plan, items);
+  PackedLeafPage* const packed_leaf_page =
+      build_leaf_page(page_buffer.mutable_buffer(), plan, items);
 
   BATT_CHECK_NOT_NULLPTR(packed_leaf_page);
 
-  return pin_leaf_page_to_job(page_job, std::move(page_buffer));
+  return [](llfs::PageCacheJob& page_job, std::shared_ptr<llfs::PageBuffer>&& page_buffer) {
+    return pin_leaf_page_to_job(page_job, std::move(page_buffer));
+  };
 }
 
 }  // namespace turtle_kv

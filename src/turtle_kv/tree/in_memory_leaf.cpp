@@ -157,14 +157,16 @@ Status InMemoryLeaf::start_serialize(TreeSerializeContext& context)
       << BATT_INSPECT(this->get_viability()) << BATT_INSPECT(this->get_items_size())
       << BATT_INSPECT(this->tree_options.flush_size());
 
-  const u64 future_id =
-      context.async_build_page([this](TreeSerializeContext& context) -> StatusOr<llfs::PinnedPage> {
-        // TODO [tastolfi 2025-03-23] - pass DecayToItem<true> to build leaf page.
-        //
-        return build_leaf_page_in_job(context.page_job(),
-                                      this->result_set.get(),
-                                      this->tree_options.leaf_size());
-      });
+  BATT_ASSIGN_OK_RESULT(
+      const u64 future_id,
+      context.async_build_page(
+          this->tree_options.leaf_size(),
+          packed_leaf_page_layout_id(),
+          [this](llfs::PageBuffer& page_buffer) -> StatusOr<TreeSerializeContext::PinPageToJobFn> {
+            // TODO [tastolfi 2025-03-27] decay items
+            //
+            return build_leaf_page_in_job(page_buffer, this->result_set.get());
+          }));
 
   BATT_CHECK_EQ(this->future_id_.exchange(future_id), ~u64{0});
 
@@ -181,7 +183,8 @@ StatusOr<llfs::PinnedPage> InMemoryLeaf::finish_serialize(TreeSerializeContext& 
     return {batt::StatusCode::kFailedPrecondition};
   }
 
-  StatusOr<llfs::PinnedPage> pinned_leaf_page = context.get_build_page_result(observed_id);
+  StatusOr<llfs::PinnedPage> pinned_leaf_page =
+      context.get_build_page_result(TreeSerializeContext::BuildPageJobId{observed_id});
 
   return pinned_leaf_page;
 }

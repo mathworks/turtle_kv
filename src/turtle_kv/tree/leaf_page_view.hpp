@@ -37,6 +37,11 @@ class LeafPageView : public llfs::PageView
    */
   static Status register_layout(llfs::PageCache& cache);
 
+  /** \brief Returns true iff the passed page is valid and its header specifies layout
+   * LeafPageView::page_layout_id().
+   */
+  static bool layout_used_by_page(const llfs::PinnedPage& pinned_page);
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   explicit LeafPageView(std::shared_ptr<const llfs::PageBuffer>&& page_buffer) noexcept;

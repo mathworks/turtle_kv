@@ -3,14 +3,16 @@
 #include <turtle_kv/tree/tree_options.hpp>
 
 #include <turtle_kv/import/int_types.hpp>
+#include <turtle_kv/import/small_fn.hpp>
 #include <turtle_kv/import/status.hpp>
 
 #include <llfs/page_cache_job.hpp>
 #include <llfs/pinned_page.hpp>
 
 #include <batteries/async/cancel_token.hpp>
+#include <batteries/async/future.hpp>
 #include <batteries/async/worker_pool.hpp>
-#include <batteries/small_fn.hpp>
+#include <batteries/strong_typedef.hpp>
 
 #include <atomic>
 #include <vector>
@@ -21,8 +23,40 @@ class TreeSerializeContext
 {
  public:
   using Self = TreeSerializeContext;
-  using BuildPageJobId = usize;
-  using BuildPageJobFn = batt::UniqueSmallFn<StatusOr<llfs::PinnedPage>(TreeSerializeContext&)>;
+
+  BATT_STRONG_TYPEDEF(usize, BuildPageJobId);
+
+  using PinPageToJobFn =
+      UniqueSmallFn<StatusOr<llfs::PinnedPage>(llfs::PageCacheJob& job,
+                                               std::shared_ptr<llfs::PageBuffer>&& page_buffer)>;
+
+  using BuildPageFn = UniqueSmallFn<StatusOr<PinPageToJobFn>(llfs::PageBuffer& page_buffer)>;
+
+  struct BuildPageJob {
+    llfs::PageSize page_size;
+    llfs::PageLayoutId page_layout_id;
+    BuildPageFn build_page_fn;
+    batt::Promise<std::shared_ptr<llfs::PageBuffer>> new_page_promise;
+    StatusOr<PinPageToJobFn> pin_page_fn;
+    StatusOr<llfs::PinnedPage> pinned_page;
+
+    //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+    BuildPageJob(const BuildPageJob&) = delete;
+    BuildPageJob& operator=(const BuildPageJob&) = delete;
+
+    BuildPageJob(BuildPageJob&&) = default;
+    BuildPageJob& operator=(BuildPageJob&&) = default;
+
+    explicit BuildPageJob(llfs::PageSize size,
+                          const llfs::PageLayoutId layout,
+                          BuildPageFn&& build_fn) noexcept
+        : page_size{size}
+        , page_layout_id{layout}
+        , build_page_fn{std::move(build_fn)}
+    {
+    }
+  };
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -55,7 +89,9 @@ class TreeSerializeContext
     return this->cancel_token_;
   }
 
-  BuildPageJobId async_build_page(BuildPageJobFn&& build_page_fn);
+  StatusOr<BuildPageJobId> async_build_page(usize page_size,
+                                            const llfs::PageLayoutId& page_layout_id,
+                                            BuildPageFn&& build_page_fn);
 
   Status build_all_pages();
 
@@ -75,9 +111,7 @@ class TreeSerializeContext
 
   batt::CancelToken cancel_token_;
 
-  std::vector<BuildPageJobFn> input_queue_;
-
-  std::vector<StatusOr<llfs::PinnedPage>> output_queue_;
+  std::vector<BuildPageJob> queue_;
 
   std::atomic<usize> next_input_{0};
 };

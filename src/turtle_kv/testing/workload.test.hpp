@@ -184,6 +184,18 @@ inline bool latency_timer_handler(WorkloadState& state)
   return true;
 }
 
+inline std::filesystem::path get_project_file(const std::filesystem::path& rel_to_project_root)
+{
+  std::filesystem::path this_file_path{__FILE__};
+  this_file_path = std::filesystem::absolute(this_file_path);
+  std::filesystem::path src_turtle_kv_testing_dir = this_file_path.parent_path();
+  std::filesystem::path src_turtle_kv_dir = src_turtle_kv_testing_dir.parent_path();
+  std::filesystem::path src_dir = src_turtle_kv_dir.parent_path();
+  std::filesystem::path top_level_dir = src_dir.parent_path();
+
+  return top_level_dir / rel_to_project_root;
+}
+
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 inline std::tuple<usize, batt::SmallVec<LatencyMeasurement, 32>> run_workload(
@@ -203,7 +215,7 @@ inline std::tuple<usize, batt::SmallVec<LatencyMeasurement, 32>> run_workload(
   handlers['V'] = &scan_and_verify_operation_handler;
 
   std::ifstream ifs{workload_file};
-  BATT_CHECK(ifs.good());
+  BATT_CHECK(ifs.good()) << BATT_INSPECT_STR(workload_file.string());
 
   WorkloadState state{ifs, table};
 

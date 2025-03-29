@@ -3,6 +3,8 @@
 #include <turtle_kv/core/key_view.hpp>
 #include <turtle_kv/core/value_view.hpp>
 
+#include <turtle_kv/util/placement.hpp>
+
 #include <turtle_kv/import/buffer.hpp>
 #include <turtle_kv/import/int_types.hpp>
 
