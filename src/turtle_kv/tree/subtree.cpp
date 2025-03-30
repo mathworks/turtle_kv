@@ -366,6 +366,42 @@ StatusOr<ValueView> Subtree::find_key(llfs::PageLoader& page_loader,
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+StatusOr<ValueView> Subtree::find_key_filtered(FilteredKeyQuery& query) const
+{
+  return batt::case_of(
+      this->impl,
+      [&](const llfs::PageIdSlot& page_id_slot) -> StatusOr<ValueView> {
+        if (query.reject_page(page_id_slot.page_id)) {
+          return {batt::StatusCode::kNotFound};
+        }
+
+        return visit_tree_page(  //
+            *query.page_loader,
+            *query.pinned_page_out,
+            page_id_slot,
+
+            [&](const PackedLeafPage& packed_leaf) -> StatusOr<ValueView> {
+              const PackedKeyValue* found = packed_leaf.find_key(query.key());
+              if (!found) {
+                return {batt::StatusCode::kNotFound};
+              }
+              return get_value(*found);
+            },
+
+            [&](const PackedNodePage& packed_node) -> StatusOr<ValueView> {
+              return packed_node.find_key_filtered(query);
+            });
+      },
+      [&](const std::unique_ptr<InMemoryLeaf>& leaf) -> StatusOr<ValueView> {
+        return leaf->find_key(query.key());
+      },
+      [&](const std::unique_ptr<InMemoryNode>& node) -> StatusOr<ValueView> {
+        return node->find_key(*query.page_loader, *query.pinned_page_out, query.key());
+      });
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 std::function<void(std::ostream&)> Subtree::dump(i32 detail_level) const
 {
   return [this](std::ostream& out) {
@@ -454,6 +490,17 @@ llfs::PackedPageId Subtree::packed_page_id_or_panic() const
 bool Subtree::is_serialized() const
 {
   return batt::is_case<llfs::PageIdSlot>(this->impl);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Subtree Subtree::clone_serialized_or_panic() const
+{
+  BATT_CHECK((batt::is_case<llfs::PageIdSlot>(this->impl)));
+
+  Subtree clone;
+  clone.impl.emplace<llfs::PageIdSlot>() = *this->get_page_id();
+  return clone;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

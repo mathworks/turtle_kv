@@ -1,5 +1,7 @@
 #pragma once
 
+#include <turtle_kv/tree/packed_leaf_page.hpp>
+
 #include <turtle_kv/util/bit_ops.hpp>
 
 #include <turtle_kv/import/int_types.hpp>
@@ -158,6 +160,63 @@ struct SegmentAlgorithms {
           segment.set_flushed_item_upper_bound(pivot_i, 0);
           segment.set_pivot_active(pivot_i, false);
         });
+  }
+
+  /** \brief Searches the segment for the given key, returning its value if found.
+   */
+  template <typename PageLoaderT, typename PinnedPageT, typename LevelT>
+  batt::seq::LoopControl find_key(PageLoaderT& page_loader,
+                                  PinnedPageT& pinned_page_out,
+                                  LevelT& level,
+                                  const KeyView& key,
+                                  i32 key_pivot_i,
+                                  StatusOr<ValueView>* value_out)
+  {
+    // We need the actual page at this point to go proceed.
+    //
+    StatusOr<PinnedPageT> pinned_leaf_page =
+        this->segment_.load_leaf_page(page_loader, llfs::PinPageToJob::kDefault);
+
+    if (!pinned_leaf_page.ok()) {
+      *value_out = pinned_leaf_page.status();
+      return batt::seq::LoopControl::kBreak;
+    }
+    pinned_page_out = std::move(*pinned_leaf_page);
+
+    // Get the structured view of the page data.
+    //
+    const PackedLeafPage& leaf_page = PackedLeafPage::view_of(pinned_page_out);
+
+    // Do a point query inside the page for the search key.
+    //
+    const PackedKeyValue* found = leaf_page.find_key(key);
+    if (!found) {
+      //
+      // The key is not in this segment!  Keep searching...
+      //
+      return batt::seq::LoopControl::kContinue;
+    }
+
+    // At this point we know the key *is* present in this segment, but it may have
+    // been flushed out of the level.  Calculate the found key index and compare
+    // against the flushed item upper bound for our pivot.
+    //
+    const usize key_index_in_leaf = std::distance(leaf_page.items_begin(), found);
+    const usize flushed_upper_bound =
+        this->segment_.get_flushed_item_upper_bound(level, key_pivot_i);
+
+    if (key_index_in_leaf < flushed_upper_bound) {
+      //
+      // Key was found, but it has been flushed from this segment.  Since keys are
+      // unique within a level, we can stop at this point and return kNotFound.
+      //
+      return batt::seq::LoopControl::kBreak;
+    }
+
+    // Found!
+    //
+    *value_out = get_value(*found);
+    return batt::seq::LoopControl::kBreak;
   }
 };
 

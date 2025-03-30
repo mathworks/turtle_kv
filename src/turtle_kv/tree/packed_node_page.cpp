@@ -222,16 +222,35 @@ StatusOr<ValueView> PackedNodePage::find_key(llfs::PageLoader& page_loader,
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<ValueView> PackedNodePage::find_key_in_level(usize level_i,                      //
-                                                      llfs::PageLoader& page_loader,      //
-                                                      llfs::PinnedPage& pinned_page_out,  //
-                                                      i32 key_pivot_i,                    //
+StatusOr<ValueView> PackedNodePage::find_key_in_level(usize level_i,
+                                                      llfs::PageLoader& page_loader,
+                                                      llfs::PinnedPage& pinned_page_out,
+                                                      i32 key_pivot_i,
                                                       const KeyView& key) const
 {
   UpdateBuffer::SegmentedLevel level = this->update_buffer.get_level(level_i);
 
   return in_segmented_level(*this, level, page_loader)  //
       .find_key(pinned_page_out, key_pivot_i, key);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+StatusOr<ValueView> PackedNodePage::find_key_filtered(FilteredKeyQuery& query) const
+{
+  return in_node(*this).find_key_filtered(query);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+StatusOr<ValueView> PackedNodePage::find_key_in_level_filtered(usize level_i,
+                                                               i32 key_pivot_i,
+                                                               FilteredKeyQuery& query) const
+{
+  UpdateBuffer::SegmentedLevel level = this->update_buffer.get_level(level_i);
+
+  return in_segmented_level(*this, level, *query.page_loader)  //
+      .find_key_filtered(key_pivot_i, query);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

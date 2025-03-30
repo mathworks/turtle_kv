@@ -1,5 +1,6 @@
 #pragma once
 
+#include <turtle_kv/tree/filtered_key_query.hpp>
 #include <turtle_kv/tree/packed_node_page_key.hpp>
 
 #include <turtle_kv/core/key_view.hpp>
@@ -132,6 +133,11 @@ struct PackedNodePage {
       u64 get_flushed_pivots() const
       {
         return this->flushed_pivots;
+      }
+
+      llfs::PageId get_leaf_page_id() const
+      {
+        return this->leaf_page_id.unpack();
       }
 
       StatusOr<llfs::PinnedPage> load_leaf_page(llfs::PageLoader& page_loader,
@@ -383,6 +389,12 @@ struct PackedNodePage {
                                         llfs::PinnedPage& pinned_page_out,  //
                                         i32 key_pivot_i,                    //
                                         const KeyView& key) const;
+
+  StatusOr<ValueView> find_key_filtered(FilteredKeyQuery& query) const;
+
+  StatusOr<ValueView> find_key_in_level_filtered(usize level_i,
+                                                 i32 key_pivot_i,
+                                                 FilteredKeyQuery& query) const;
 
   //----- --- -- -  -  -   -
 

@@ -218,7 +218,7 @@ StatusOr<std::unique_ptr<CheckpointJob>> CheckpointGenerator::finalize_checkpoin
   checkpoint_job->token_issuer = std::move(token_issuer);
   checkpoint_job->token.emplace(std::move(token));
   checkpoint_job->checkpoint_log = std::addressof(this->checkpoint_volume_);
-  checkpoint_job->checkpoint = this->base_checkpoint_;
+  checkpoint_job->checkpoint = this->base_checkpoint_.clone();
 
   checkpoint_job->packed_checkpoint.emplace(
       llfs::PackAsVariant<CheckpointLogEvent, PackedCheckpoint>{

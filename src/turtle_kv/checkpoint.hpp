@@ -133,6 +133,8 @@ class Checkpoint
     return batt::make_copy(this->checkpoint_lock_);
   }
 
+  Checkpoint clone() const noexcept;
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
   Optional<llfs::PageId> root_id_;

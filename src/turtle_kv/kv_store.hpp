@@ -6,6 +6,7 @@
 #include <turtle_kv/kv_store_metrics.hpp>
 #include <turtle_kv/mem_table.hpp>
 
+#include <turtle_kv/tree/pinning_page_loader.hpp>
 #include <turtle_kv/tree/tree_options.hpp>
 
 #include <turtle_kv/core/table.hpp>
@@ -131,7 +132,7 @@ class KVStore : public Table
 
   usize checkpoint_batch_count_{0};
 
-  std::unique_ptr<llfs::PageCacheJob> reader_job_ = this->page_cache().new_job();
+  Optional<PinningPageLoader> query_page_loader_{this->page_cache()};
 
   Checkpoint base_checkpoint_;
 

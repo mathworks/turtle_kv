@@ -1,6 +1,7 @@
 #pragma once
 
 #include <turtle_kv/tree/batch_update.hpp>
+#include <turtle_kv/tree/filtered_key_query.hpp>
 #include <turtle_kv/tree/subtree_viability.hpp>
 #include <turtle_kv/tree/tree_options.hpp>
 #include <turtle_kv/tree/tree_serialize_context.hpp>
@@ -41,25 +42,27 @@ struct Subtree {
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  Status apply_batch_update(const TreeOptions& tree_options,  //
-                            ParentNodeHeight parent_height,   //
-                            BatchUpdate& update,              //
-                            const KeyView& key_upper_bound,   //
+  Status apply_batch_update(const TreeOptions& tree_options,
+                            ParentNodeHeight parent_height,
+                            BatchUpdate& update,
+                            const KeyView& key_upper_bound,
                             IsRoot is_root);
 
   StatusOr<i32> get_height(llfs::PageLoader& page_loader) const;
 
-  StatusOr<KeyView> get_min_key(llfs::PageLoader& page_loader,  //
+  StatusOr<KeyView> get_min_key(llfs::PageLoader& page_loader,
                                 llfs::PinnedPage& pinned_page_out) const;
 
-  StatusOr<KeyView> get_max_key(llfs::PageLoader& page_loader,  //
+  StatusOr<KeyView> get_max_key(llfs::PageLoader& page_loader,
                                 llfs::PinnedPage& pinned_page_out) const;
 
   SubtreeViability get_viability() const;
 
-  StatusOr<ValueView> find_key(llfs::PageLoader& page_loader,      //
-                               llfs::PinnedPage& pinned_page_out,  //
+  StatusOr<ValueView> find_key(llfs::PageLoader& page_loader,
+                               llfs::PinnedPage& pinned_page_out,
                                const KeyView& key) const;
+
+  StatusOr<ValueView> find_key_filtered(FilteredKeyQuery& query) const;
 
   std::function<void(std::ostream&)> dump(i32 detail_level = 1) const;
 
@@ -73,6 +76,10 @@ struct Subtree {
   StatusOr<Subtree> try_split(llfs::PageLoader& page_loader);
 
   bool is_serialized() const;
+
+  /** \brief If this Subtree is serialized, returns a clone of it; otherwise panic.
+   */
+  Subtree clone_serialized_or_panic() const;
 
   Status start_serialize(TreeSerializeContext& context);
 

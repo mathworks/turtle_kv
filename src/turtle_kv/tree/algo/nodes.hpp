@@ -1,5 +1,7 @@
 #pragma once
 
+#include <turtle_kv/tree/filtered_key_query.hpp>
+
 #include <turtle_kv/core/algo/tuning_defaults.hpp>
 #include <turtle_kv/core/edit_view.hpp>
 #include <turtle_kv/core/key_view.hpp>
@@ -200,6 +202,16 @@ struct NodeAlgorithms {
     }
 
     return {std::move(*value)};
+  }
+
+  /** \brief Executes a point query, using page filters to skip leaf pages where the key is known
+   * not to be.
+   */
+  StatusOr<ValueView> find_key_filtered(FilteredKeyQuery& query)
+  {
+    return NodeAlgorithms<const FilteredQueryNodeWrapper<NodeT>>{
+        FilteredQueryNodeWrapper<NodeT>{this->node_, query}}
+        .find_key(*query.page_loader, *query.pinned_page_out, query.key());
   }
 
   /** \brief Splits the given level at the given key, placing the lower and upper halves in

@@ -176,4 +176,14 @@ StatusOr<Checkpoint> Checkpoint::flush_batch(batt::WorkerPool& worker_pool,
   };
 }
 
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Checkpoint Checkpoint::clone() const noexcept
+{
+  return Checkpoint{this->root_id_,
+                    std::make_shared<Subtree>(this->tree_->clone_serialized_or_panic()),
+                    this->batch_upper_bound_,
+                    this->clone_checkpoint_lock()};
+}
+
 }  // namespace turtle_kv

@@ -51,8 +51,8 @@ class TreeOptions
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   static constexpr u16 kDefaultFilterBitsPerKey = 12;
-  static constexpr u32 kDefaultKeySizeHint = 32;
-  static constexpr u32 kDefaultValueSizeHint = 80;
+  static constexpr u32 kDefaultKeySizeHint = 24;
+  static constexpr u32 kDefaultValueSizeHint = 100;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 

@@ -367,51 +367,33 @@ struct SegmentedLevelAlgorithms {
     this->for_each_active_segment_in(
         key_pivot_i,
         [&](const SegmentT& segment) -> Optional<batt::seq::LoopControl> {
-          // We need the actual page at this point to go proceed.
-          //
-          StatusOr<PinnedPageT> pinned_leaf_page =
-              segment.load_leaf_page(this->page_loader_, llfs::PinPageToJob::kDefault);
+          return in_segment(segment).find_key(this->page_loader_,
+                                              pinned_page_out,
+                                              this->level_,
+                                              key,
+                                              key_pivot_i,
+                                              &result);
+        });
 
-          if (!pinned_leaf_page.ok()) {
-            result = pinned_leaf_page.status();
-            return batt::seq::LoopControl::kBreak;
-          }
-          pinned_page_out = std::move(*pinned_leaf_page);
+    return result;
+  }
 
-          // Get the structured view of the page data.
-          //
-          const PackedLeafPage& leaf_page = PackedLeafPage::view_of(pinned_page_out);
+  StatusOr<ValueView> find_key_filtered(i32 key_pivot_i, FilteredKeyQuery& query)
+  {
+    StatusOr<ValueView> result{Status{batt::StatusCode::kNotFound}};
 
-          // Do a point query inside the page for the search key.
-          //
-          const PackedKeyValue* found = leaf_page.find_key(key);
-          if (!found) {
-            //
-            // The key is not in this segment!  Keep searching...
-            //
+    this->for_each_active_segment_in(
+        key_pivot_i,
+        [&](const SegmentT& segment) -> Optional<batt::seq::LoopControl> {
+          if (query.reject_page(segment.get_leaf_page_id())) {
             return batt::seq::LoopControl::kContinue;
           }
-
-          // At this point we know the key *is* present in this segment, but it may have
-          // been flushed out of the level.  Calculate the found key index and compare
-          // against the flushed item upper bound for our pivot.
-          //
-          const usize key_index_in_leaf = std::distance(leaf_page.items_begin(), found);
-          const usize flushed_upper_bound =
-              segment.get_flushed_item_upper_bound(this->level_, key_pivot_i);
-
-          if (key_index_in_leaf < flushed_upper_bound) {
-            //
-            // Key was found, but it has been flushed from this segment.  Since keys are
-            // unique within a level, we can stop at this point and return kNotFound.
-            //
-            return batt::seq::LoopControl::kBreak;
-          }
-
-          // Found!
-          //
-          result = get_value(*found);
-          return batt::seq::LoopControl::kBreak;
+          return in_segment(segment).find_key(*query.page_loader,
+                                              *query.pinned_page_out,
+                                              this->level_,
+                                              query.key(),
+                                              key_pivot_i,
+                                              &result);
         });
 
     return result;
