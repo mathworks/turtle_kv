@@ -23,6 +23,12 @@ class TurtleKvRecipe(ConanFile):
         "src/**/*.ipp",
         "src/*.cpp",
         "src/**/*.cpp",
+        "bench/*.cpp",
+        "bench/*.hpp",
+        "bench/*.ipp",
+        "bench/**/*.cpp",
+        "bench/**/*.hpp",
+        "bench/**/*.ipp",
     ]
 
     #+++++++++++-+-+--+----- --- -- -  -  -   -

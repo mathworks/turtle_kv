@@ -121,8 +121,9 @@ TEST(KVStoreTest, StdMapWorkloadTest)
 {
   StdMapTable table;
 
-  auto [op_count, _] =
-      run_workload(std::filesystem::path{"data/workloads/workload-abcdef.test.txt"}, table);
+  auto [op_count, _] = run_workload(
+      get_project_file(std::filesystem::path{"data/workloads/workload-abcdef.test.txt"}),
+      table);
 
   EXPECT_GT(op_count, 100000);
 

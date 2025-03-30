@@ -114,9 +114,9 @@ int main(int argc, char** argv)
             LOG(INFO) << BATT_INSPECT(chi) << " | " << time_points[i].label << " " << rate
                       << " ops/sec";
           }
-
-          LOG(INFO) << kv_store.debug_info();
         }
+
+        LOG(INFO) << kv_store.debug_info();
       },
       "main",
   };
