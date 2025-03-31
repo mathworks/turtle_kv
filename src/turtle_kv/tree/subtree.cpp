@@ -478,6 +478,28 @@ StatusOr<Subtree> Subtree::try_split(llfs::PageLoader& page_loader)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+Status Subtree::try_flush(batt::WorkerPool& worker_pool,
+                          llfs::PageLoader& page_loader,
+                          const batt::CancelToken& cancel_token)
+{
+  return batt::case_of(
+      this->impl,
+
+      [&](const llfs::PageIdSlot& page_id_slot [[maybe_unused]]) -> Status {
+        return {batt::StatusCode::kUnimplemented};
+      },
+
+      [&](const std::unique_ptr<InMemoryLeaf>& leaf [[maybe_unused]]) -> Status {
+        return OkStatus();
+      },
+
+      [&](const std::unique_ptr<InMemoryNode>& node) -> Status {
+        return node->try_flush(worker_pool, page_loader, cancel_token);
+      });
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 llfs::PackedPageId Subtree::packed_page_id_or_panic() const
 {
   BATT_CHECK((batt::is_case<llfs::PageIdSlot>(this->impl)));

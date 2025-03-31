@@ -75,6 +75,12 @@ struct Subtree {
    */
   StatusOr<Subtree> try_split(llfs::PageLoader& page_loader);
 
+  /** \brief Attempt to make the root viable by flushing a batch.
+   */
+  Status try_flush(batt::WorkerPool& worker_pool,
+                   llfs::PageLoader& page_loader,
+                   const batt::CancelToken& cancel_token);
+
   bool is_serialized() const;
 
   /** \brief If this Subtree is serialized, returns a clone of it; otherwise panic.

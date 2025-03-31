@@ -433,6 +433,16 @@ Status KVStore::flush_checkpoint() noexcept
   batt::Grant checkpoint_token = BATT_OK_RESULT_OR_PANIC(
       this->checkpoint_token_pool_->issue_grant(1, batt::WaitForResource::kFalse));
 
+  // Save the old checkpoint's slot lower bound so we can trim to it later.
+  //
+  Optional<llfs::slot_offset_type> prev_checkpoint_slot;
+  {
+    Optional<llfs::SlotRange> prev_slot_range = this->base_checkpoint_.slot_range();
+    if (prev_slot_range) {
+      prev_checkpoint_slot = prev_slot_range->lower_bound;
+    }
+  }
+
   // Serialize all pages and create the job.
   //
   StatusOr<std::unique_ptr<CheckpointJob>> checkpoint_job =                   //
@@ -482,6 +492,13 @@ Status KVStore::flush_checkpoint() noexcept
   this->query_page_loader_.emplace(this->page_cache());
 
   BATT_CHECK(this->base_checkpoint_.tree()->is_serialized());
+
+  // Trim the checkpoint volume to free old pages.
+  //
+  if (prev_checkpoint_slot) {
+    LOG_FIRST_N(INFO, 1) << "Trimming checkpoint log to " << prev_checkpoint_slot;
+    BATT_REQUIRE_OK(this->checkpoint_log_->trim(*prev_checkpoint_slot));
+  }
 
   return OkStatus();
 }

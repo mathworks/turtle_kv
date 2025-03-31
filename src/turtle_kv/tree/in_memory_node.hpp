@@ -29,12 +29,20 @@ namespace turtle_kv {
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 //
 struct InMemoryNode {
+  using Self = InMemoryNode;
+
   static constexpr usize kMaxLevels = 6;
+  static constexpr usize kMaxPivotCount = 63;
+  static constexpr usize kMaxSegmentCount = kMaxPivotCount - 1;
 
   struct UpdateBuffer {
+    using Self = UpdateBuffer;
+
     struct SegmentedLevel;
 
     struct Segment {
+      using Self = Segment;
+
       /** \brief The id of the leaf page for this segment.
        */
       llfs::PageIdSlot page_id_slot;
@@ -138,6 +146,8 @@ struct InMemoryNode {
     };
 
     struct EmptyLevel {
+      using Self = EmptyLevel;
+
       void drop_after_pivot(i32 split_pivot_i [[maybe_unused]],
                             const KeyView& split_pivot_key [[maybe_unused]])
       {
@@ -152,7 +162,10 @@ struct InMemoryNode {
     };
 
     struct SegmentedLevel {
+      using Self = SegmentedLevel;
       using Segment = InMemoryNode::UpdateBuffer::Segment;
+
+      //+++++++++++-+-+--+----- --- -- -  -  -   -
 
       SmallVec<Segment, 32> segments;
 
@@ -219,6 +232,10 @@ struct InMemoryNode {
     };
 
     struct MergedLevel {
+      using Self = MergedLevel;
+
+      //+++++++++++-+-+--+----- --- -- -  -  -   -
+
       MergeCompactor::ResultSet</*decay_to_items=*/false> result_set;
       std::vector<TreeSerializeContext::BuildPageJobId> segment_future_ids_;
 
@@ -247,12 +264,19 @@ struct InMemoryNode {
 
       usize estimate_segment_count(const TreeOptions& tree_options) const
       {
-        const usize size_per_segment = tree_options.flush_size() - tree_options.max_item_size();
+        const usize capacity_per_segment = tree_options.flush_size() - tree_options.max_item_size();
+        const usize packed_size = this->result_set.get_packed_size();
+        const usize estimated = (packed_size + capacity_per_segment - 1) / capacity_per_segment;
 
-        return (this->result_set.get_packed_size() + size_per_segment - 1) / size_per_segment;
+        BATT_CHECK_GE(estimated * capacity_per_segment, packed_size);
+        BATT_CHECK_LT((estimated - 1) * capacity_per_segment, packed_size);
+
+        return estimated;
       }
 
-      Status start_serialize(TreeSerializeContext& context);
+      /** \brief Returns the number of segment leaf page build jobs added to the context.
+       */
+      StatusOr<usize> start_serialize(TreeSerializeContext& context);
 
       StatusOr<SegmentedLevel> finish_serialize(const InMemoryNode& node,
                                                 TreeSerializeContext& context);
@@ -266,6 +290,8 @@ struct InMemoryNode {
   };
 
   struct PivotPendingBytes {
+    using Self = PivotPendingBytes;
+
     usize pivot_index;
     usize pending_bytes;
   };
@@ -409,6 +435,12 @@ struct InMemoryNode {
   /** \brief Split the node and return its new upper half (sibling).
    */
   StatusOr<std::unique_ptr<InMemoryNode>> try_split(llfs::PageLoader& page_loader);
+
+  /** \brief Attempt to make the node viable by flushing a batch.
+   */
+  Status try_flush(batt::WorkerPool& worker_pool,
+                   llfs::PageLoader& page_loader,
+                   const batt::CancelToken& cancel_token);
 
   /** \brief Returns true iff there are no MergedLevels or unserialized Subtree children in this
    * node.

@@ -321,6 +321,23 @@ Status InMemoryNode::flush_if_necessary(BatchUpdate& update, bool force_flush)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+Status InMemoryNode::try_flush(batt::WorkerPool& worker_pool,
+                               llfs::PageLoader& page_loader,
+                               const batt::CancelToken& cancel_token)
+{
+  BatchUpdate fake_update{
+      .worker_pool = worker_pool,
+      .page_loader = page_loader,
+      .cancel_token = cancel_token,
+      .result_set = {},
+      .edit_size_totals = None,
+  };
+
+  return this->flush_if_necessary(fake_update, /*force_flush=*/true);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 Status InMemoryNode::flush_to_pivot(BatchUpdate& update, i32 pivot_i)
 {
   Interval<KeyView> pivot_key_range = in_node(*this).get_pivot_key_range(pivot_i);
@@ -412,7 +429,17 @@ Status InMemoryNode::flush_to_pivot(BatchUpdate& update, i32 pivot_i)
       [&](const NeedsSplit& needs_split) -> Status {
         if (needs_split.too_many_segments && !needs_split.too_many_pivots &&
             !needs_split.keys_too_large) {
-          BATT_PANIC() << "TODO [tastolfi 2025-03-18] implement me: try_flush";
+          // If the only thing that's stopping the child from being viable is that it has too many
+          // buffer segments, then attempt to fix the problem by flushing.
+          //
+          Status child_flush_status =
+              child.try_flush(update.worker_pool, update.page_loader, update.cancel_token);
+
+          if (child_flush_status.ok() && batt::is_case<Viable>(child.get_viability())) {
+            return OkStatus();
+          }
+          //
+          // else - fall through and try a regular split.
         }
 
         StatusOr<Subtree> sibling = child.try_split(update.page_loader);
@@ -593,7 +620,7 @@ usize InMemoryNode::segment_count() const
 {
   usize total = 0;
   for (const Level& level : this->update_buffer.levels) {
-    batt::case_of(
+    total += batt::case_of(
         level,
         [](const EmptyLevel&) -> usize {
           return 0;
@@ -660,8 +687,8 @@ SubtreeViability InMemoryNode::get_viability() const
   const usize counts_size = this->flushed_item_counts_byte_size();
   const bool variables_too_large = (keys_size + counts_size) > variable_space;
 
-  needs_split.too_many_pivots = (this->pivot_count() > 63);
-  needs_split.too_many_segments = (this->segment_count() > this->pivot_count() - 1);
+  needs_split.too_many_pivots = (this->pivot_count() > Self::kMaxPivotCount);
+  needs_split.too_many_segments = (this->segment_count() > Self::kMaxSegmentCount);
   needs_split.keys_too_large = (keys_size != 0 && variables_too_large);
   needs_split.flushed_item_counts_too_large = (counts_size != 0 && variables_too_large);
 
@@ -688,10 +715,10 @@ bool InMemoryNode::is_viable(IsRoot is_root) const
   return batt::case_of(
       this->get_viability(),
       [](const Viable&) {
-        return true;
+        return /*is_viable()=*/true;
       },
       [](const NeedsSplit&) {
-        return true;
+        return /*is_viable()=*/false;
       },
       [is_root](const NeedsMerge& needs_merge) {
         return is_root && !needs_merge.single_pivot;
@@ -914,6 +941,10 @@ bool InMemoryNode::is_packable() const
 //
 Status InMemoryNode::start_serialize(TreeSerializeContext& context)
 {
+  BATT_CHECK(!batt::is_case<NeedsSplit>(this->get_viability()));
+
+  usize total_segments = 0;
+
   for (Level& level : this->update_buffer.levels) {
     BATT_REQUIRE_OK(    //
         batt::case_of(  //
@@ -921,13 +952,18 @@ Status InMemoryNode::start_serialize(TreeSerializeContext& context)
             [](const EmptyLevel&) -> Status {
               return OkStatus();
             },
-            [&context](MergedLevel& merged_level) -> Status {
-              return merged_level.start_serialize(context);
+            [&context, &total_segments](MergedLevel& merged_level) -> Status {
+              BATT_ASSIGN_OK_RESULT(usize segment_count, merged_level.start_serialize(context));
+              total_segments += segment_count;
+              return OkStatus();
             },
-            [](const SegmentedLevel& segmented_level) -> Status {
+            [&total_segments](const SegmentedLevel& segmented_level) -> Status {
+              total_segments += segmented_level.segment_count();
               return OkStatus();
             }));
   }
+
+  BATT_CHECK_LE(total_segments, Self::kMaxSegmentCount);
 
   for (Subtree& child : this->children) {
     BATT_REQUIRE_OK(child.start_serialize(context));
@@ -1009,7 +1045,7 @@ StatusOr<llfs::PinnedPage> Segment::load_leaf_page(llfs::PageLoader& page_loader
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status MergedLevel::start_serialize(TreeSerializeContext& context)
+StatusOr<usize> MergedLevel::start_serialize(TreeSerializeContext& context)
 {
   batt::RunningTotal running_total =
       compute_running_total(context.worker_pool(), this->result_set, DecayToItem<false>{});
@@ -1018,6 +1054,8 @@ Status MergedLevel::start_serialize(TreeSerializeContext& context)
                                       MinPartSize{context.tree_options().flush_size() / 4},
                                       MaxPartSize{context.tree_options().flush_size()},
                                       MaxItemSize{context.tree_options().max_item_size()});
+
+  BATT_CHECK_EQ(running_total.back() - running_total.front(), this->result_set.get_packed_size());
 
   for (const Interval<usize>& part_extents : page_parts) {
     BATT_ASSIGN_OK_RESULT(
@@ -1036,7 +1074,7 @@ Status MergedLevel::start_serialize(TreeSerializeContext& context)
     this->segment_future_ids_.emplace_back(id);
   }
 
-  return OkStatus();
+  return page_parts.size();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
