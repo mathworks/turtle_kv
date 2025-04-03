@@ -207,6 +207,8 @@ StatusOr<std::unique_ptr<CheckpointJob>> CheckpointGenerator::finalize_checkpoin
   BATT_CHECK_NOT_NULLPTR(this->job_)
       << "At least one batch must be pushed to the generator to finalize a new checkpoint!";
 
+  const usize batch_count = this->current_batch_count_;
+
   BATT_REQUIRE_OK(this->serialize_checkpoint());
 
   this->clear_old_roots();
@@ -219,6 +221,7 @@ StatusOr<std::unique_ptr<CheckpointJob>> CheckpointGenerator::finalize_checkpoin
   checkpoint_job->token.emplace(std::move(token));
   checkpoint_job->checkpoint_log = std::addressof(this->checkpoint_volume_);
   checkpoint_job->checkpoint = this->base_checkpoint_.clone();
+  checkpoint_job->batch_count = batch_count;
 
   checkpoint_job->packed_checkpoint.emplace(
       llfs::PackAsVariant<CheckpointLogEvent, PackedCheckpoint>{

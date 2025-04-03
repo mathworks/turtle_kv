@@ -3,6 +3,7 @@
 
 #include <turtle_kv/tree/algo/nodes.hpp>
 #include <turtle_kv/tree/algo/segmented_levels.hpp>
+#include <turtle_kv/tree/filter_builder.hpp>
 #include <turtle_kv/tree/leaf_page_view.hpp>
 #include <turtle_kv/tree/node_page_view.hpp>
 #include <turtle_kv/tree/segmented_level_scanner.hpp>
@@ -1057,16 +1058,27 @@ StatusOr<usize> MergedLevel::start_serialize(TreeSerializeContext& context)
 
   BATT_CHECK_EQ(running_total.back() - running_total.front(), this->result_set.get_packed_size());
 
+  auto filter_bits_per_key = context.tree_options().filter_bits_per_key();
+
   for (const Interval<usize>& part_extents : page_parts) {
     BATT_ASSIGN_OK_RESULT(
         TreeSerializeContext::BuildPageJobId id,
         context.async_build_page(
             context.tree_options().leaf_size(),
             packed_leaf_page_layout_id(),
-            [this,
-             part_extents](llfs::PageBuffer& page_buffer) -> TreeSerializeContext::PinPageToJobFn {
+            [this, part_extents, filter_bits_per_key](
+                llfs::PageCache& page_cache,
+                llfs::PageBuffer& page_buffer) -> TreeSerializeContext::PinPageToJobFn {
               const auto items_slice = this->result_set.get();
               const auto page_items = batt::slice_range(items_slice, part_extents);
+
+              Status filter_status = build_bloom_filter_for_leaf(page_cache,
+                                                                 filter_bits_per_key,
+                                                                 page_buffer.page_id(),
+                                                                 items_slice);
+              if (!filter_status.ok()) {
+                LOG_FIRST_N(WARNING, 1) << "Failed to build bloom filter: " << filter_status;
+              }
 
               return build_leaf_page_in_job(page_buffer, page_items);
             }));

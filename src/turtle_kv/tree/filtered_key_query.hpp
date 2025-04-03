@@ -26,6 +26,8 @@ struct FilteredKeyQuery {
     CountMetric<u64> filter_page_load_failed_count;
     CountMetric<u64> page_id_mismatch_count;
     CountMetric<u64> filter_reject_count;
+    LatencyMetric reject_page_latency;
+    LatencyMetric filter_lookup_latency;
   };
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -97,6 +99,8 @@ struct FilteredKeyQuery {
    */
   bool reject_page(llfs::PageId page_id_to_reject, const Optional<llfs::PageId>& filter_page_id)
   {
+    LatencyTimer timer{Every2ToTheConst<16>{}, Self::metrics().reject_page_latency};
+
     Self::metrics().total_filter_query_count.add(1);
 
     if (!filter_page_id) {
@@ -132,7 +136,10 @@ struct FilteredKeyQuery {
 
     // If the filter says yes, the query key might be in the set; can't reject.
     //
-    const bool reject = (filter_page_view.bloom_filter().query(this->bloom_filter_query) == false);
+    const bool reject = BATT_COLLECT_LATENCY_SAMPLE(
+        Every2ToTheConst<16>{},
+        Self::metrics().filter_lookup_latency,
+        (filter_page_view.bloom_filter().query(this->bloom_filter_query) == false));
 
     if (reject) {
       Self::metrics().filter_reject_count.add(1);

@@ -5,8 +5,7 @@
 
 #include <turtle_kv/core/edit_slice.hpp>
 
-#include <turtle_kv/util/bit_ops.hpp>
-
+#include <turtle_kv/import/bit_ops.hpp>
 #include <turtle_kv/import/int_types.hpp>
 #include <turtle_kv/import/optional.hpp>
 #include <turtle_kv/import/status.hpp>

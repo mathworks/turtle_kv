@@ -12,8 +12,7 @@
 #include <turtle_kv/core/merge_compactor.hpp>
 #include <turtle_kv/core/strong_types.hpp>
 
-#include <turtle_kv/util/bit_ops.hpp>
-
+#include <turtle_kv/import/bit_ops.hpp>
 #include <turtle_kv/import/int_types.hpp>
 #include <turtle_kv/import/seq.hpp>
 #include <turtle_kv/import/small_vec.hpp>

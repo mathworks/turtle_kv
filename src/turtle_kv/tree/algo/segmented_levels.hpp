@@ -5,8 +5,7 @@
 #include <turtle_kv/tree/packed_leaf_page.hpp>
 #include <turtle_kv/tree/segmented_level_scanner.hpp>
 
-#include <turtle_kv/util/bit_ops.hpp>
-
+#include <turtle_kv/import/bit_ops.hpp>
 #include <turtle_kv/import/interval.hpp>
 #include <turtle_kv/import/status.hpp>
 

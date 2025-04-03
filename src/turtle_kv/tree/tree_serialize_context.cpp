@@ -115,7 +115,7 @@ void TreeSerializeContext::build_pages_task_fn()
       continue;
     }
 
-    build.pin_page_fn = build.build_page_fn(**page_buffer);
+    build.pin_page_fn = build.build_page_fn(this->page_job_.cache(), **page_buffer);
   }
 }
 

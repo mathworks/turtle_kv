@@ -1,6 +1,7 @@
 #include <turtle_kv/tree/in_memory_leaf.hpp>
 //
 
+#include <turtle_kv/tree/filter_builder.hpp>
 #include <turtle_kv/tree/leaf_page_view.hpp>
 #include <turtle_kv/tree/packed_leaf_page.hpp>
 #include <turtle_kv/tree/the_key.hpp>
@@ -157,12 +158,24 @@ Status InMemoryLeaf::start_serialize(TreeSerializeContext& context)
       << BATT_INSPECT(this->get_viability()) << BATT_INSPECT(this->get_items_size())
       << BATT_INSPECT(this->tree_options.flush_size());
 
+  auto filter_bits_per_key = context.tree_options().filter_bits_per_key();
+
   BATT_ASSIGN_OK_RESULT(
       const u64 future_id,
       context.async_build_page(
           this->tree_options.leaf_size(),
           packed_leaf_page_layout_id(),
-          [this](llfs::PageBuffer& page_buffer) -> StatusOr<TreeSerializeContext::PinPageToJobFn> {
+          [this, filter_bits_per_key](llfs::PageCache& page_cache, llfs::PageBuffer& page_buffer)
+              -> StatusOr<TreeSerializeContext::PinPageToJobFn> {
+            Status filter_status = build_bloom_filter_for_leaf(page_cache,
+                                                               filter_bits_per_key,
+                                                               page_buffer.page_id(),
+                                                               this->result_set.get());
+
+            if (!filter_status.ok()) {
+              LOG_FIRST_N(WARNING, 1) << "Failed to build bloom filter: " << filter_status;
+            }
+
             // TODO [tastolfi 2025-03-27] decay items
             //
             return build_leaf_page_in_job(page_buffer, this->result_set.get());

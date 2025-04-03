@@ -50,6 +50,8 @@ struct CheckpointJob {
 
   batt::Promise<llfs::SlotRange> promise;
 
+  usize batch_count = 0;
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 };
 

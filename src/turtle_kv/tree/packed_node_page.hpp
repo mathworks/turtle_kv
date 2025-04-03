@@ -6,10 +6,10 @@
 #include <turtle_kv/core/key_view.hpp>
 #include <turtle_kv/core/value_view.hpp>
 
-#include <turtle_kv/util/bit_ops.hpp>
 #include <turtle_kv/util/page_buffers.hpp>
 #include <turtle_kv/util/placement.hpp>
 
+#include <turtle_kv/import/bit_ops.hpp>
 #include <turtle_kv/import/int_types.hpp>
 #include <turtle_kv/import/seq.hpp>
 #include <turtle_kv/import/slice.hpp>

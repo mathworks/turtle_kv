@@ -8,6 +8,7 @@
 #include <turtle_kv/core/value_view.hpp>
 
 #include <turtle_kv/import/int_types.hpp>
+#include <turtle_kv/import/interval.hpp>
 #include <turtle_kv/import/slice.hpp>
 
 #include <batteries/algo/parallel_running_total.hpp>

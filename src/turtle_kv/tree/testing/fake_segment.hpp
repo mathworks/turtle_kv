@@ -2,8 +2,7 @@
 
 #include <turtle_kv/tree/testing/fake_page_loader.hpp>
 
-#include <turtle_kv/util/bit_ops.hpp>
-
+#include <turtle_kv/import/bit_ops.hpp>
 #include <turtle_kv/import/int_types.hpp>
 
 #include <llfs/page_id.hpp>

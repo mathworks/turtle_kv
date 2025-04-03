@@ -11,6 +11,8 @@
 
 #include <turtle_kv/core/table.hpp>
 
+#include <turtle_kv/util/pipeline_channel.hpp>
+
 #include <turtle_kv/import/int_types.hpp>
 
 #include <llfs/storage_context.hpp>
@@ -18,10 +20,13 @@
 
 #include <batteries/small_vec.hpp>
 
+#include <absl/synchronization/mutex.h>
+
 #include <boost/intrusive_ptr.hpp>
 
 #include <filesystem>
 #include <memory>
+#include <thread>
 
 namespace turtle_kv {
 
@@ -60,6 +65,12 @@ class KVStore : public Table
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   ~KVStore() noexcept;
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  void halt();
+
+  void join();
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -106,9 +117,13 @@ class KVStore : public Table
 
   Status update_checkpoint() noexcept;
 
-  Status flush_checkpoint() noexcept;
-
   void info_task_main() noexcept;
+
+  void memtable_compact_thread_main();
+
+  void checkpoint_update_thread_main();
+
+  void checkpoint_flush_thread_main();
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -120,13 +135,15 @@ class KVStore : public Table
 
   std::atomic<usize> checkpoint_distance_{1};
 
+  absl::Mutex base_checkpoint_mutex_;
+
   std::unique_ptr<llfs::Volume> checkpoint_log_;
 
-  boost::intrusive_ptr<MemTable> mem_table_;
+  boost::intrusive_ptr<MemTable> mem_table_;  // ABSL_GUARDED_BY(base_checkpoint_mutex_);
 
   // Recent MemTables that have been compacted/finalized; newest=back, oldest=front.
   //
-  std::vector<boost::intrusive_ptr<MemTable>> deltas_;
+  std::vector<boost::intrusive_ptr<MemTable>> deltas_ ABSL_GUARDED_BY(base_checkpoint_mutex_);
 
   std::shared_ptr<batt::Grant::Issuer> checkpoint_token_pool_;
 
@@ -134,7 +151,7 @@ class KVStore : public Table
 
   Optional<PinningPageLoader> query_page_loader_{this->page_cache()};
 
-  Checkpoint base_checkpoint_;
+  Checkpoint base_checkpoint_ ABSL_GUARDED_BY(base_checkpoint_mutex_);
 
   CheckpointGenerator checkpoint_generator_;
 
@@ -143,6 +160,20 @@ class KVStore : public Table
   batt::Watch<bool> halt_{false};
 
   batt::Task info_task_;
+
+  std::atomic<usize> query_count_{0};
+
+  PipelineChannel<boost::intrusive_ptr<MemTable>> memtable_compact_channel_;
+
+  PipelineChannel<std::unique_ptr<DeltaBatch>> checkpoint_update_channel_;
+
+  PipelineChannel<std::unique_ptr<CheckpointJob>> checkpoint_flush_channel_;
+
+  std::thread memtable_compact_thread_;
+
+  std::thread checkpoint_update_thread_;
+
+  std::thread checkpoint_flush_thread_;
 };
 
 }  // namespace turtle_kv

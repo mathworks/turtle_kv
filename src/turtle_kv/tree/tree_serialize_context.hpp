@@ -30,7 +30,8 @@ class TreeSerializeContext
       UniqueSmallFn<StatusOr<llfs::PinnedPage>(llfs::PageCacheJob& job,
                                                std::shared_ptr<llfs::PageBuffer>&& page_buffer)>;
 
-  using BuildPageFn = UniqueSmallFn<StatusOr<PinPageToJobFn>(llfs::PageBuffer& page_buffer)>;
+  using BuildPageFn = UniqueSmallFn<StatusOr<PinPageToJobFn>(llfs::PageCache& page_cache,
+                                                             llfs::PageBuffer& page_buffer)>;
 
   struct BuildPageJob {
     llfs::PageSize page_size;

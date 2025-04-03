@@ -13,7 +13,7 @@
 
 #include <turtle_kv/tree/segmented_level_builder.hpp>
 
-#include <turtle_kv/util/bit_ops.hpp>
+#include <turtle_kv/import/bit_ops.hpp>
 
 #include <llfs/testing/test_config.hpp>
 //

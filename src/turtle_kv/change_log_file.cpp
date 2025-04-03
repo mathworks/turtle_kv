@@ -171,16 +171,12 @@ void ChangeLogFile::update_lower_bound(i64 update_upper_bound) noexcept
   {
     absl::MutexLock lock{&this->lower_bound_mutex_};
 
-    i64 new_lower_bound = this->lower_bound_.load();
-
-    old_lower_bound = new_lower_bound;
+    i64 observed_lower_bound = this->lower_bound_.load();
+    i64 new_lower_bound = observed_lower_bound;
+    old_lower_bound = observed_lower_bound;
 
     i64 addr = new_lower_bound % this->config_.block_count;
-    for (;;) {
-      if (new_lower_bound >= update_upper_bound) {
-        BATT_CHECK_EQ(new_lower_bound, update_upper_bound);
-        break;
-      }
+    while (new_lower_bound < update_upper_bound) {
       if (this->read_lock_counter_per_block_[addr]->load() > 0) {
         break;
       }
@@ -192,7 +188,12 @@ void ChangeLogFile::update_lower_bound(i64 update_upper_bound) noexcept
       ++n_blocks_freed;
     }
 
-    BATT_CHECK_EQ(old_lower_bound, this->lower_bound_.exchange(new_lower_bound));
+    while (observed_lower_bound < new_lower_bound) {
+      if (this->lower_bound_.compare_exchange_weak(observed_lower_bound, new_lower_bound)) {
+        break;
+      }
+    }
+
     BATT_CHECK_EQ(new_lower_bound - old_lower_bound, BATT_CHECKED_CAST(i64, n_blocks_freed));
   }
 
