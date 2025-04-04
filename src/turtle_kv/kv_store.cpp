@@ -639,6 +639,12 @@ std::function<void(std::ostream&)> KVStore::debug_info() noexcept
         << "\n"                                                                             //
         << BATT_INSPECT(filter_false_positive_rate) << "\n"                                 //
         << "\n"                                                                             //
+        << BATT_INSPECT(BloomFilterMetrics::instance().word_count_stats) << "\n"            //
+        << BATT_INSPECT(BloomFilterMetrics::instance().byte_size_stats) << "\n"             //
+        << BATT_INSPECT(BloomFilterMetrics::instance().bit_size_stats) << "\n"              //
+        << BATT_INSPECT(BloomFilterMetrics::instance().bit_count_stats) << "\n"             //
+        << BATT_INSPECT(BloomFilterMetrics::instance().item_count_stats) << "\n"            //
+        << "\n"                                                                             //
         << BATT_INSPECT(FilteredKeyQuery::metrics().reject_page_latency) << "\n"            //
         << BATT_INSPECT(FilteredKeyQuery::metrics().filter_lookup_latency) << "\n"          //
         << BATT_INSPECT(FilteredKeyQuery::metrics().total_filter_query_count) << "\n"       //

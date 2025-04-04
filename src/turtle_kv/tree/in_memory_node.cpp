@@ -1084,7 +1084,7 @@ StatusOr<usize> MergedLevel::start_serialize(TreeSerializeContext& context)
               Status filter_status = build_bloom_filter_for_leaf(page_cache,
                                                                  filter_bits_per_key,
                                                                  page_buffer.page_id(),
-                                                                 items_slice);
+                                                                 page_items);
               if (!filter_status.ok()) {
                 LOG_FIRST_N(WARNING, 1) << "Failed to build bloom filter: " << filter_status;
               }
@@ -1106,6 +1106,12 @@ StatusOr<usize> MergedLevel::start_serialize(TreeSerializeContext& context)
 StatusOr<SegmentedLevel> MergedLevel::finish_serialize(const InMemoryNode& node,
                                                        TreeSerializeContext& context)
 {
+  BATT_CHECK_EQ(node.tree_options.filter_bits_per_key(),
+                context.tree_options().filter_bits_per_key());
+  BATT_CHECK_EQ(node.tree_options.filter_page_size(), context.tree_options().filter_page_size());
+  BATT_CHECK_EQ(node.tree_options.expected_items_per_leaf(),
+                context.tree_options().expected_items_per_leaf());
+
   SegmentedLevel segmented_level;
 
   const usize pivot_count = node.pivot_count();

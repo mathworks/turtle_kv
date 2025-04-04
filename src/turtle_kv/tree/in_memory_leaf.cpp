@@ -204,6 +204,12 @@ Status InMemoryLeaf::start_serialize(TreeSerializeContext& context)
 //
 StatusOr<llfs::PinnedPage> InMemoryLeaf::finish_serialize(TreeSerializeContext& context)
 {
+  BATT_CHECK_EQ(this->tree_options.filter_bits_per_key(),
+                context.tree_options().filter_bits_per_key());
+  BATT_CHECK_EQ(this->tree_options.filter_page_size(), context.tree_options().filter_page_size());
+  BATT_CHECK_EQ(this->tree_options.expected_items_per_leaf(),
+                context.tree_options().expected_items_per_leaf());
+
   u64 observed_id = this->future_id_.load();
 
   if (observed_id == ~u64{1}) {

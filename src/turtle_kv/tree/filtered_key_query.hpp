@@ -126,6 +126,14 @@ struct FilteredKeyQuery {
     const llfs::PageView& page_view = *pinned_filter_page;
     const auto& filter_page_view = static_cast<const llfs::BloomFilterPageView&>(page_view);
 
+    //+++++++++++-+-+--+----- --- -- -  -  -   -
+    // PARAOID CHECK - TODO [tastolfi 2025-04-04] remove once debugged.
+    //
+    if (false) {
+      filter_page_view.check_integrity();
+    }
+    //+++++++++++-+-+--+----- --- -- -  -  -   -
+
     // If we loaded the filter page, but it says it is for a different (src or leaf) page, we can't
     // reject.
     //
