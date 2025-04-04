@@ -165,8 +165,21 @@ Status InMemoryLeaf::start_serialize(TreeSerializeContext& context)
       context.async_build_page(
           this->tree_options.leaf_size(),
           packed_leaf_page_layout_id(),
-          [this, filter_bits_per_key](llfs::PageCache& page_cache, llfs::PageBuffer& page_buffer)
-              -> StatusOr<TreeSerializeContext::PinPageToJobFn> {
+          /*task_count=*/2,
+          [this, filter_bits_per_key](
+              usize task_i,
+              llfs::PageCache& page_cache,
+              llfs::PageBuffer& page_buffer) -> StatusOr<TreeSerializeContext::PinPageToJobFn> {
+            //----- --- -- -  -  -   -
+            // TODO [tastolfi 2025-03-27] decay items
+            //----- --- -- -  -  -   -
+
+            if (task_i == 0) {
+              return build_leaf_page_in_job(page_buffer, this->result_set.get());
+            }
+
+            BATT_CHECK_EQ(task_i, 1);
+
             Status filter_status = build_bloom_filter_for_leaf(page_cache,
                                                                filter_bits_per_key,
                                                                page_buffer.page_id(),
@@ -176,9 +189,10 @@ Status InMemoryLeaf::start_serialize(TreeSerializeContext& context)
               LOG_FIRST_N(WARNING, 1) << "Failed to build bloom filter: " << filter_status;
             }
 
-            // TODO [tastolfi 2025-03-27] decay items
-            //
-            return build_leaf_page_in_job(page_buffer, this->result_set.get());
+            return [](llfs::PageCacheJob&,
+                      std::shared_ptr<llfs::PageBuffer>&&) -> StatusOr<llfs::PinnedPage> {
+              return {llfs::PinnedPage{}};
+            };
           }));
 
   BATT_CHECK_EQ(this->future_id_.exchange(future_id), ~u64{0});

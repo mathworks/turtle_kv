@@ -30,13 +30,15 @@ class TreeSerializeContext
       UniqueSmallFn<StatusOr<llfs::PinnedPage>(llfs::PageCacheJob& job,
                                                std::shared_ptr<llfs::PageBuffer>&& page_buffer)>;
 
-  using BuildPageFn = UniqueSmallFn<StatusOr<PinPageToJobFn>(llfs::PageCache& page_cache,
-                                                             llfs::PageBuffer& page_buffer)>;
+  using BuildPageFn = SmallFn<StatusOr<PinPageToJobFn>(usize task_i,
+                                                       llfs::PageCache& page_cache,
+                                                       llfs::PageBuffer& page_buffer)>;
 
   struct BuildPageJob {
     llfs::PageSize page_size;
     llfs::PageLayoutId page_layout_id;
     BuildPageFn build_page_fn;
+    usize task_i;
     batt::Promise<std::shared_ptr<llfs::PageBuffer>> new_page_promise;
     StatusOr<PinPageToJobFn> pin_page_fn;
     StatusOr<llfs::PinnedPage> pinned_page;
@@ -51,10 +53,25 @@ class TreeSerializeContext
 
     explicit BuildPageJob(llfs::PageSize size,
                           const llfs::PageLayoutId layout,
-                          BuildPageFn&& build_fn) noexcept
+                          BuildPageFn&& build_fn,
+                          usize task_i_arg) noexcept
         : page_size{size}
         , page_layout_id{layout}
         , build_page_fn{std::move(build_fn)}
+        , task_i{task_i_arg}
+    {
+    }
+
+    explicit BuildPageJob(llfs::PageSize size,
+                          const llfs::PageLayoutId layout,
+                          BuildPageFn&& build_fn,
+                          usize task_i_arg,
+                          const batt::Promise<std::shared_ptr<llfs::PageBuffer>>& promise) noexcept
+        : page_size{size}
+        , page_layout_id{layout}
+        , build_page_fn{std::move(build_fn)}
+        , task_i{task_i_arg}
+        , new_page_promise{promise}
     {
     }
   };
@@ -92,6 +109,7 @@ class TreeSerializeContext
 
   StatusOr<BuildPageJobId> async_build_page(usize page_size,
                                             const llfs::PageLayoutId& page_layout_id,
+                                            usize task_count,
                                             BuildPageFn&& build_page_fn);
 
   Status build_all_pages();

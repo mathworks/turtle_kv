@@ -21,13 +21,34 @@ using BuildPageJobId = TreeSerializeContext::BuildPageJobId;
 StatusOr<BuildPageJobId> TreeSerializeContext::async_build_page(
     usize page_size,
     const llfs::PageLayoutId& page_layout_id,
+    usize task_count,
     BuildPageFn&& build_page_fn)
 {
+  BATT_CHECK_GT(task_count, 0);
+
   BuildPageJobId id{this->queue_.size()};
 
-  this->queue_.emplace_back(llfs::PageSize{BATT_CHECKED_CAST(u32, page_size)},
-                            page_layout_id,
-                            std::move(build_page_fn));
+  if (task_count == 1) {
+    this->queue_.emplace_back(llfs::PageSize{BATT_CHECKED_CAST(u32, page_size)},
+                              page_layout_id,
+                              std::move(build_page_fn),
+                              /*task_i=*/0);
+  } else {
+    this->queue_.emplace_back(llfs::PageSize{BATT_CHECKED_CAST(u32, page_size)},
+                              page_layout_id,
+                              batt::make_copy(build_page_fn),
+                              /*task_i=*/0);
+
+    batt::Promise<std::shared_ptr<llfs::PageBuffer>> promise = this->queue_.back().new_page_promise;
+
+    for (usize task_i = 1; task_i < task_count; ++task_i) {
+      this->queue_.emplace_back(llfs::PageSize{BATT_CHECKED_CAST(u32, page_size)},
+                                page_layout_id,
+                                batt::make_copy(build_page_fn),
+                                task_i,
+                                promise);
+    }
+  }
 
   return id;
 }
@@ -51,6 +72,9 @@ Status TreeSerializeContext::build_all_pages()
 
     for (usize queue_i = 0; queue_i < queue_size; ++queue_i) {
       BuildPageJob& build = this->queue_[queue_i];
+      if (build.task_i != 0) {
+        continue;
+      }
 
       StatusOr<std::shared_ptr<llfs::PageBuffer>> page_buffer =
           this->page_job_.new_page(build.page_size,
@@ -115,7 +139,7 @@ void TreeSerializeContext::build_pages_task_fn()
       continue;
     }
 
-    build.pin_page_fn = build.build_page_fn(this->page_job_.cache(), **page_buffer);
+    build.pin_page_fn = build.build_page_fn(build.task_i, this->page_job_.cache(), **page_buffer);
   }
 }
 

@@ -1066,11 +1066,20 @@ StatusOr<usize> MergedLevel::start_serialize(TreeSerializeContext& context)
         context.async_build_page(
             context.tree_options().leaf_size(),
             packed_leaf_page_layout_id(),
+            /*task_count=*/2,
             [this, part_extents, filter_bits_per_key](
+                usize task_i,
                 llfs::PageCache& page_cache,
                 llfs::PageBuffer& page_buffer) -> TreeSerializeContext::PinPageToJobFn {
+              //----- --- -- -  -  -   -
               const auto items_slice = this->result_set.get();
               const auto page_items = batt::slice_range(items_slice, part_extents);
+
+              if (task_i == 0) {
+                return build_leaf_page_in_job(page_buffer, page_items);
+              }
+
+              BATT_CHECK_EQ(task_i, 1);
 
               Status filter_status = build_bloom_filter_for_leaf(page_cache,
                                                                  filter_bits_per_key,
@@ -1080,7 +1089,10 @@ StatusOr<usize> MergedLevel::start_serialize(TreeSerializeContext& context)
                 LOG_FIRST_N(WARNING, 1) << "Failed to build bloom filter: " << filter_status;
               }
 
-              return build_leaf_page_in_job(page_buffer, page_items);
+              return [](llfs::PageCacheJob&,
+                        std::shared_ptr<llfs::PageBuffer>&&) -> StatusOr<llfs::PinnedPage> {
+                return {llfs::PinnedPage{}};
+              };
             }));
 
     this->segment_future_ids_.emplace_back(id);

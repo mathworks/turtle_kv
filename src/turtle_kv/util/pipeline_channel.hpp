@@ -68,7 +68,7 @@ class PipelineChannel
     for (;;) {
       switch (observed_state) {
         case kStateEmpty: {
-          BATT_REQUIRE_OK(this->wait(observed_state));
+          BATT_REQUIRE_OK(this->wait(kStateEmpty));
           observed_state = this->state_.load();
           break;
         }
@@ -135,24 +135,16 @@ class PipelineChannel
  private:
   Status wait(u32 last_seen)
   {
-    for (;;) {
-      const int retval = batt::futex_wait(&this->state_, last_seen);
-      if (retval != 0 && errno == EAGAIN) {
-        continue;
-      }
-      return batt::status_from_retval(retval);
+    const i32 retval = batt::futex_wait(&this->state_, last_seen);
+    if (retval != 0 && errno == EAGAIN) {
+      return OkStatus();
     }
+    return batt::status_from_retval(retval);
   }
 
   Status notify()
   {
-    for (;;) {
-      const int retval = batt::futex_notify(&this->state_);
-      if (retval != 0 && errno == EAGAIN) {
-        continue;
-      }
-      return batt::status_from_retval(retval);
-    }
+    return batt::status_from_retval(batt::futex_notify(&this->state_));
   }
 
   std::atomic<u32> state_;
