@@ -223,6 +223,7 @@ std::string_view filter_page_file_name() noexcept
 
   if (this->tree_options_.filter_bits_per_key() != 0) {
     BATT_CHECK_OK(llfs::BloomFilterPageView::register_layout(this->page_cache()));
+    BATT_CHECK_OK(VqfFilterPageView::register_layout(this->page_cache()));
 
     Status status = this->page_cache().assign_filter_device(this->tree_options_.leaf_size(),
                                                             this->tree_options_.filter_page_size());

@@ -1,5 +1,9 @@
 #pragma once
 
+#include <turtle_kv/config.hpp>
+
+#include <turtle_kv/vqf_filter_page_view.hpp>
+
 #include <turtle_kv/core/key_view.hpp>
 #include <turtle_kv/core/value_view.hpp>
 
@@ -43,18 +47,29 @@ struct FilteredKeyQuery {
   llfs::PageCache* page_cache;
   llfs::PageLoader* page_loader;
   llfs::PinnedPage* pinned_page_out;
+#if TURTLE_KV_USE_BLOOM_FILTER
   llfs::BloomFilterQuery<KeyView> bloom_filter_query;
+#endif
+#if TURTLE_KV_USE_QUOTIENT_FILTER
+  KeyView key_;
+  u64 hash_val = vqf_hash_val(this->key_);
+#endif
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   explicit FilteredKeyQuery(llfs::PageCache& cache,
                             llfs::PageLoader& loader,
                             llfs::PinnedPage& page_out,
-                            const KeyView& key) noexcept
+                            const KeyView& key_arg) noexcept
       : page_cache{std::addressof(cache)}
       , page_loader{std::addressof(loader)}
       , pinned_page_out{std::addressof(page_out)}
-      , bloom_filter_query{key}
+#if TURTLE_KV_USE_BLOOM_FILTER
+      , bloom_filter_query{key_arg}
+#endif
+#if TURTLE_KV_USE_QUOTIENT_FILTER
+      , key_{key_arg}
+#endif
   {
   }
 
@@ -64,7 +79,12 @@ struct FilteredKeyQuery {
    */
   BATT_ALWAYS_INLINE const KeyView& key() const
   {
+#if TURTLE_KV_USE_BLOOM_FILTER
     return this->bloom_filter_query.key;
+#endif
+#if TURTLE_KV_USE_QUOTIENT_FILTER
+    return this->key_;
+#endif
   }
 
   /** \brief Returns the PageId of the filter page for the given `page_id`, if available; otherwise
@@ -97,7 +117,8 @@ struct FilteredKeyQuery {
    *
    * If the passed page could not be loaded, returns false.
    */
-  bool reject_page(llfs::PageId page_id_to_reject, const Optional<llfs::PageId>& filter_page_id)
+  bool reject_page(llfs::PageId page_id_to_reject [[maybe_unused]],
+                   const Optional<llfs::PageId>& filter_page_id)
   {
     LatencyTimer timer{Every2ToTheConst<16>{}, Self::metrics().reject_page_latency};
 
@@ -108,11 +129,17 @@ struct FilteredKeyQuery {
       return false;
     }
 
-    StatusOr<llfs::PinnedPage> filter_pinned_page =       //
-        this->page_loader->get_page_with_layout_in_job(   //
-            *filter_page_id,                              //
-            llfs::BloomFilterPageView::page_layout_id(),  //
-            llfs::PinPageToJob::kDefault,                 //
+    StatusOr<llfs::PinnedPage> filter_pinned_page =
+        this->page_loader->get_page_with_layout_in_job(  //
+            *filter_page_id,
+#if TURTLE_KV_USE_BLOOM_FILTER
+            llfs::BloomFilterPageView::page_layout_id(),
+
+#endif
+#if TURTLE_KV_USE_QUOTIENT_FILTER
+            VqfFilterPageView::page_layout_id(),
+#endif
+            llfs::PinPageToJob::kDefault,
             llfs::OkIfNotFound{true});
 
     // Failed to load the page; can't reject.
@@ -124,11 +151,19 @@ struct FilteredKeyQuery {
 
     llfs::PinnedPage& pinned_filter_page = *filter_pinned_page;
     const llfs::PageView& page_view = *pinned_filter_page;
-    const auto& filter_page_view = static_cast<const llfs::BloomFilterPageView&>(page_view);
+    const auto& filter_page_view =
+#if TURTLE_KV_USE_BLOOM_FILTER
+        static_cast<const llfs::BloomFilterPageView&>(page_view)
+#endif
+#if TURTLE_KV_USE_QUOTIENT_FILTER
+            static_cast<const VqfFilterPageView&>(page_view)
+#endif
+        ;
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
     // PARAOID CHECK - TODO [tastolfi 2025-04-04] remove once debugged.
     //
+#if TURTLE_KV_USE_BLOOM_FILTER
     if (false) {
       filter_page_view.check_integrity();
     }
@@ -148,6 +183,13 @@ struct FilteredKeyQuery {
         Every2ToTheConst<16>{},
         Self::metrics().filter_lookup_latency,
         (filter_page_view.bloom_filter().query(this->bloom_filter_query) == false));
+#endif
+#if TURTLE_KV_USE_QUOTIENT_FILTER
+    const bool reject =
+        BATT_COLLECT_LATENCY_SAMPLE(Every2ToTheConst<16>{},
+                                    Self::metrics().filter_lookup_latency,
+                                    (filter_page_view.is_present(this->hash_val) == false));
+#endif
 
     if (reject) {
       Self::metrics().filter_reject_count.add(1);

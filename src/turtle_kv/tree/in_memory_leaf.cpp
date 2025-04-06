@@ -177,22 +177,12 @@ Status InMemoryLeaf::start_serialize(TreeSerializeContext& context)
             if (task_i == 0) {
               return build_leaf_page_in_job(page_buffer, this->result_set.get());
             }
-
             BATT_CHECK_EQ(task_i, 1);
 
-            Status filter_status = build_bloom_filter_for_leaf(page_cache,
-                                                               filter_bits_per_key,
-                                                               page_buffer.page_id(),
-                                                               this->result_set.get());
-
-            if (!filter_status.ok()) {
-              LOG_FIRST_N(WARNING, 1) << "Failed to build bloom filter: " << filter_status;
-            }
-
-            return [](llfs::PageCacheJob&,
-                      std::shared_ptr<llfs::PageBuffer>&&) -> StatusOr<llfs::PinnedPage> {
-              return {llfs::PinnedPage{}};
-            };
+            return build_filter_for_leaf_in_job(page_cache,
+                                                filter_bits_per_key,
+                                                page_buffer.page_id(),
+                                                this->result_set.get());
           }));
 
   BATT_CHECK_EQ(this->future_id_.exchange(future_id), ~u64{0});
@@ -206,7 +196,6 @@ StatusOr<llfs::PinnedPage> InMemoryLeaf::finish_serialize(TreeSerializeContext& 
 {
   BATT_CHECK_EQ(this->tree_options.filter_bits_per_key(),
                 context.tree_options().filter_bits_per_key());
-  BATT_CHECK_EQ(this->tree_options.filter_page_size(), context.tree_options().filter_page_size());
   BATT_CHECK_EQ(this->tree_options.expected_items_per_leaf(),
                 context.tree_options().expected_items_per_leaf());
 

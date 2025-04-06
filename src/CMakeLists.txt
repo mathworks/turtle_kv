@@ -8,6 +8,7 @@ target_link_libraries(
   batteries::batteries
   boost::boost
   llfs::llfs
+  vqf::vqf
   )
 
 target_link_libraries(

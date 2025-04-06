@@ -1072,27 +1072,18 @@ StatusOr<usize> MergedLevel::start_serialize(TreeSerializeContext& context)
                 llfs::PageCache& page_cache,
                 llfs::PageBuffer& page_buffer) -> TreeSerializeContext::PinPageToJobFn {
               //----- --- -- -  -  -   -
-              const auto items_slice = this->result_set.get();
-              const auto page_items = batt::slice_range(items_slice, part_extents);
+              const auto all_items_in_level = this->result_set.get();
+              const auto items_in_this_page = batt::slice_range(all_items_in_level, part_extents);
 
               if (task_i == 0) {
-                return build_leaf_page_in_job(page_buffer, page_items);
+                return build_leaf_page_in_job(page_buffer, items_in_this_page);
               }
-
               BATT_CHECK_EQ(task_i, 1);
 
-              Status filter_status = build_bloom_filter_for_leaf(page_cache,
-                                                                 filter_bits_per_key,
-                                                                 page_buffer.page_id(),
-                                                                 page_items);
-              if (!filter_status.ok()) {
-                LOG_FIRST_N(WARNING, 1) << "Failed to build bloom filter: " << filter_status;
-              }
-
-              return [](llfs::PageCacheJob&,
-                        std::shared_ptr<llfs::PageBuffer>&&) -> StatusOr<llfs::PinnedPage> {
-                return {llfs::PinnedPage{}};
-              };
+              return build_filter_for_leaf_in_job(page_cache,
+                                                  filter_bits_per_key,
+                                                  page_buffer.page_id(),
+                                                  items_in_this_page);
             }));
 
     this->segment_future_ids_.emplace_back(id);
@@ -1108,7 +1099,6 @@ StatusOr<SegmentedLevel> MergedLevel::finish_serialize(const InMemoryNode& node,
 {
   BATT_CHECK_EQ(node.tree_options.filter_bits_per_key(),
                 context.tree_options().filter_bits_per_key());
-  BATT_CHECK_EQ(node.tree_options.filter_page_size(), context.tree_options().filter_page_size());
   BATT_CHECK_EQ(node.tree_options.expected_items_per_leaf(),
                 context.tree_options().expected_items_per_leaf());
 

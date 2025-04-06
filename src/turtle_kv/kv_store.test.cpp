@@ -43,6 +43,9 @@ TEST(KVStoreTest, CreateAndOpen)
 
     LOG(INFO) << BATT_INSPECT(kv_store_config.tree_options.filter_bits_per_key());
 
+    // kv_store_config.tree_options.set_key_size_hint(24);
+    // kv_store_config.tree_options.set_value_size_hint(10);
+
     for (usize chi : {1, 2, 3, 4, 5, 6, 7, 8}) {
       for (const char* workload_file : {
                "data/workloads/workload-abcdf.test.txt",

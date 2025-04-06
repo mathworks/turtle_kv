@@ -1,5 +1,7 @@
 #pragma once
 
+#include <turtle_kv/config.hpp>
+
 #include <turtle_kv/core/strong_types.hpp>
 
 #include <turtle_kv/import/constants.hpp>
@@ -150,7 +152,11 @@ class TreeOptions
     }
 
     const usize expected_filter_bits =
-        batt::round_up_bits(9, this->expected_items_per_leaf() * filter_bits_per_key());
+        batt::round_up_bits(9, this->expected_items_per_leaf() * filter_bits_per_key())
+#if TURTLE_KV_USE_QUOTIENT_FILTER
+        * 100 / 88
+#endif
+        ;
 
     const usize expected_filter_bytes = expected_filter_bits / 8;
 
