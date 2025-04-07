@@ -17,6 +17,7 @@
 namespace turtle_kv {
 
 inline constexpr u64 kVqfHashSeed = 0x9d0924dc03e79a75ull;
+inline constexpr u64 kVqfFilterMaxLoadFactorPercent = 80;
 
 inline u64 vqf_hash_val(const KeyView& key)
 {

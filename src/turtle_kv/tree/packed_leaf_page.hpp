@@ -35,8 +35,8 @@ struct PackedLeafPage {
 
   struct Metrics {
     LatencyMetric find_key_latency;
-    CountMetric<u64> find_key_success_count;
-    CountMetric<u64> find_key_failure_count;
+    FastCountMetric<u64> find_key_success_count;
+    FastCountMetric<u64> find_key_failure_count;
   };
 
   static Metrics& metrics()
@@ -61,11 +61,9 @@ struct PackedLeafPage {
   static const PackedLeafPage& view_of(T&& t)
   {
     const ConstBuffer buffer = get_page_const_payload(BATT_FORWARD(t));
-    BATT_CHECK_GE(buffer.size(), sizeof(PackedLeafPage));
+    BATT_ASSERT_GE(buffer.size(), sizeof(PackedLeafPage));
 
     const PackedLeafPage& packed_leaf_page = *static_cast<const PackedLeafPage*>(buffer.data());
-
-    packed_leaf_page.check_invariants(buffer.size());
 
     return packed_leaf_page;
   }

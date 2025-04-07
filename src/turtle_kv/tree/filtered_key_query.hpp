@@ -25,11 +25,11 @@ struct FilteredKeyQuery {
   using Self = FilteredKeyQuery;
 
   struct Metrics {
-    CountMetric<u64> total_filter_query_count;
-    CountMetric<u64> no_filter_page_count;
-    CountMetric<u64> filter_page_load_failed_count;
-    CountMetric<u64> page_id_mismatch_count;
-    CountMetric<u64> filter_reject_count;
+    FastCountMetric<u64> total_filter_query_count;
+    FastCountMetric<u64> no_filter_page_count;
+    FastCountMetric<u64> filter_page_load_failed_count;
+    FastCountMetric<u64> page_id_mismatch_count;
+    FastCountMetric<u64> filter_reject_count;
     LatencyMetric reject_page_latency;
     LatencyMetric filter_lookup_latency;
   };

@@ -9,6 +9,7 @@ using ::batt::CountMetric;
 using ::batt::DerivedMetric;
 using ::batt::Every2ToThe;
 using ::batt::Every2ToTheConst;
+using ::batt::FastCountMetric;
 using ::batt::global_metric_registry;
 using ::batt::HistogramMetric;
 using ::batt::LatencyMetric;
@@ -16,8 +17,5 @@ using ::batt::LatencyTimer;
 using ::batt::RateMetric;
 using ::batt::sample_metric_at_rate;
 using ::batt::StatsMetric;
-
-#define TURTLE_KV_COLLECT_LATENCY BATT_COLLECT_LATENCY
-#define TURTLE_KV_COLLECT_LATENCY_N BATT_COLLECT_LATENCY_N
 
 }  // namespace turtle_kv

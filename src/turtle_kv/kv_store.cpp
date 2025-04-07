@@ -327,8 +327,6 @@ StatusOr<ValueView> KVStore::get(const KeyView& key) noexcept /*override*/
 
   BATT_CHECK(this->base_checkpoint_.tree()->is_serialized());
 
-#define TURTLE_KV_ENABLE_LEAF_FILTERS 1
-
 #if TURTLE_KV_ENABLE_LEAF_FILTERS
   FilteredKeyQuery query{this->page_cache(), *this->query_page_loader_, pinned_page_out, key};
 #endif
@@ -600,13 +598,17 @@ std::function<void(std::ostream&)> KVStore::debug_info() noexcept
     auto& node_cache = cache.metrics_for_page_size(this->tree_options_.node_size());
     auto& filter_cache = cache.metrics_for_page_size(this->tree_options_.filter_page_size());
 
-    double leaf_query_count = (PackedLeafPage::metrics().find_key_failure_count +
-                               PackedLeafPage::metrics().find_key_success_count);
+    auto& page_cache = cache.metrics();
+
+    auto& query_page_loader = PinningPageLoader::metrics();
+
+    double leaf_query_count = (PackedLeafPage::metrics().find_key_failure_count.get() +
+                               PackedLeafPage::metrics().find_key_success_count.get());
 
     double filter_positive_count = leaf_query_count;
 
     double filter_false_positive_rate =
-        (double)PackedLeafPage::metrics().find_key_failure_count / filter_positive_count;
+        (double)PackedLeafPage::metrics().find_key_failure_count.get() / filter_positive_count;
 
     out << "\n"
         << BATT_INSPECT(kv_store.mem_table_get_count) << "\n"                               //
@@ -625,6 +627,17 @@ std::function<void(std::ostream&)> KVStore::debug_info() noexcept
         << "\n"                                                                             //
         << BATT_INSPECT(kv_store.checkpoint_get_count) << "\n"                              //
         << BATT_INSPECT(kv_store.checkpoint_get_latency) << "\n"                            //
+        << "\n"                                                                             //
+        << BATT_INSPECT(page_cache.get_count) << "\n"                                       //
+        << BATT_INSPECT(page_cache.allocate_page_alloc_latency) << "\n"                     //
+        << BATT_INSPECT(page_cache.page_read_latency) << "\n"                               //
+        << BATT_INSPECT(page_cache.total_bytes_read) << "\n"                                //
+        << "\n"                                                                             //
+        << BATT_INSPECT(query_page_loader.prefetch_hint_latency) << "\n"                    //
+        << BATT_INSPECT(query_page_loader.hash_map_lookup_latency) << "\n"                  //
+        << BATT_INSPECT(query_page_loader.get_page_from_cache_latency) << "\n"              //
+        << BATT_INSPECT(query_page_loader.get_page_count) << "\n"                           //
+        << BATT_INSPECT(query_page_loader.hash_map_miss_count) << "\n"                      //
         << "\n"                                                                             //
         << BATT_INSPECT(kv_store.checkpoint_count) << "\n"                                  //
         << BATT_INSPECT(kv_store.batch_edits_count) << "\n"                                 //
@@ -645,6 +658,11 @@ std::function<void(std::ostream&)> KVStore::debug_info() noexcept
         << BATT_INSPECT(BloomFilterMetrics::instance().bit_size_stats) << "\n"              //
         << BATT_INSPECT(BloomFilterMetrics::instance().bit_count_stats) << "\n"             //
         << BATT_INSPECT(BloomFilterMetrics::instance().item_count_stats) << "\n"            //
+        << "\n"                                                                             //
+        << BATT_INSPECT(QuotientFilterMetrics::instance().byte_size_stats) << "\n"          //
+        << BATT_INSPECT(QuotientFilterMetrics::instance().bit_size_stats) << "\n"           //
+        << BATT_INSPECT(QuotientFilterMetrics::instance().item_count_stats) << "\n"         //
+        << BATT_INSPECT(QuotientFilterMetrics::instance().bits_per_key_stats) << "\n"       //
         << "\n"                                                                             //
         << BATT_INSPECT(FilteredKeyQuery::metrics().reject_page_latency) << "\n"            //
         << BATT_INSPECT(FilteredKeyQuery::metrics().filter_lookup_latency) << "\n"          //

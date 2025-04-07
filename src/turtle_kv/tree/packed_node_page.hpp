@@ -262,12 +262,10 @@ struct PackedNodePage {
   static const PackedNodePage& view_of(T&& t)
   {
     const ConstBuffer buffer = get_page_const_payload(BATT_FORWARD(t));
-
-    BATT_CHECK_GE(buffer.size(), sizeof(PackedNodePage));
+    BATT_ASSERT_GE(buffer.size(), sizeof(PackedNodePage));
 
     const PackedNodePage& packed_node_page = *static_cast<const PackedNodePage*>(buffer.data());
-
-    BATT_CHECK_LE(packed_node_page.pivot_count, 64);
+    BATT_ASSERT_LE(packed_node_page.pivot_count, 64);
 
     return packed_node_page;
   }

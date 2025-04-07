@@ -77,13 +77,13 @@ class ChangeLogWriter
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
   //
   struct Metrics {
-    CountMetric<u64> received_block_byte_count{0};
-    CountMetric<u64> received_user_byte_count{0};
-    CountMetric<u64> written_block_byte_count{0};
-    CountMetric<u64> written_user_byte_count{0};
-    CountMetric<u64> sleep_count{0};
-    CountMetric<u64> write_count{0};
-    CountMetric<u64> block_alloc_count{0};
+    FastCountMetric<u64> received_block_byte_count{0};
+    FastCountMetric<u64> received_user_byte_count{0};
+    FastCountMetric<u64> written_block_byte_count{0};
+    FastCountMetric<u64> written_user_byte_count{0};
+    FastCountMetric<u64> sleep_count{0};
+    FastCountMetric<u64> write_count{0};
+    FastCountMetric<u64> block_alloc_count{0};
     DerivedMetric<double> block_utilization_rate{[this] {
       return (double)this->received_user_byte_count.load() /
              ((double)this->received_block_byte_count.load() + 1e-6);
