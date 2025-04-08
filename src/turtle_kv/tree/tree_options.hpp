@@ -4,6 +4,7 @@
 
 #include <turtle_kv/vqf_filter_page_view.hpp>
 
+#include <turtle_kv/core/packed_sizeof_edit.hpp>
 #include <turtle_kv/core/strong_types.hpp>
 
 #include <turtle_kv/import/constants.hpp>
@@ -26,10 +27,6 @@
 #include <cmath>
 
 namespace turtle_kv {
-
-// TODO [tastolfi 2025-03-10] make this dynamic/adaptive
-//
-constexpr usize kTrieIndexReserveSize = 16384;
 
 constexpr usize kMaxTreeHeight = llfs::kMaxPageRefDepth - 1;
 
@@ -54,6 +51,7 @@ class TreeOptions
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  static constexpr usize kMaxLevels = 6;
   static constexpr u16 kDefaultFilterBitsPerKey = 12;
   static constexpr u32 kDefaultKeySizeHint = 24;
   static constexpr u32 kDefaultValueSizeHint = 100;
@@ -105,12 +103,14 @@ class TreeOptions
   {
     this->leaf_size_log2_ = log2_ceil(size);
     BATT_CHECK_EQ(size, this->leaf_size()) << "leaf_size must be a power of 2";
+    this->trie_index_reserve_size_ = None;
     return *this;
   }
 
   Self& set_leaf_size_log2(u8 size_log2)
   {
     this->leaf_size_log2_ = size_log2;
+    this->trie_index_reserve_size_ = None;
     return *this;
   }
 
@@ -118,9 +118,30 @@ class TreeOptions
    */
   usize leaf_data_size() const;
 
-  usize flush_size() const
+  //----- --- -- -  -  -   -
+
+  Self& set_min_flush_factor(double factor)
   {
-    return this->leaf_data_size() - kTrieIndexReserveSize;
+    this->min_flush_factor_ = factor;
+    return *this;
+  }
+
+  Self& set_max_flush_factor(double factor)
+  {
+    this->max_flush_factor_ = factor;
+    return *this;
+  }
+
+  usize min_flush_size() const
+  {
+    const usize nominal = this->flush_size() * this->min_flush_factor_;
+    return std::min(nominal, this->flush_size());
+  }
+
+  usize max_flush_size() const
+  {
+    const usize nominal = this->flush_size() * this->max_flush_factor_;
+    return std::max(nominal, this->min_flush_size());
   }
 
   //----- --- -- -  -  -   -
@@ -133,7 +154,13 @@ class TreeOptions
 
   usize filter_bits_per_key() const
   {
-    return this->filter_bits_per_key_.value_or(Self::kDefaultFilterBitsPerKey);
+    const usize bits_per_key = this->filter_bits_per_key_.value_or(Self::kDefaultFilterBitsPerKey);
+
+#if TURTLE_KV_USE_QUOTIENT_FILTER
+    return (bits_per_key == 0) ? 0 : std::max(kMinQuotientFilterBitsPerKey, bits_per_key);
+#else
+    return bits_per_key;
+#endif
   }
 
   Self& set_filter_page_size_log2(u8 size_log2)
@@ -153,18 +180,36 @@ class TreeOptions
       return llfs::PageSizeLog2{*this->filter_page_size_log2_};
     }
 
+#if TURTLE_KV_USE_BLOOM_FILTER
     const usize expected_filter_bits =
-        batt::round_up_bits(9, this->expected_items_per_leaf() * filter_bits_per_key())
-#if TURTLE_KV_USE_QUOTIENT_FILTER
-        * 100 / kVqfFilterMaxLoadFactorPercent
-#endif
-        ;
+        batt::round_up_bits(9, this->expected_items_per_leaf() * this->filter_bits_per_key());
 
     const usize expected_filter_bytes = expected_filter_bits / 8;
 
     const usize expected_filter_page_size = sizeof(llfs::PackedPageHeader) +
                                             sizeof(llfs::PackedBloomFilterPage) +
                                             expected_filter_bytes;
+
+#elif TURTLE_KV_USE_QUOTIENT_FILTER
+
+    const double load_factor_8bit = vqf_filter_load_factor<8>(this->filter_bits_per_key());
+    const double load_factor_16bit = vqf_filter_load_factor<16>(this->filter_bits_per_key());
+
+    const double items_per_leaf = this->expected_items_per_leaf();
+
+    const double expected_slots_8bit = items_per_leaf / load_factor_8bit;
+    const double expected_slots_16bit = items_per_leaf / load_factor_16bit;
+
+    const usize filter_size_8bit = vqf_required_size<8>((u64)std::ceil(expected_slots_8bit));
+    const usize filter_size_16bit = vqf_required_size<16>((u64)std::ceil(expected_slots_16bit));
+
+    const usize expected_filter_page_size = std::max(filter_size_8bit, filter_size_16bit) +
+                                            sizeof(llfs::PackedPageHeader) +
+                                            sizeof(PackedVqfFilter);
+
+#else
+#error No filter type selected!
+#endif
 
     return llfs::PageSizeLog2{static_cast<u32>(log2_ceil(expected_filter_page_size))};
   }
@@ -184,6 +229,7 @@ class TreeOptions
   Self& set_key_size_hint(u32 n_bytes)
   {
     this->key_size_hint_ = n_bytes;
+    this->trie_index_reserve_size_ = None;
     return *this;
   }
 
@@ -195,15 +241,17 @@ class TreeOptions
   Self& set_value_size_hint(u32 n_bytes)
   {
     this->value_size_hint_ = n_bytes;
+    this->trie_index_reserve_size_ = None;
     return *this;
   }
 
   usize expected_item_size() const
   {
-    static constexpr usize kKeyHeader = sizeof(llfs::PackedBytes);
-    static constexpr usize kValueHeader = sizeof(llfs::PackedBytes);
-
-    return kKeyHeader + this->key_size_hint_ + kValueHeader + this->value_size_hint_;
+    return PackedSizeOfEdit::kPackedKeyLengthSize +    //
+           this->key_size_hint_ +                      //
+           PackedSizeOfEdit::kPackedValueOffsetSize +  //
+           PackedSizeOfEdit::kPackedValueOpSize +      //
+           this->value_size_hint_;
   }
 
   usize expected_items_per_leaf() const
@@ -211,15 +259,19 @@ class TreeOptions
     return this->leaf_data_size() / this->expected_item_size();
   }
 
-  usize expected_item_slot_size() const
+  //----- --- -- -  -  -   -
+
+  usize trie_index_reserve_size() const
   {
-    static constexpr usize kVolumeEventHeader = 1;
-    static constexpr usize kTabletEventHeader = 1;
-
-    const usize payload_size = this->expected_item_size() + kVolumeEventHeader + kTabletEventHeader;
-
-    return llfs::packed_sizeof_varint(payload_size) + payload_size;
+    return ((this->expected_items_per_leaf() * this->key_size_hint() + 15) / 16) * 5 / 8;
   }
+
+  usize flush_size() const
+  {
+    return this->leaf_data_size() - this->trie_index_reserve_size();
+  }
+
+  //----- --- -- -  -  -   -
 
   u32 max_item_size() const
   {
@@ -229,6 +281,25 @@ class TreeOptions
   Self& set_max_item_size(u32 n)
   {
     this->max_item_size_ = n;
+    return *this;
+  }
+
+  //----- --- -- -  -  -   -
+
+  usize max_buffer_levels() const
+  {
+    return TreeOptions::kMaxLevels - this->buffer_level_trim();
+  }
+
+  u16 buffer_level_trim() const
+  {
+    return this->buffer_level_trim_;
+  }
+
+  Self& set_buffer_level_trim(u16 n)
+  {
+    BATT_CHECK_LT(n, TreeOptions::kMaxLevels);
+    this->buffer_level_trim_ = n;
     return *this;
   }
 
@@ -248,11 +319,8 @@ class TreeOptions
     return llfs::MaxRefsPerPage{this->leaf_size() / kPackedPageRefSizeEstimate};
   }
 
-  //----- --- -- -  -  -   -
-
- private:
   //+++++++++++-+-+--+----- --- -- -  -  -   -
-
+ private:
   TreeOptions() = default;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -284,6 +352,16 @@ class TreeOptions
   // Expected (average) size of a value (in bytes).
   //
   u32 value_size_hint_ = Self::kDefaultValueSizeHint;
+
+  // The number of levels in node update buffers *not* to use, in order to force more eager/greedy
+  // compaction.
+  //
+  u16 buffer_level_trim_ = 0;
+
+  Optional<usize> trie_index_reserve_size_;
+
+  double min_flush_factor_ = 1.0;
+  double max_flush_factor_ = 1.0;
 };
 
 }  // namespace turtle_kv

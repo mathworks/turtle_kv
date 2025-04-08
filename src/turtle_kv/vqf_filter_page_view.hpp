@@ -8,22 +8,54 @@
 #include <llfs/page_reader.hpp>
 #include <llfs/page_view.hpp>
 
+#include <batteries/static_assert.hpp>
+
 #include <vqf/vqf_filter.h>
 
 #include <xxhash.h>
 
+#include <algorithm>
 #include <memory>
 
 namespace turtle_kv {
 
 inline constexpr u64 kVqfHashSeed = 0x9d0924dc03e79a75ull;
-inline constexpr u64 kVqfFilterMaxLoadFactorPercent = 80;
+inline constexpr usize kMinQuotientFilterBitsPerKey = 12;
+inline constexpr double kMaxQuotientFilterLoadFactor = 0.9;
 
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 inline u64 vqf_hash_val(const KeyView& key)
 {
   return XXH64(key.data(), key.size(), kVqfHashSeed);
 }
 
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <int TAG_BITS>
+inline double vqf_filter_load_factor(usize bits_per_key_int)
+{
+  if (bits_per_key_int == 0) {
+    return 0;
+  }
+
+  BATT_CHECK_GE(bits_per_key_int, kMinQuotientFilterBitsPerKey);
+
+  const double bits_per_key = bits_per_key_int;
+
+  if (TAG_BITS == 8) {
+    return 10.2 / bits_per_key;
+  }
+  if (TAG_BITS == 16) {
+    return 18.0 / bits_per_key;
+  }
+
+  BATT_PANIC() << "TAG_BITS must be 8 or 16";
+  BATT_UNREACHABLE();
+}
+
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+//
 struct PackedVqfFilter {
   little_u64 hash_seed;
   little_u64 hash_mask;
@@ -44,6 +76,14 @@ struct PackedVqfFilter {
   }
 };
 
+BATT_STATIC_ASSERT_EQ(sizeof(PackedVqfFilter),
+                      sizeof(little_u64) + sizeof(little_u64) + sizeof(vqf_metadata));
+
+BATT_STATIC_ASSERT_EQ(offsetof(vqf_filter<8>, metadata), 0);
+BATT_STATIC_ASSERT_EQ(offsetof(vqf_filter<16>, metadata), 0);
+
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+//
 class VqfFilterPageView : public llfs::PageView
 {
  public:

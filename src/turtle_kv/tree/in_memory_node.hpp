@@ -14,6 +14,7 @@
 
 #include <turtle_kv/import/bit_ops.hpp>
 #include <turtle_kv/import/int_types.hpp>
+#include <turtle_kv/import/metrics.hpp>
 #include <turtle_kv/import/seq.hpp>
 #include <turtle_kv/import/small_vec.hpp>
 
@@ -30,9 +31,18 @@ namespace turtle_kv {
 struct InMemoryNode {
   using Self = InMemoryNode;
 
-  static constexpr usize kMaxLevels = 6;
   static constexpr usize kMaxPivotCount = 63;
   static constexpr usize kMaxSegmentCount = kMaxPivotCount - 1;
+
+  struct Metrics {
+    StatsMetric<u16> level_depth_stats;
+  };
+
+  static Metrics& metrics()
+  {
+    static Metrics metrics_;
+    return metrics_;
+  }
 
   struct UpdateBuffer {
     using Self = UpdateBuffer;

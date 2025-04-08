@@ -61,7 +61,8 @@ using PackedSegment = PackedUpdateBuffer::Segment;
 
   // Unpack the update buffer.
   //
-  node->update_buffer.levels.resize(PackedNodePage::kMaxLevels);
+  node->update_buffer.levels.resize(tree_options.max_buffer_levels());
+  const usize in_memory_level_count = node->update_buffer.levels.size();
 
   for (usize level_i = 0; level_i < PackedNodePage::kMaxLevels; ++level_i) {
     const PackedLevel level = packed_node.update_buffer.get_level(level_i);
@@ -70,9 +71,13 @@ using PackedSegment = PackedUpdateBuffer::Segment;
     if (level_segments.empty()) {
       // Base case: empty level.
       //
-      node->update_buffer.levels[level_i] = EmptyLevel{};
+      if (level_i < in_memory_level_count) {
+        node->update_buffer.levels[level_i] = EmptyLevel{};
+      }
 
     } else {
+      BATT_CHECK_LT(level_i, in_memory_level_count);
+
       // General case: non-empty level.
       //
       SegmentedLevel& segmented_level =
@@ -206,6 +211,10 @@ Status InMemoryNode::apply_batch_update(BatchUpdate& update,
 //
 Status InMemoryNode::update_buffer_insert(BatchUpdate& update)
 {
+  auto on_scope_exit = batt::finally([&] {
+    Self::metrics().level_depth_stats.update(this->update_buffer.levels.size());
+  });
+
   // Base case 0: UpdateBuffer completely empty.
   //
   if (this->update_buffer.levels.empty()) {
@@ -293,7 +302,7 @@ Status InMemoryNode::update_buffer_insert(BatchUpdate& update)
 
     // Grow the levels vector if under the max depth.
     //
-    if (this->update_buffer.levels.size() < InMemoryNode::kMaxLevels) {
+    if (this->update_buffer.levels.size() < this->tree_options.max_buffer_levels()) {
       this->update_buffer.levels.emplace_back();
     }
 
@@ -313,7 +322,7 @@ Status InMemoryNode::flush_if_necessary(BatchUpdate& update, bool force_flush)
   //
   const MaxPendingBytes max_pending = this->find_max_pending();
 
-  if (!force_flush && max_pending.byte_count < this->tree_options.flush_size()) {
+  if (!force_flush && max_pending.byte_count < this->tree_options.min_flush_size()) {
     return OkStatus();
   }
 
@@ -383,8 +392,10 @@ Status InMemoryNode::flush_to_pivot(BatchUpdate& update, i32 pivot_i)
   // Take the largest prefix of the merged edits as possible, without making the flushed batch too
   // large.
   //
-  const usize byte_size_limit =
-      this->tree_options.flush_size() - (this->tree_options.max_item_size() - 1);
+  const usize max_flush_size =
+      (this->height == 2) ? this->tree_options.flush_size() : this->tree_options.max_flush_size();
+
+  const usize byte_size_limit = max_flush_size - (this->tree_options.max_item_size() - 1);
 
   BatchUpdate::TrimResult trim_result = child_update.trim_back_down_to_size(byte_size_limit);
 
@@ -977,6 +988,8 @@ Status InMemoryNode::start_serialize(TreeSerializeContext& context)
 //
 StatusOr<llfs::PinnedPage> InMemoryNode::finish_serialize(TreeSerializeContext& context)
 {
+  Self::metrics().level_depth_stats.update(this->update_buffer.levels.size());
+
   for (Level& level : this->update_buffer.levels) {
     Optional<SegmentedLevel> new_segmented_level;
 

@@ -6,6 +6,7 @@
 #include <turtle_kv/page_file.hpp>
 
 #include <turtle_kv/tree/filter_builder.hpp>
+#include <turtle_kv/tree/in_memory_node.hpp>
 #include <turtle_kv/tree/leaf_page_view.hpp>
 #include <turtle_kv/tree/node_page_view.hpp>
 
@@ -600,6 +601,8 @@ std::function<void(std::ostream&)> KVStore::debug_info() noexcept
 
     auto& page_cache = cache.metrics();
 
+    auto& node = InMemoryNode::metrics();
+
     auto& query_page_loader = PinningPageLoader::metrics();
 
     double leaf_query_count = (PackedLeafPage::metrics().find_key_failure_count.get() +
@@ -627,6 +630,8 @@ std::function<void(std::ostream&)> KVStore::debug_info() noexcept
         << "\n"                                                                             //
         << BATT_INSPECT(kv_store.checkpoint_get_count) << "\n"                              //
         << BATT_INSPECT(kv_store.checkpoint_get_latency) << "\n"                            //
+        << "\n"                                                                             //
+        << BATT_INSPECT(node.level_depth_stats) << "\n"                                     //
         << "\n"                                                                             //
         << BATT_INSPECT(page_cache.get_count) << "\n"                                       //
         << BATT_INSPECT(page_cache.allocate_page_alloc_latency) << "\n"                     //

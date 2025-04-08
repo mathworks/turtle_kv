@@ -101,6 +101,10 @@ Status build_bloom_filter_for_leaf(llfs::PageCache& page_cache,
                                    llfs::PageId leaf_page_id,
                                    const ItemsT& items)
 {
+  if (filter_bits_per_key == 0) {
+    return OkStatus();
+  }
+
   FilterPageAlloc alloc{page_cache, leaf_page_id};
   BATT_REQUIRE_OK(alloc.status);
 
@@ -159,28 +163,23 @@ struct QuotientFilterMetrics {
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <int TAG_BITS, typename ItemsT>
-inline Status build_vqf_filter(const MutableBuffer& filter_buffer, const ItemsT& items)
+inline Status build_vqf_filter(const MutableBuffer& filter_buffer,
+                               const ItemsT& items,
+                               u64 nslots,
+                               usize hash_val_shift = 0)
 {
-  auto* packed_filter = static_cast<PackedVqfFilter*>(filter_buffer.data());
+  auto* const packed_filter_header = static_cast<PackedVqfFilter*>(filter_buffer.data());
+  vqf_filter<TAG_BITS>* packed_filter = packed_filter_header->get_impl<TAG_BITS>();
+  const u64 mask = ~u64{0} << hash_val_shift;
 
-  usize shift = 0;
-  u64 mask = ~u64{0};
+  packed_filter_header->hash_seed = kVqfHashSeed;
+  packed_filter_header->hash_mask = mask;
 
-  vqf_filter<TAG_BITS>* filter = packed_filter->get_impl<TAG_BITS>();
-  const u64 nslots = vqf_nslots_for_size(TAG_BITS, filter_buffer.size());
+  vqf_init_in_place(packed_filter, nslots);
 
-  while ((items.size() >> shift) > nslots * kVqfFilterMaxLoadFactorPercent / 100) {
-    BATT_CHECK_LT(shift, 8);
-    shift += 1;
-    mask <<= 1;
-  }
-
-  packed_filter->hash_seed = kVqfHashSeed;
-  packed_filter->hash_mask = mask;
-
-  vqf_init_in_place(filter, nslots);
-
-  const u64 actual_size = vqf_filter_size(filter);
+  const u64 actual_size = vqf_filter_size(packed_filter);
+  BATT_CHECK_LE(actual_size,
+                filter_buffer.size() - (sizeof(PackedVqfFilter) - sizeof(vqf_metadata)));
 
   auto& metrics = QuotientFilterMetrics::instance();
 
@@ -190,10 +189,14 @@ inline Status build_vqf_filter(const MutableBuffer& filter_buffer, const ItemsT&
   metrics.bits_per_key_stats.update((actual_size * 8 + 4) / items.size());
 
   for (const auto& item : items) {
-    u64 hash_val = vqf_hash_val(get_key(item));
+    const u64 hash_val = vqf_hash_val(get_key(item));
+
+    // If `hash_val_shift` is non-zero, then we randomly drop some portion of the input to save
+    // space; when answering queries, we always is_present=true for dropped hash values.
+    //
     if ((hash_val & mask) == hash_val) {
-      BATT_CHECK(vqf_insert(filter, hash_val))
-          << BATT_INSPECT(shift) << BATT_INSPECT(std::bitset<64>{mask});
+      BATT_CHECK(vqf_insert(packed_filter, hash_val))
+          << BATT_INSPECT(hash_val_shift) << BATT_INSPECT(std::bitset<64>{mask});
     }
   }
 
@@ -208,7 +211,9 @@ Status build_quotient_filter_for_leaf(llfs::PageCache& page_cache,
                                       llfs::PageId leaf_page_id,
                                       const ItemsT& items)
 {
-  BATT_DEBUG_INFO(BATT_INSPECT(filter_bits_per_key));
+  if (filter_bits_per_key == 0) {
+    return OkStatus();
+  }
 
   FilterPageAlloc alloc{page_cache, leaf_page_id};
   BATT_REQUIRE_OK(alloc.status);
@@ -218,20 +223,61 @@ Status build_quotient_filter_for_leaf(llfs::PageCache& page_cache,
 
   filter_page_header->layout_id = VqfFilterPageView::page_layout_id();
 
-  const u64 max_size = payload_buffer.size() - 16;
-  const u64 target_size = (items.size() * filter_bits_per_key + 7) / 8;
-  const u64 effective_size = std::min(max_size, target_size);
+  const MutableBuffer filter_buffer = payload_buffer;
 
-  const MutableBuffer filter_buffer{payload_buffer.data(), effective_size};
+  const usize kFilterHeaderSize = sizeof(PackedVqfFilter) - sizeof(vqf_metadata);
 
-  if (filter_bits_per_key < 21) {
-    BATT_REQUIRE_OK(build_vqf_filter<8>(filter_buffer, items));
+  const usize max_slots_8bit = vqf_nslots_for_size(8, filter_buffer.size() - kFilterHeaderSize);
+  const usize max_slots_16bit = vqf_nslots_for_size(16, filter_buffer.size() - kFilterHeaderSize);
+
+  const double n_keys = items.size();
+  const double load_factor_8bit = vqf_filter_load_factor<8>(filter_bits_per_key);
+  const double load_factor_16bit = vqf_filter_load_factor<16>(filter_bits_per_key);
+
+  const usize n_slots_8bit = std::floor(n_keys / load_factor_8bit);
+  const usize n_slots_16bit = std::floor(n_keys / load_factor_16bit);
+
+  BATT_DEBUG_INFO(std::endl
+                  << BATT_INSPECT(filter_bits_per_key) << std::endl
+                  << BATT_INSPECT(n_keys) << std::endl
+                  << BATT_INSPECT(load_factor_8bit) << std::endl
+                  << BATT_INSPECT(n_slots_8bit) << std::endl
+                  << BATT_INSPECT(max_slots_8bit) << std::endl
+                  << BATT_INSPECT(load_factor_16bit) << std::endl
+                  << BATT_INSPECT(n_slots_16bit) << std::endl
+                  << BATT_INSPECT(max_slots_16bit) << std::endl
+                  << BATT_INSPECT(filter_bits_per_key) << std::endl
+                  << BATT_INSPECT(filter_page_header->size));
+
+  BATT_CHECK_LE(load_factor_8bit, kMaxQuotientFilterLoadFactor);
+
+  usize filter_size = 0;
+
+  if (load_factor_16bit <= kMaxQuotientFilterLoadFactor && n_slots_16bit <= max_slots_16bit) {
+    filter_size = vqf_required_size<16>(n_slots_16bit);
+    BATT_REQUIRE_OK(build_vqf_filter<16>(filter_buffer, items, n_slots_16bit));
+
+  } else if (n_slots_8bit <= max_slots_8bit) {
+    filter_size = vqf_required_size<8>(n_slots_8bit);
+    BATT_REQUIRE_OK(build_vqf_filter<8>(filter_buffer, items, n_slots_8bit));
+
   } else {
-    BATT_REQUIRE_OK(build_vqf_filter<16>(filter_buffer, items));
+    BATT_CHECK_GT(max_slots_8bit, max_slots_16bit);
+
+    LOG_FIRST_N(WARNING, 10) << "Truncating hash values to fit filter!";
+
+    usize hash_val_shift = 1;
+    while ((items.size() >> hash_val_shift) / load_factor_8bit > max_slots_8bit) {
+      ++hash_val_shift;
+    }
+
+    filter_size = vqf_required_size<8>(max_slots_8bit);
+    BATT_REQUIRE_OK(build_vqf_filter<8>(filter_buffer, items, max_slots_8bit, hash_val_shift));
   }
+  BATT_CHECK_NE(filter_size, 0);
 
   filter_page_header->unused_begin =
-      byte_distance(filter_page_header, filter_buffer.data()) + filter_buffer.size();
+      byte_distance(filter_page_header, filter_buffer.data()) + kFilterHeaderSize + filter_size;
 
   filter_page_header->unused_end = filter_page_header->size;
 

@@ -661,15 +661,25 @@ inline PackedLeafPage* build_leaf_page(MutableBuffer buffer,
       llfs::BPTrie in_memory_trie{pivot_keys};
 
       const usize packed_trie_size = llfs::packed_sizeof(in_memory_trie);
-      if (packed_trie_size > trie_buffer.size()) {
+
+      llfs::DataPacker packer{trie_buffer};
+      const llfs::PackedBPTrie* packed_trie = (packed_trie_size > trie_buffer.size())
+                                                  ? nullptr
+                                                  : llfs::pack_object(in_memory_trie, &packer);
+
+      if (!packed_trie) {
         step_size *= 2;
         if (step_size * 2 > plan.key_count) {
           break;
         }
+        LOG(WARNING) << "Retrying with " << BATT_INSPECT(step_size)
+                     << BATT_INSPECT(packed_trie_size) << BATT_INSPECT(plan.key_count)
+                     << BATT_INSPECT(trie_buffer.size());
+        pivot_keys.clear();
+        continue;
       }
 
-      llfs::DataPacker packer{trie_buffer};
-      p_header->trie_index.reset(llfs::pack_object(in_memory_trie, &packer), &bounds_checker);
+      p_header->trie_index.reset(packed_trie, &bounds_checker);
       p_header->index_step = BATT_CHECKED_CAST(u32, step_size);
       p_header->trie_index_size = BATT_CHECKED_CAST(u32, packed_trie_size);
       break;
