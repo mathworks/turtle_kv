@@ -21,7 +21,7 @@ namespace turtle_kv {
 
 inline constexpr u64 kVqfHashSeed = 0x9d0924dc03e79a75ull;
 inline constexpr usize kMinQuotientFilterBitsPerKey = 12;
-inline constexpr double kMaxQuotientFilterLoadFactor = 0.9;
+inline constexpr double kMaxQuotientFilterLoadFactor = 0.85;
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
