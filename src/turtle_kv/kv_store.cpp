@@ -195,6 +195,7 @@ std::string_view filter_page_file_name() noexcept
     : task_scheduler_{task_scheduler}
     , worker_pool_{worker_pool}
     , tree_options_{tree_options}
+    , log_writer_ref_{*change_log_writer}
     , checkpoint_log_{std::move(checkpoint_log)}
     , mem_table_{new MemTable{
           std::move(change_log_writer),
@@ -205,18 +206,20 @@ std::string_view filter_page_file_name() noexcept
     , checkpoint_token_pool_{std::make_shared<batt::Grant::Issuer>(
           /*max_concurrent_checkpoint_jobs=*/1)}
     , base_checkpoint_{Checkpoint::empty_at_batch(DeltaBatchId::from_u64(0))}
-    , checkpoint_generator_{
-          this->worker_pool_,                                     //
-          this->tree_options_,                                    //
-          this->page_cache(),                                     //
-          batt::make_copy(this->base_checkpoint_),  //
-          *this->checkpoint_log_,                                 //
-      }
     , info_task_{this->task_scheduler_.schedule_task(),
-    [this]{this->info_task_main(); }, "KVStore::info_task",}
-    , memtable_compact_thread_{[this]{this->memtable_compact_thread_main();}}
-    , checkpoint_update_thread_{[this]{this->checkpoint_update_thread_main();}}
-    , checkpoint_flush_thread_{[this]{this->checkpoint_flush_thread_main();}}
+                 [this] {
+                   this->info_task_main();
+                 },
+                 "KVStore::info_task"}
+    , memtable_compact_thread_{[this] {
+      this->memtable_compact_thread_main();
+    }}
+    , checkpoint_update_thread_{[this, base_checkpoint = batt::make_copy(this->base_checkpoint_)] {
+      this->checkpoint_update_thread_main(base_checkpoint);
+    }}
+    , checkpoint_flush_thread_{[this] {
+      this->checkpoint_flush_thread_main();
+    }}
 {
   BATT_CHECK_OK(NodePageView::register_layout(this->page_cache()));
   BATT_CHECK_OK(LeafPageView::register_layout(this->page_cache()));
@@ -267,10 +270,21 @@ void KVStore::join()
 //
 Status KVStore::put(const KeyView& key, const ValueView& value) noexcept /*override*/
 {
-  Status status = this->mem_table_->put(key, value);
+  boost::intrusive_ptr<MemTable> observed_mem_table = nullptr;
+  {
+    absl::ReaderMutexLock checkpoint_lock{&this->base_checkpoint_mutex_};
+    observed_mem_table = this->mem_table_;
+  }
+
+  const u64 observed_mem_table_id = observed_mem_table->id();
+
+  ChangeLogWriter::Context& log_writer_context =
+      this->per_thread_.get(this).log_writer_context(observed_mem_table_id);
+
+  Status status = observed_mem_table->put(log_writer_context, key, value);
 
   if (status == batt::StatusCode::kResourceExhausted) {
-    BATT_REQUIRE_OK(this->update_checkpoint());
+    BATT_REQUIRE_OK(this->update_checkpoint(observed_mem_table.get(), observed_mem_table_id));
     return this->put(key, value);
   }
 
@@ -279,13 +293,21 @@ Status KVStore::put(const KeyView& key, const ValueView& value) noexcept /*overr
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<ValueView> KVStore::get(const KeyView& key) noexcept /*override*/
+Optional<PinningPageLoader>& KVStore::query_page_loader()
 {
-  if ((this->query_count_.fetch_add(1) & 0xffff) == 0) {
-    absl::WriterMutexLock checkpoint_lock{&this->base_checkpoint_mutex_};
-    this->query_page_loader_.emplace(this->page_cache());
+  ThreadContext& ctx = this->per_thread_.get(this);
+
+  if ((++ctx.query_count & 0xffff) == 0) {
+    ctx.query_page_loader.emplace(this->page_cache());
   }
 
+  return ctx.query_page_loader;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+StatusOr<ValueView> KVStore::get(const KeyView& key) noexcept /*override*/
+{
   absl::ReaderMutexLock checkpoint_lock{&this->base_checkpoint_mutex_};
 
   Optional<ValueView> value = BATT_COLLECT_LATENCY_SAMPLE(batt::Every2ToTheConst<13>{},
@@ -329,7 +351,7 @@ StatusOr<ValueView> KVStore::get(const KeyView& key) noexcept /*override*/
   BATT_CHECK(this->base_checkpoint_.tree()->is_serialized());
 
 #if TURTLE_KV_ENABLE_LEAF_FILTERS
-  FilteredKeyQuery query{this->page_cache(), *this->query_page_loader_, pinned_page_out, key};
+  FilteredKeyQuery query{this->page_cache(), *this->query_page_loader(), pinned_page_out, key};
 #endif
 
   StatusOr<ValueView> value_from_checkpoint =
@@ -341,7 +363,7 @@ StatusOr<ValueView> KVStore::get(const KeyView& key) noexcept /*override*/
                                   find_key_filtered(query)
   // ----- --- -- -  -  -   -
 #else
-                                  find_key(*this->query_page_loader_, pinned_page_out, key)
+                                  find_key(*this->query_page_loader(), pinned_page_out, key)
   // ----- --- -- -  -  -   -
 #endif
       );
@@ -386,36 +408,42 @@ Status KVStore::remove(const KeyView& key) noexcept /*override*/
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status KVStore::update_checkpoint() noexcept
+Status KVStore::update_checkpoint(MemTable* observed_mem_table, u64 observed_mem_table_id) noexcept
 {
-  // The current MemTable is done accepting new updates!
-  //
-  std::unique_ptr<ChangeLogWriter> change_log_writer = this->mem_table_->finalize();
-
-  // Gather some information from the current MemTable before we send it off.
-  //
-  const DeltaBatchId batch_id = DeltaBatchId::from_mem_table_id(this->mem_table_->id());
-  const DeltaBatchId next_batch_id = batch_id.next();
-
-  // Create a new MemTable to accept more updates.
-  //
-  boost::intrusive_ptr<MemTable> old_mem_table = std::move(this->mem_table_);
-
-  this->mem_table_.reset(new MemTable{
-      std::move(change_log_writer),
-      /*max_byte_size=*/this->tree_options_.flush_size(),
-      next_batch_id.to_mem_table_id(),
-  });
-
+  boost::intrusive_ptr<MemTable> old_mem_table = nullptr;
   {
     absl::WriterMutexLock checkpoint_lock{&this->base_checkpoint_mutex_};
 
-    // Add to deltas stack, for queries on recent data.
-    //
-    this->deltas_.emplace_back(old_mem_table);
+    if (observed_mem_table == this->mem_table_.get() &&
+        observed_mem_table_id == this->mem_table_->id()) {
+      // The current MemTable is done accepting new updates!
+      //
+      std::unique_ptr<ChangeLogWriter> change_log_writer = this->mem_table_->finalize();
+
+      // Gather some information from the current MemTable before we send it off.
+      //
+      const DeltaBatchId batch_id = DeltaBatchId::from_mem_table_id(this->mem_table_->id());
+      const DeltaBatchId next_batch_id = batch_id.next();
+
+      // Create a new MemTable to accept more updates.
+      //
+      old_mem_table = std::move(this->mem_table_);
+
+      this->mem_table_.reset(new MemTable{
+          std::move(change_log_writer),
+          /*max_byte_size=*/this->tree_options_.flush_size(),
+          next_batch_id.to_mem_table_id(),
+      });
+
+      // Add to deltas stack, for queries on recent data.
+      //
+      this->deltas_.emplace_back(old_mem_table);
+    }
   }
 
-  BATT_REQUIRE_OK(this->memtable_compact_channel_.write(std::move(old_mem_table)));
+  if (old_mem_table) {
+    BATT_REQUIRE_OK(this->memtable_compact_channel_.write(std::move(old_mem_table)));
+  }
 
   return OkStatus();
 }
@@ -461,9 +489,19 @@ void KVStore::memtable_compact_thread_main()
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-void KVStore::checkpoint_update_thread_main()
+void KVStore::checkpoint_update_thread_main(const Checkpoint& base_checkpoint)
 {
-  Status status = [this]() -> Status {
+  Status status = [this, &base_checkpoint]() -> Status {
+    CheckpointGenerator checkpoint_generator{
+        this->worker_pool_,
+        this->tree_options_,
+        this->page_cache(),
+        batt::make_copy(base_checkpoint),
+        *this->checkpoint_log_,
+    };
+
+    usize checkpoint_batch_count = 0;
+
     for (;;) {
       BATT_ASSIGN_OK_RESULT(std::unique_ptr<DeltaBatch> delta_batch,
                             this->checkpoint_update_channel_.read());
@@ -473,18 +511,18 @@ void KVStore::checkpoint_update_thread_main()
         //
         StatusOr<usize> push_status =
             BATT_COLLECT_LATENCY(this->metrics_.push_batch_latency,
-                                 this->checkpoint_generator_.push_batch(std::move(delta_batch)));
+                                 checkpoint_generator.push_batch(std::move(delta_batch)));
 
         BATT_REQUIRE_OK(push_status);
         BATT_CHECK_EQ(*push_status, 1);
 
-        this->checkpoint_batch_count_ += 1;
+        checkpoint_batch_count += 1;
       }
 
       // If we have reached the target checkpoint distance, then flush the checkpoint and start a
       // new one.
       //
-      if (this->checkpoint_batch_count_ >= this->checkpoint_distance_.load()) {
+      if (checkpoint_batch_count >= this->checkpoint_distance_.load()) {
         this->metrics_.checkpoint_count.add(1);
 
         // Allocate a token for the checkpoint job.
@@ -495,24 +533,24 @@ void KVStore::checkpoint_update_thread_main()
 
         // Serialize all pages and create the job.
         //
-        StatusOr<std::unique_ptr<CheckpointJob>> checkpoint_job =                   //
-            BATT_COLLECT_LATENCY(this->metrics_.finalize_checkpoint_latency,        //
-                                 this->checkpoint_generator_.finalize_checkpoint(   //
-                                     std::move(checkpoint_token),                   //
-                                     batt::make_copy(this->checkpoint_token_pool_)  //
-                                     ));
+        StatusOr<std::unique_ptr<CheckpointJob>> checkpoint_job =
+            BATT_COLLECT_LATENCY(this->metrics_.finalize_checkpoint_latency,
+                                 checkpoint_generator.finalize_checkpoint(
+                                     std::move(checkpoint_token),
+                                     batt::make_copy(this->checkpoint_token_pool_)));
 
         BATT_REQUIRE_OK(checkpoint_job);
-
-        // Number of batches in the current checkpoint resets to zero.
-        //
-        this->checkpoint_batch_count_ = 0;
 
         BATT_CHECK_NOT_NULLPTR(*checkpoint_job);
         BATT_CHECK((*checkpoint_job)->append_job_grant);
         BATT_CHECK((*checkpoint_job)->appendable_job);
         BATT_CHECK((*checkpoint_job)->prepare_slot_sequencer);
         BATT_CHECK_NE((*checkpoint_job)->batch_count, 0);
+        BATT_CHECK_EQ((*checkpoint_job)->batch_count, checkpoint_batch_count);
+
+        // Number of batches in the current checkpoint resets to zero.
+        //
+        checkpoint_batch_count = 0;
 
         BATT_REQUIRE_OK(this->checkpoint_flush_channel_.write(std::move(*checkpoint_job)));
       }

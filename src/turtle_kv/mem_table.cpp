@@ -1,6 +1,8 @@
 #include <turtle_kv/mem_table.hpp>
 //
 
+#include <batteries/async/task.hpp>
+
 namespace turtle_kv {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -9,13 +11,21 @@ namespace turtle_kv {
                                 usize max_byte_size,
                                 Optional<u64> id) noexcept
     : writer_{std::move(writer)}
-    , context_{*this->writer_}
     , max_byte_size_{max_byte_size}
     , current_byte_size_{0}
     , self_id_{id.or_else([&] {
       return MemTable::next_id();
     })}
 {
+  this->hashed_.resize(this->n_shards_);
+  this->hash_mutex_storage_.resize(this->n_shards_);
+
+  for (MutexStorage& storage : this->hash_mutex_storage_) {
+    new (std::addressof(storage)) batt::CpuCacheLineIsolated<absl::Mutex>{};
+  }
+  this->hash_mutex_ = as_slice(
+      reinterpret_cast<batt::CpuCacheLineIsolated<absl::Mutex>*>(this->hash_mutex_storage_.data()),
+      this->n_shards_);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -35,25 +45,38 @@ MemTable::~MemTable() noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status MemTable::put(const KeyView& key, const ValueView& value) noexcept
+Status MemTable::put(ChangeLogWriter::Context& context,
+                     const KeyView& key,
+                     const ValueView& value) noexcept
 {
   const usize size_estimate = std::max<usize>(2 + key.size() + 4, 32) + value.size() + 2 + 16;
+  const usize prior_byte_size = this->current_byte_size_.fetch_add(size_estimate);
+  const usize new_byte_size = prior_byte_size + size_estimate;
 
-  WriteLockT lock{this->mutex_};
-
-  if (size_estimate + this->current_byte_size_ > this->max_byte_size_) {
+  if (new_byte_size > this->max_byte_size_) {
+    this->current_byte_size_.fetch_sub(size_estimate);
     return batt::StatusCode::kResourceExhausted;
   }
-  this->current_byte_size_ += size_estimate;
 
-  StorageImpl storage{*this, OkStatus()};
-  MemTableEntryInserter<StorageImpl> inserter{storage, key, value, ++this->version_};
+  StorageImpl storage{*this, context, OkStatus()};
+  MemTableEntryInserter<StorageImpl> inserter{storage, key, value, this->version_.fetch_add(1)};
+  Optional<std::string_view> new_key;
 
-  auto [iter, inserted] = this->hashed_.emplace(inserter);
-  if (!inserted) {
-    iter->update(inserter);
-  } else {
-    this->ordered_.emplace(get_key(*iter));
+  {
+    const u64 shard_i = this->shard_for_hash_val(inserter.hash_val);
+    absl::WriterMutexLock lock{this->hashed_mutex_for_shard(shard_i)};
+
+    auto [iter, inserted] = this->hashed_[shard_i].emplace(inserter);
+    if (!inserted) {
+      iter->update(inserter);
+    } else {
+      new_key.emplace(get_key(*iter));
+    }
+  }
+
+  if (new_key) {
+    absl::WriterMutexLock lock{this->ordered_mutex()};
+    this->ordered_.emplace(*new_key);
   }
 
   return storage.status;
@@ -63,9 +86,12 @@ Status MemTable::put(const KeyView& key, const ValueView& value) noexcept
 //
 Optional<ValueView> MemTable::get(const KeyView& key) noexcept
 {
-  ReadLockT lock{this->mutex_};
+  MemTableQuery query{key};
+  const u64 shard_i = this->shard_for_hash_val(query.hash_val);
 
-  return this->get_impl(key);
+  absl::ReaderMutexLock lock{this->hashed_mutex_for_shard(shard_i)};
+
+  return this->get_impl(query, shard_i);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -73,18 +99,20 @@ Optional<ValueView> MemTable::get(const KeyView& key) noexcept
 usize MemTable::scan(const KeyView& min_key,
                      const Slice<std::pair<KeyView, ValueView>>& items_out) noexcept
 {
-  ReadLockT lock{this->mutex_};
+  absl::ReaderMutexLock lock{this->ordered_mutex()};
 
-  return this->scan_impl(min_key, items_out);
+  return this->scan_impl(min_key, items_out, /*need_locks=*/true);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 Optional<ValueView> MemTable::finalized_get(const KeyView& key) noexcept
 {
-  BATT_CHECK(!this->context_);
+  BATT_CHECK(!this->writer_);
 
-  return this->get_impl(key);
+  MemTableQuery query{key};
+
+  return this->get_impl(query, this->shard_for_hash_val(query.hash_val));
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -92,17 +120,17 @@ Optional<ValueView> MemTable::finalized_get(const KeyView& key) noexcept
 usize MemTable::finalized_scan(const KeyView& min_key,
                                const Slice<std::pair<KeyView, ValueView>>& items_out) noexcept
 {
-  BATT_CHECK(!this->context_);
+  BATT_CHECK(!this->writer_);
 
-  return this->scan_impl(min_key, items_out);
+  return this->scan_impl(min_key, items_out, /*need_locks=*/false);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Optional<ValueView> MemTable::get_impl(const KeyView& key) noexcept
+Optional<ValueView> MemTable::get_impl(const MemTableQuery& query, u64 shard_i) noexcept
 {
-  auto iter = this->hashed_.find(key);
-  if (iter == this->hashed_.end()) {
+  auto iter = this->hashed_[shard_i].find(query);
+  if (iter == this->hashed_[shard_i].end()) {
     return None;
   }
 
@@ -114,16 +142,23 @@ Optional<ValueView> MemTable::get_impl(const KeyView& key) noexcept
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 usize MemTable::scan_impl(const KeyView& min_key,
-                          const Slice<std::pair<KeyView, ValueView>>& items_out) noexcept
+                          const Slice<std::pair<KeyView, ValueView>>& items_out,
+                          bool needs_lock) noexcept
 {
   auto first = this->ordered_.lower_bound(min_key);
   auto ordered_end = this->ordered_.end();
-  auto hashed_end = this->hashed_.end();
 
   usize k = 0;
   while (first != ordered_end && k != items_out.size()) {
-    auto iter = this->hashed_.find(*first);
-    BATT_CHECK_NE(iter, hashed_end);
+    MemTableQuery query{*first};
+    const u64 shard_i = this->shard_for_hash_val(query.hash_val);
+    Optional<absl::ReaderMutexLock> hash_read_lock;
+    if (needs_lock) {
+      hash_read_lock.emplace(this->hashed_mutex_for_shard(shard_i));
+    }
+
+    auto iter = this->hashed_[shard_i].find(*first);
+    BATT_CHECK_NE(iter, this->hashed_[shard_i].end());
 
     items_out[k].first = *first;
     items_out[k].second = iter->value_;
@@ -139,9 +174,18 @@ usize MemTable::scan_impl(const KeyView& min_key,
 //
 std::unique_ptr<ChangeLogWriter> MemTable::finalize() noexcept
 {
-  WriteLockT lock{this->mutex_};
+  absl::WriterMutexLock ordered_lock{this->ordered_mutex()};
 
-  this->context_ = None;
+  usize n_shards_locked = 0;
+  auto on_scope_exit = batt::finally([&] {
+    for (usize i = 0; i < n_shards_locked; ++i) {
+      this->hashed_mutex_for_shard(i)->Unlock();
+    }
+  });
+  for (; n_shards_locked < this->n_shards_; ++n_shards_locked) {
+    this->hashed_mutex_for_shard(n_shards_locked)->Lock();
+  }
+
   return std::move(this->writer_);
 }
 
@@ -149,7 +193,7 @@ std::unique_ptr<ChangeLogWriter> MemTable::finalize() noexcept
 //
 MergeCompactor::ResultSet</*decay_to_items=*/false> MemTable::compact() noexcept
 {
-  BATT_CHECK(!this->context_);
+  BATT_CHECK(!this->writer_);
 
   std::vector<EditView> edits_out;
   {
@@ -157,7 +201,9 @@ MergeCompactor::ResultSet</*decay_to_items=*/false> MemTable::compact() noexcept
     edits_out.reserve(num_edits);
 
     for (const KeyView& key : this->ordered_) {
-      auto iter = this->hashed_.find(key);
+      MemTableQuery query{key};
+      const usize shard_i = this->shard_for_hash_val(query.hash_val);
+      auto iter = this->hashed_[shard_i].find(query);
 
       ValueView value = iter->value_;
       if (value.needs_combine()) {

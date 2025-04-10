@@ -70,7 +70,7 @@ StatusOr<usize> CheckpointGenerator::push_batch(std::unique_ptr<DeltaBatch>&& ba
   // Skip unless base_checkpoint.rollup_slot_upper_bound() <= batch->slot_range.lower_bound
   //
   if (batch->batch_id() <= this->base_checkpoint_.batch_upper_bound()) {
-    VLOG(1) << " -- Old batch; ignoring...";
+    LOG(INFO) << " -- Old batch; ignoring...";
     return {0u};
   }
 
@@ -109,37 +109,6 @@ StatusOr<usize> CheckpointGenerator::push_batch(std::unique_ptr<DeltaBatch>&& ba
   // Periodically serialize to unpin some pages, controlling total memory usage.
   //
   this->current_batch_count_ += 1;
-  if (this->current_batch_count_ > 32) {
-    VLOG(1) << "serializing checkpoint to cull pinned pages...";
-
-    const i64 pinned_before_count = this->job_->pinned_page_count();
-    const i64 new_before_count = this->job_->new_page_count();
-
-    BATT_REQUIRE_OK(this->serialize_checkpoint());
-    BATT_CHECK_EQ(this->current_batch_count_, 0)
-        << "serialize_checkpoint() should reset the batch counter!";
-
-    const llfs::PageId root_id = batt::get_or_panic(this->base_checkpoint_.maybe_root_id());
-    this->job_->new_root(root_id);
-    this->clear_old_roots();
-
-    BATT_REQUIRE_OK(this->job_->prune(/*callers=*/0));
-
-    this->job_->delete_root(root_id);
-    this->job_->unpin_all();
-
-    const i64 pinned_after_count = this->job_->pinned_page_count();
-    const i64 new_after_count = this->job_->new_page_count();
-
-    VLOG(1) << "pinned pages: "  //
-            << pinned_before_count << " -> " << pinned_after_count << " ("
-            << ((pinned_after_count > pinned_before_count) ? "+" : "")
-            << (pinned_after_count - pinned_before_count) << ")"  //
-            << "  new pages: "                                    //
-            << new_before_count << " -> " << new_after_count << " ("
-            << ((new_after_count > new_before_count) ? "+" : "")
-            << (new_after_count - new_before_count) << ")";
-  }
 
   return {1u};
 }
@@ -151,11 +120,6 @@ void CheckpointGenerator::initialize_job()
   if (this->job_ == nullptr) {
     this->job_ = this->cache_.new_job();
     this->job_->set_base_job(this->base_job_);
-    // this->job_->set_default_unpin_on_prune(llfs::UnpinOnPrune{false});
-
-    // this->job_->debug_mask.set(llfs::PageCacheJob::kDebugLogLoadUnpinned);
-    // this->job_->debug_mask.set(llfs::PageCacheJob::kDebugLogUnpinAll);
-    // this->job_->debug_mask.set(llfs::PageCacheJob::kDebugLogPrune);
     this->job_->debug_mask.set(llfs::PageCacheJob::kDebugLogCacheSlotsFull);
   }
 }

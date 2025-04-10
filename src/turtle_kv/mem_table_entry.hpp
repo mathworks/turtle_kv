@@ -18,6 +18,11 @@
 
 namespace turtle_kv {
 
+inline u64 get_key_hash_val(const std::string_view& key)
+{
+  return absl::container_internal::hash_default_hash<std::string_view>{}(key);
+}
+
 struct PackedValueUpdate {
   /** \brief Must be 0.
    */
@@ -62,6 +67,7 @@ struct MemTableEntryInserter {
       , key{BATT_FORWARD(key_arg)}
       , value{BATT_FORWARD(value_arg)}
       , version{version_arg}
+      , hash_val{get_key_hash_val(key)}
   {
   }
 
@@ -72,6 +78,7 @@ struct MemTableEntryInserter {
   const std::string_view key;
   const ValueView value;
   const u32 version;
+  const u64 hash_val;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
   // Outputs (set by store_insert or store_update).
@@ -142,6 +149,11 @@ inline const std::string_view& get_key(const MemTableEntryInserter<StorageT>& i)
 {
   return i.key;
 }
+template <typename StorageT>
+inline u64 get_key_hash_val(const MemTableEntryInserter<StorageT>& i) noexcept
+{
+  return i.hash_val;
+}
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 //
@@ -182,22 +194,52 @@ class MemTableEntry
   mutable u32 revision_;
 };
 
-inline const std::string_view& get_key(const MemTableEntry& e) noexcept
+inline const std::string_view& get_key(const MemTableEntry& e)
 {
   return e.key_;
+}
+
+inline u64 get_key_hash_val(const MemTableEntry& e)
+{
+  return get_key_hash_val(get_key(e));
+}
+
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+//
+/** \brief A Query object which precomputes the hash_val so we can shard hash table locks.
+ */
+struct MemTableQuery {
+  std::string_view key;
+  u64 hash_val = get_key_hash_val(this->key);
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  explicit MemTableQuery(const std::string_view& key_arg) noexcept : key{key_arg}
+  {
+  }
+};
+
+inline const std::string_view& get_key(const MemTableQuery& query)
+{
+  return query.key;
+}
+
+inline u64 get_key_hash_val(const MemTableQuery& query)
+{
+  return query.hash_val;
 }
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 //
 /** \brief Default hash functor for set-based hash index in hybrid MemTable
  */
-struct DefaultStrHash : absl::container_internal::hash_default_hash<std::string_view> {
-  using Super = absl::container_internal::hash_default_hash<std::string_view>;
+struct DefaultStrHash {
+  using is_transparent = void;
 
   template <typename T>
-  decltype(auto) operator()(T&& t) const noexcept
+  decltype(auto) operator()(T&& t) const
   {
-    return Super::operator()(get_key(BATT_FORWARD(t)));
+    return get_key_hash_val(BATT_FORWARD(t));
   }
 };
 
@@ -209,7 +251,7 @@ struct DefaultStrEq : absl::container_internal::hash_default_eq<std::string_view
   using Super = absl::container_internal::hash_default_eq<std::string_view>;
 
   template <typename L, typename R>
-  decltype(auto) operator()(L&& l, R&& r) const noexcept
+  decltype(auto) operator()(L&& l, R&& r) const
   {
     return Super::operator()(get_key(BATT_FORWARD(l)), get_key(BATT_FORWARD(r)));
   }

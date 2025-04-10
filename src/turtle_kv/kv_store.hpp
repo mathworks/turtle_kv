@@ -11,6 +11,7 @@
 
 #include <turtle_kv/core/table.hpp>
 
+#include <turtle_kv/util/object_thread_storage.hpp>
 #include <turtle_kv/util/pipeline_channel.hpp>
 
 #include <turtle_kv/import/int_types.hpp>
@@ -18,6 +19,7 @@
 #include <llfs/storage_context.hpp>
 #include <llfs/volume.hpp>
 
+#include <batteries/hint.hpp>
 #include <batteries/small_vec.hpp>
 
 #include <absl/synchronization/mutex.h>
@@ -43,6 +45,32 @@ class KVStore : public Table
     //+++++++++++-+-+--+----- --- -- -  -  -   -
 
     static Config with_default_values() noexcept;
+  };
+
+  struct ThreadContext {
+    Optional<PinningPageLoader> query_page_loader;
+    u64 query_count = 0;
+    ChangeLogWriter& log_writer;
+    u64 current_mem_table_id = 0;
+    Optional<ChangeLogWriter::Context> log_writer_context_;
+
+    //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+    explicit ThreadContext(KVStore* kv_store) noexcept
+        : query_page_loader{kv_store->page_cache()}
+        , log_writer{kv_store->log_writer_ref_}
+        , log_writer_context_{this->log_writer}
+    {
+    }
+
+    ChangeLogWriter::Context& log_writer_context(u64 mem_table_id)
+    {
+      if (BATT_HINT_FALSE(mem_table_id != this->current_mem_table_id)) {
+        this->log_writer_context_.emplace(this->log_writer);
+        this->current_mem_table_id = mem_table_id;
+      }
+      return *this->log_writer_context_;
+    }
   };
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -107,6 +135,8 @@ class KVStore : public Table
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
   explicit KVStore(batt::TaskScheduler& task_scheduler,                   //
                    batt::WorkerPool& worker_pool,                         //
                    const TreeOptions& tree_options,                       //
@@ -115,15 +145,17 @@ class KVStore : public Table
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  Status update_checkpoint() noexcept;
+  Status update_checkpoint(MemTable* observed_mem_table, u64 observed_mem_table_id) noexcept;
 
   void info_task_main() noexcept;
 
   void memtable_compact_thread_main();
 
-  void checkpoint_update_thread_main();
+  void checkpoint_update_thread_main(const Checkpoint& base_checkpoint);
 
   void checkpoint_flush_thread_main();
+
+  Optional<PinningPageLoader>& query_page_loader();
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -133,6 +165,8 @@ class KVStore : public Table
 
   TreeOptions tree_options_;
 
+  ChangeLogWriter& log_writer_ref_;
+
   std::atomic<usize> checkpoint_distance_{1};
 
   absl::Mutex base_checkpoint_mutex_;
@@ -141,19 +175,15 @@ class KVStore : public Table
 
   boost::intrusive_ptr<MemTable> mem_table_;  // ABSL_GUARDED_BY(base_checkpoint_mutex_);
 
+  ObjectThreadStorage<KVStore::ThreadContext>::ScopedSlot per_thread_;
+
   // Recent MemTables that have been compacted/finalized; newest=back, oldest=front.
   //
   std::vector<boost::intrusive_ptr<MemTable>> deltas_ ABSL_GUARDED_BY(base_checkpoint_mutex_);
 
   std::shared_ptr<batt::Grant::Issuer> checkpoint_token_pool_;
 
-  usize checkpoint_batch_count_{0};
-
-  Optional<PinningPageLoader> query_page_loader_{this->page_cache()};
-
   Checkpoint base_checkpoint_ ABSL_GUARDED_BY(base_checkpoint_mutex_);
-
-  CheckpointGenerator checkpoint_generator_;
 
   KVStoreMetrics metrics_;
 
