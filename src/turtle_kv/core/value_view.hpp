@@ -336,7 +336,7 @@ inline ValueView combine(const ValueView& newer, const ValueView& older)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-inline [[nodiscard]] bool combine_in_place(Optional<ValueView>* newer, const ValueView& older)
+[[nodiscard]] inline bool combine_in_place(Optional<ValueView>* newer, const ValueView& older)
 {
   if (!*newer) {
     newer->emplace(older);

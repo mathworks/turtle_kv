@@ -10,6 +10,7 @@ class TurtleKvRecipe(ConanFile):
 
     tool_requires = [
         "cmake/[>=3.20.0]",
+        "ninja/1.12.1",
     ]
 
     settings = "os", "compiler", "build_type", "arch"
@@ -50,13 +51,13 @@ class TurtleKvRecipe(ConanFile):
         VISIBLE = self.cor.VISIBLE
         OVERRIDE = self.cor.OVERRIDE
 
-        self.requires("abseil/20240116.2", **VISIBLE)
+        self.requires("abseil/20250127.0", **VISIBLE, **OVERRIDE)
         self.requires("batteries/0.58.1-devel", **VISIBLE, **OVERRIDE)
         self.requires("boost/1.85.0", **VISIBLE, **OVERRIDE)
         self.requires("glog/[>=0.7.0]", **VISIBLE)
         self.requires("llfs/0.41.1-devel", **VISIBLE)
         self.requires("pcg-cpp/[>=cci.20220409]", **VISIBLE)
-        self.requires("vqf/0.2.2", **VISIBLE)
+        self.requires("vqf/0.2.3-devel", **VISIBLE)
         self.requires("zlib/[>=1.3]", **OVERRIDE)
 
         if platform.system() == "Linux":

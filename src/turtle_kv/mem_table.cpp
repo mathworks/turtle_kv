@@ -7,19 +7,25 @@ namespace turtle_kv {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-/*explicit*/ MemTable::MemTable(std::unique_ptr<ChangeLogWriter>&& writer,
-                                usize max_byte_size,
-                                Optional<u64> id) noexcept
-    : writer_{std::move(writer)}
+/*explicit*/ MemTable::MemTable(usize max_byte_size, Optional<u64> id) noexcept
+    : is_finalized_{false}
+    , n_shards_log2_{std::min<i32>(MemTable::kMaxShardsLog2,
+                                   batt::log2_ceil(std::thread::hardware_concurrency()))}
+    , n_shards_{usize{1} << this->n_shards_log2_}
+    , shard_mask_{this->n_shards_ - 1}
+    , hash_mutex_storage_(this->n_shards_)
     , max_byte_size_{max_byte_size}
     , current_byte_size_{0}
     , self_id_{id.or_else([&] {
       return MemTable::next_id();
     })}
+    , next_block_owner_id_{this->get_next_block_owner_id()}
+    , version_{0}
+    , block_list_mutex_{}
+    , blocks_{}
+    , hashed_(this->n_shards_)
+    , ordered_{}
 {
-  this->hashed_.resize(this->n_shards_);
-  this->hash_mutex_storage_.resize(this->n_shards_);
-
   for (MutexStorage& storage : this->hash_mutex_storage_) {
     new (std::addressof(storage)) batt::CpuCacheLineIsolated<absl::Mutex>{};
   }
@@ -36,11 +42,7 @@ MemTable::~MemTable() noexcept
     buffer->remove_ref(1);
   }
 
-  std::unique_ptr<ChangeLogWriter> writer = this->finalize();
-  if (writer) {
-    writer->halt();
-    writer->join();
-  }
+  [[maybe_unused]] const bool b = this->finalize();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -49,7 +51,8 @@ Status MemTable::put(ChangeLogWriter::Context& context,
                      const KeyView& key,
                      const ValueView& value) noexcept
 {
-  const usize size_estimate = std::max<usize>(2 + key.size() + 4, 32) + value.size() + 2 + 16;
+  const usize size_estimate = std::max<usize>(2 + key.size() + 4, 32)  //
+                              + value.size() + 2 + sizeof(PackedValueUpdate);
   const usize prior_byte_size = this->current_byte_size_.fetch_add(size_estimate);
   const usize new_byte_size = prior_byte_size + size_estimate;
 
@@ -66,17 +69,19 @@ Status MemTable::put(ChangeLogWriter::Context& context,
     const u64 shard_i = this->shard_for_hash_val(inserter.hash_val);
     absl::WriterMutexLock lock{this->hashed_mutex_for_shard(shard_i)};
 
+    if (this->is_finalized_) {
+      return batt::StatusCode::kResourceExhausted;
+    }
+
     auto [iter, inserted] = this->hashed_[shard_i].emplace(inserter);
     if (!inserted) {
       iter->update(inserter);
+#if 0
     } else {
-      new_key.emplace(get_key(*iter));
+      absl::WriterMutexLock lock{this->ordered_mutex()};
+      this->ordered_.emplace(get_key(*iter));
+#endif
     }
-  }
-
-  if (new_key) {
-    absl::WriterMutexLock lock{this->ordered_mutex()};
-    this->ordered_.emplace(*new_key);
   }
 
   return storage.status;
@@ -99,16 +104,26 @@ Optional<ValueView> MemTable::get(const KeyView& key) noexcept
 usize MemTable::scan(const KeyView& min_key,
                      const Slice<std::pair<KeyView, ValueView>>& items_out) noexcept
 {
-  absl::ReaderMutexLock lock{this->ordered_mutex()};
+  BATT_PANIC() << "Fix scanning!";
 
-  return this->scan_impl(min_key, items_out, /*need_locks=*/true);
+  usize k = 0;
+  {
+    absl::ReaderMutexLock lock{this->ordered_mutex()};
+    k = this->scan_keys_impl(min_key, items_out);
+  }
+
+  for (usize i = 0; i < k; ++i) {
+    items_out[i].second = this->get(items_out[i].first).value_or_panic();
+  }
+
+  return k;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 Optional<ValueView> MemTable::finalized_get(const KeyView& key) noexcept
 {
-  BATT_CHECK(!this->writer_);
+  BATT_CHECK(this->is_finalized_);
 
   MemTableQuery query{key};
 
@@ -120,9 +135,15 @@ Optional<ValueView> MemTable::finalized_get(const KeyView& key) noexcept
 usize MemTable::finalized_scan(const KeyView& min_key,
                                const Slice<std::pair<KeyView, ValueView>>& items_out) noexcept
 {
-  BATT_CHECK(!this->writer_);
+  BATT_CHECK(this->is_finalized_);
 
-  return this->scan_impl(min_key, items_out, /*need_locks=*/false);
+  usize k = this->scan_keys_impl(min_key, items_out);
+
+  for (usize i = 0; i < k; ++i) {
+    items_out[i].second = this->finalized_get(items_out[i].first).value_or_panic();
+  }
+
+  return k;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -141,28 +162,17 @@ Optional<ValueView> MemTable::get_impl(const MemTableQuery& query, u64 shard_i) 
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-usize MemTable::scan_impl(const KeyView& min_key,
-                          const Slice<std::pair<KeyView, ValueView>>& items_out,
-                          bool needs_lock) noexcept
+usize MemTable::scan_keys_impl(const KeyView& min_key,
+                               const Slice<std::pair<KeyView, ValueView>>& items_out) noexcept
 {
+  BATT_PANIC() << "Fix scanning!";
+
   auto first = this->ordered_.lower_bound(min_key);
   auto ordered_end = this->ordered_.end();
 
   usize k = 0;
   while (first != ordered_end && k != items_out.size()) {
-    MemTableQuery query{*first};
-    const u64 shard_i = this->shard_for_hash_val(query.hash_val);
-    Optional<absl::ReaderMutexLock> hash_read_lock;
-    if (needs_lock) {
-      hash_read_lock.emplace(this->hashed_mutex_for_shard(shard_i));
-    }
-
-    auto iter = this->hashed_[shard_i].find(*first);
-    BATT_CHECK_NE(iter, this->hashed_[shard_i].end());
-
     items_out[k].first = *first;
-    items_out[k].second = iter->value_;
-
     ++first;
     ++k;
   }
@@ -172,10 +182,8 @@ usize MemTable::scan_impl(const KeyView& min_key,
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-std::unique_ptr<ChangeLogWriter> MemTable::finalize() noexcept
+bool MemTable::finalize() noexcept
 {
-  absl::WriterMutexLock ordered_lock{this->ordered_mutex()};
-
   usize n_shards_locked = 0;
   auto on_scope_exit = batt::finally([&] {
     for (usize i = 0; i < n_shards_locked; ++i) {
@@ -186,54 +194,78 @@ std::unique_ptr<ChangeLogWriter> MemTable::finalize() noexcept
     this->hashed_mutex_for_shard(n_shards_locked)->Lock();
   }
 
-  return std::move(this->writer_);
+#if 0
+  // MUST come after the hash index shard locks!
+  //
+  absl::WriterMutexLock ordered_lock{this->ordered_mutex()};
+#endif
+
+  const bool prior_value = this->is_finalized_;
+  this->is_finalized_ = true;
+  return prior_value == false;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 MergeCompactor::ResultSet</*decay_to_items=*/false> MemTable::compact() noexcept
 {
-  BATT_CHECK(!this->writer_);
+  BATT_CHECK(this->is_finalized_);
+
+  using HashedIndex = absl::flat_hash_set<MemTableEntry, DefaultStrHash, DefaultStrEq>;
+
+  usize total_keys = 0;
+  for (const HashedIndex& shard : this->hashed_) {
+    total_keys += shard.size();
+  }
 
   std::vector<EditView> edits_out;
+  edits_out.reserve(total_keys);
+
   {
     const usize num_edits = this->hashed_.size();
     edits_out.reserve(num_edits);
 
-    for (const KeyView& key : this->ordered_) {
-      MemTableQuery query{key};
-      const usize shard_i = this->shard_for_hash_val(query.hash_val);
-      auto iter = this->hashed_[shard_i].find(query);
+    for (const HashedIndex& shard : this->hashed_) {
+      const auto last = shard.end();
+      for (auto iter = shard.begin(); iter != last; ++iter) {
+#if 0
+      for (const KeyView& key : this->ordered_) {
+        MemTableQuery query{key};
+        const usize shard_i = this->shard_for_hash_val(query.hash_val);
+        auto iter = this->hashed_[shard_i].find(query);
+#endif
+        KeyView key = get_key(*iter);
+        ValueView value = iter->value_;
+        if (value.needs_combine()) {
+          ConstBuffer slot_buffer = this->fetch_slot(iter->locator_);
+          auto* packed_update = static_cast<const PackedValueUpdate*>(slot_buffer.data());
+          if (packed_update->key_len == 0) {
+            do {
+              slot_buffer = this->fetch_slot(packed_update->prev_locator);
+              packed_update = static_cast<const PackedValueUpdate*>(slot_buffer.data());
 
-      ValueView value = iter->value_;
-      if (value.needs_combine()) {
-        ConstBuffer slot_buffer = this->fetch_slot(iter->locator_);
-        auto* packed_update = static_cast<const PackedValueUpdate*>(slot_buffer.data());
-        if (packed_update->key_len == 0) {
-          do {
-            slot_buffer = this->fetch_slot(packed_update->prev_locator);
-            packed_update = static_cast<const PackedValueUpdate*>(slot_buffer.data());
+              if (packed_update->key_len == 0) {
+                ConstBuffer value_buffer = slot_buffer + sizeof(PackedValueUpdate);
 
-            if (packed_update->key_len == 0) {
-              ConstBuffer value_buffer = slot_buffer + sizeof(PackedValueUpdate);
+                value = combine(value, ValueView::from_buffer(value_buffer));
 
-              value = combine(value, ValueView::from_buffer(value_buffer));
+              } else {
+                ConstBuffer value_buffer =
+                    slot_buffer + (sizeof(little_u16) + packed_update->key_len + sizeof(big_u32));
 
-            } else {
-              ConstBuffer value_buffer =
-                  slot_buffer + (sizeof(little_u16) + packed_update->key_len + sizeof(big_u32));
+                value = combine(value, ValueView::from_buffer(value_buffer));
+                break;
+              }
 
-              value = combine(value, ValueView::from_buffer(value_buffer));
-              break;
-            }
-
-          } while (value.needs_combine());
+            } while (value.needs_combine());
+          }
+          // else (key_len == 0) - the current revision is also the first; nothing else can be done.
         }
-        // else (key_len == 0) - the current revision is also the first; nothing else can be done.
+        edits_out.emplace_back(key, value);
       }
-      edits_out.emplace_back(key, value);
     }
   }
+  std::sort(edits_out.begin(), edits_out.end(), KeyOrder{});
 
   MergeCompactor::ResultSet</*decay_to_items=*/false> result_set;
   result_set.append(std::move(edits_out));
@@ -245,6 +277,9 @@ MergeCompactor::ResultSet</*decay_to_items=*/false> MemTable::compact() noexcept
 //
 ConstBuffer MemTable::fetch_slot(u32 locator) const noexcept
 {
+  //
+  // MUST only be called once the MemTable is finalized.
+
   const usize block_index = (locator >> 16);
   const usize slot_index = (locator & 0xffff);
 

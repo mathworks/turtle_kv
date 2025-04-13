@@ -37,27 +37,55 @@ class MemTable : public batt::RefCounted<MemTable>
  public:
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  static u64 next_id() noexcept
+  /** \brief The base-2 log of the maximum number of hash index lock shards.
+   */
+  static constexpr i32 kMaxShardsLog2 = 8;
+
+  /** \brief The maximum number of hash index lock shards.  The actual number of shards is the
+   * minimum of this value and the number of available hardware threads at runtime.
+   */
+  static constexpr usize kMaxShards = usize{1} << MemTable::kMaxShardsLog2;
+
+  /** \brief The number of change log block slots to pre-allocate in this object.
+   */
+  static constexpr usize kBlockListPreAllocSize = 4096;
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  static constexpr u64 first_id()
   {
-    static std::atomic<u64> next{0x10000};
+    return 0x10000;
+  }
+
+  static u64 next_id()
+  {
+    static std::atomic<u64> next{MemTable::first_id()};
     return next.fetch_add(0x10000);
   }
 
-  static u64 batch_id_from(u64 id) noexcept
+  static u64 batch_id_from(u64 id)
   {
     return id & ~u64{0xffff};
   }
 
-  static u64 block_id_from(u64 id) noexcept
+  static u64 block_id_from(u64 id)
   {
     return id & u64{0xffff};
   }
 
+  static u64 next_id_for(u64 id)
+  {
+    return id + 0x10000;
+  }
+
+  static u64 prev_id_for(u64 id)
+  {
+    return id - 0x10000;
+  }
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  explicit MemTable(std::unique_ptr<ChangeLogWriter>&& writer,
-                    usize max_byte_size,
-                    Optional<u64> id = None) noexcept;
+  explicit MemTable(usize max_byte_size, Optional<u64> id = None) noexcept;
 
   MemTable(const MemTable&) = delete;
   MemTable& operator=(const MemTable&) = delete;
@@ -80,7 +108,7 @@ class MemTable : public batt::RefCounted<MemTable>
   usize scan(const KeyView& min_key,
              const Slice<std::pair<KeyView, ValueView>>& items_out) noexcept;
 
-  std::unique_ptr<ChangeLogWriter> finalize() noexcept;
+  [[nodiscard]] bool finalize() noexcept;
 
   MergeCompactor::ResultSet</*decay_to_items=*/false> compact() noexcept;
 
@@ -90,13 +118,6 @@ class MemTable : public batt::RefCounted<MemTable>
 
   usize finalized_scan(const KeyView& min_key,
                        const Slice<std::pair<KeyView, ValueView>>& items_out) noexcept;
-
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-
-  ChangeLogWriter& change_log_writer() noexcept
-  {
-    return *this->writer_;
-  }
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
@@ -116,9 +137,8 @@ class MemTable : public batt::RefCounted<MemTable>
 
   Optional<ValueView> get_impl(const MemTableQuery& query, u64 shard_i) noexcept;
 
-  usize scan_impl(const KeyView& min_key,
-                  const Slice<std::pair<KeyView, ValueView>>& items_out,
-                  bool need_locks) noexcept;
+  usize scan_keys_impl(const KeyView& min_key,
+                       const Slice<std::pair<KeyView, ValueView>>& items_out) noexcept;
 
   u64 get_next_block_owner_id() const noexcept
   {
@@ -144,15 +164,15 @@ class MemTable : public batt::RefCounted<MemTable>
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  std::unique_ptr<ChangeLogWriter> writer_;
+  bool is_finalized_;
 
-  const i32 n_shards_log2_ = batt::log2_ceil(std::thread::hardware_concurrency());
+  const i32 n_shards_log2_;
 
-  const usize n_shards_ = usize{1} << this->n_shards_log2_;
+  const usize n_shards_;
 
-  const u64 shard_mask_ = this->n_shards_ - 1;
+  const u64 shard_mask_;
 
-  std::vector<MutexStorage> hash_mutex_storage_;
+  batt::SmallVec<MutexStorage, MemTable::kMaxShards> hash_mutex_storage_;
 
   Slice<batt::CpuCacheLineIsolated<absl::Mutex>> hash_mutex_;
 
@@ -164,13 +184,17 @@ class MemTable : public batt::RefCounted<MemTable>
 
   u64 self_id_;
 
-  u64 next_block_owner_id_ = this->get_next_block_owner_id();
+  u64 next_block_owner_id_;
 
-  std::atomic<u32> version_{0};
+  std::atomic<u32> version_;
 
-  batt::SmallVec<ChangeLogBlock*, 512> blocks_;
+  absl::Mutex block_list_mutex_;
 
-  std::vector<absl::flat_hash_set<MemTableEntry, DefaultStrHash, DefaultStrEq>> hashed_;
+  batt::SmallVec<ChangeLogBlock*, MemTable::kBlockListPreAllocSize> blocks_;
+
+  batt::SmallVec<absl::flat_hash_set<MemTableEntry, DefaultStrHash, DefaultStrEq>,
+                 MemTable::kMaxShards>
+      hashed_;
 
   absl::btree_set<KeyView> ordered_;
 };
@@ -179,7 +203,7 @@ class MemTable : public batt::RefCounted<MemTable>
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-template <typename SerializeFn = void(u32 /*locator*/, const MutableBuffer&)>
+template <typename SerializeFn>
 void MemTable::StorageImpl::store_data(usize n_bytes, SerializeFn&& serialize_fn) noexcept
 {
   this->status = batt::to_status(this->context.append_slot(
@@ -192,10 +216,10 @@ void MemTable::StorageImpl::store_data(usize n_bytes, SerializeFn&& serialize_fn
 
         if (buffer->ref_count() == 1) {
           buffer->add_ref(1);
+          absl::MutexLock lock{&this->mem_table.block_list_mutex_};
           mem_table.blocks_.emplace_back(buffer);
           mem_table.next_block_owner_id_ = mem_table.get_next_block_owner_id();
         }
-        BATT_CHECK_EQ(buffer, mem_table.blocks_.back());
 
         const u32 block_id = MemTable::block_id_from(buffer->owner_id());
         const u32 slot_index = buffer->slot_count();

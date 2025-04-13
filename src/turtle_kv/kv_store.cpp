@@ -58,6 +58,15 @@ std::string_view filter_page_file_name() noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+/*static*/ KVStore::RuntimeOptions KVStore::RuntimeOptions::with_default_values() noexcept
+{
+  return RuntimeOptions{
+      .use_threaded_checkpoint_pipeline = true,
+  };
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 /*static*/ Status KVStore::create(const std::filesystem::path& dir_path,  //
                                   const Config& config,                   //
                                   RemoveExisting remove) noexcept
@@ -157,12 +166,12 @@ std::string_view filter_page_file_name() noexcept
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 /*static*/ StatusOr<std::unique_ptr<KVStore>> KVStore::open(
-    batt::TaskScheduler& task_scheduler,    //
-    batt::WorkerPool& worker_pool,          //
-    llfs::StorageContext& storage_context,  //
-    const std::filesystem::path& dir_path,  //
-    const TreeOptions& tree_options         //
-    ) noexcept
+    batt::TaskScheduler& task_scheduler,
+    batt::WorkerPool& worker_pool,
+    llfs::StorageContext& storage_context,
+    const std::filesystem::path& dir_path,
+    const TreeOptions& tree_options,
+    Optional<RuntimeOptions> runtime_options) noexcept
 {
   BATT_REQUIRE_OK(storage_context.add_existing_named_file(dir_path / leaf_page_file_name()));
   BATT_REQUIRE_OK(storage_context.add_existing_named_file(dir_path / node_page_file_name()));
@@ -178,48 +187,60 @@ std::string_view filter_page_file_name() noexcept
                         open_checkpoint_log(storage_context,  //
                                             dir_path / checkpoint_log_file_name()));
 
-  return {std::unique_ptr<KVStore>{new KVStore{task_scheduler,                //
-                                               worker_pool,                   //
-                                               tree_options,                  //
-                                               std::move(change_log_writer),  //
-                                               std::move(checkpoint_log_volume)}}};
+  if (!runtime_options) {
+    runtime_options = RuntimeOptions::with_default_values();
+  }
+
+  return {
+      std::unique_ptr<KVStore>{new KVStore{task_scheduler,
+                                           worker_pool,
+                                           tree_options,
+                                           *runtime_options,
+                                           std::move(change_log_writer),
+                                           std::move(checkpoint_log_volume)}},
+  };
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-/*explicit*/ KVStore::KVStore(batt::TaskScheduler& task_scheduler,                   //
-                              batt::WorkerPool& worker_pool,                         //
-                              const TreeOptions& tree_options,                       //
-                              std::unique_ptr<ChangeLogWriter>&& change_log_writer,  //
+/*explicit*/ KVStore::KVStore(batt::TaskScheduler& task_scheduler,
+                              batt::WorkerPool& worker_pool,
+                              const TreeOptions& tree_options,
+                              const RuntimeOptions& runtime_options,
+                              std::unique_ptr<ChangeLogWriter>&& change_log_writer,
                               std::unique_ptr<llfs::Volume>&& checkpoint_log) noexcept
     : task_scheduler_{task_scheduler}
     , worker_pool_{worker_pool}
     , tree_options_{tree_options}
-    , log_writer_ref_{*change_log_writer}
+    , runtime_options_{runtime_options}
+    , log_writer_{std::move(change_log_writer)}
     , checkpoint_log_{std::move(checkpoint_log)}
+
     , mem_table_{new MemTable{
-          std::move(change_log_writer),
           /*max_byte_size=*/this->tree_options_.leaf_data_size(),
           DeltaBatchId{1}.to_mem_table_id(),
       }}
+
     , deltas_{}
+
     , checkpoint_token_pool_{std::make_shared<batt::Grant::Issuer>(
           /*max_concurrent_checkpoint_jobs=*/1)}
+
     , base_checkpoint_{Checkpoint::empty_at_batch(DeltaBatchId::from_u64(0))}
+
     , info_task_{this->task_scheduler_.schedule_task(),
                  [this] {
                    this->info_task_main();
                  },
                  "KVStore::info_task"}
-    , memtable_compact_thread_{[this] {
-      this->memtable_compact_thread_main();
-    }}
-    , checkpoint_update_thread_{[this, base_checkpoint = batt::make_copy(this->base_checkpoint_)] {
-      this->checkpoint_update_thread_main(base_checkpoint);
-    }}
-    , checkpoint_flush_thread_{[this] {
-      this->checkpoint_flush_thread_main();
-    }}
+
+    , checkpoint_generator_{this->worker_pool_,
+                            this->tree_options_,
+                            this->page_cache(),
+                            batt::make_copy(this->base_checkpoint_),
+                            *this->checkpoint_log_}
+
+    , checkpoint_batch_count_{0}
 {
   BATT_CHECK_OK(NodePageView::register_layout(this->page_cache()));
   BATT_CHECK_OK(LeafPageView::register_layout(this->page_cache()));
@@ -236,6 +257,18 @@ std::string_view filter_page_file_name() noexcept
       LOG(WARNING) << "Failed to assign filter device: " << BATT_INSPECT(status);
     }
   }
+
+  if (this->runtime_options_.use_threaded_checkpoint_pipeline) {
+    this->memtable_compact_thread_.emplace([this] {
+      this->memtable_compact_thread_main();
+    });
+    this->checkpoint_update_thread_.emplace([this] {
+      this->checkpoint_update_thread_main();
+    });
+    this->checkpoint_flush_thread_.emplace([this] {
+      this->checkpoint_flush_thread_main();
+    });
+  }
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -251,6 +284,7 @@ KVStore::~KVStore() noexcept
 void KVStore::halt()
 {
   this->halt_.set_value(true);
+  this->log_writer_->halt();
   this->memtable_compact_channel_.close();
   this->checkpoint_update_channel_.close();
   this->checkpoint_flush_channel_.close();
@@ -260,9 +294,16 @@ void KVStore::halt()
 //
 void KVStore::join()
 {
-  this->memtable_compact_thread_.join();
-  this->checkpoint_update_thread_.join();
-  this->checkpoint_flush_thread_.join();
+  this->log_writer_->join();
+  if (this->memtable_compact_thread_) {
+    this->memtable_compact_thread_->join();
+  }
+  if (this->checkpoint_update_thread_) {
+    this->checkpoint_update_thread_->join();
+  }
+  if (this->checkpoint_flush_thread_) {
+    this->checkpoint_flush_thread_->join();
+  }
   this->info_task_.join();
 }
 
@@ -418,7 +459,9 @@ Status KVStore::update_checkpoint(MemTable* observed_mem_table, u64 observed_mem
         observed_mem_table_id == this->mem_table_->id()) {
       // The current MemTable is done accepting new updates!
       //
-      std::unique_ptr<ChangeLogWriter> change_log_writer = this->mem_table_->finalize();
+      if (!this->mem_table_->finalize()) {
+        return OkStatus();
+      }
 
       // Gather some information from the current MemTable before we send it off.
       //
@@ -430,7 +473,6 @@ Status KVStore::update_checkpoint(MemTable* observed_mem_table, u64 observed_mem
       old_mem_table = std::move(this->mem_table_);
 
       this->mem_table_.reset(new MemTable{
-          std::move(change_log_writer),
           /*max_byte_size=*/this->tree_options_.flush_size(),
           next_batch_id.to_mem_table_id(),
       });
@@ -442,7 +484,26 @@ Status KVStore::update_checkpoint(MemTable* observed_mem_table, u64 observed_mem
   }
 
   if (old_mem_table) {
-    BATT_REQUIRE_OK(this->memtable_compact_channel_.write(std::move(old_mem_table)));
+    const u64 this_mem_table_id = old_mem_table->id();
+    const u64 next_mem_table_id = MemTable::next_id_for(this_mem_table_id);
+
+    while (this->next_mem_table_id_to_push_.load() != this_mem_table_id) {
+      batt::spin_yield();
+    }
+
+    if (this->runtime_options_.use_threaded_checkpoint_pipeline) {
+      BATT_REQUIRE_OK(this->memtable_compact_channel_.write(std::move(old_mem_table)));
+
+    } else {
+      std::unique_ptr<DeltaBatch> delta_batch = this->compact_memtable(std::move(old_mem_table));
+
+      BATT_ASSIGN_OK_RESULT(std::unique_ptr<CheckpointJob> checkpoint_job,
+                            this->apply_batch_to_checkpoint(std::move(delta_batch)));
+
+      BATT_REQUIRE_OK(this->commit_checkpoint(std::move(checkpoint_job)));
+    }
+
+    this->next_mem_table_id_to_push_.store(next_mem_table_id);
   }
 
   return OkStatus();
@@ -471,14 +532,7 @@ void KVStore::memtable_compact_thread_main()
         continue;
       }
 
-      // Convert the MemTable to a DeltaBatch; this compacts all updates per key.
-      //
-      std::unique_ptr<DeltaBatch> delta_batch = std::make_unique<DeltaBatch>(std::move(mem_table));
-
-      BATT_COLLECT_LATENCY(this->metrics_.compact_batch_latency,
-                           delta_batch->merge_compact_edits());
-
-      this->metrics_.batch_edits_count.add(delta_batch->result_set_size());
+      std::unique_ptr<DeltaBatch> delta_batch = this->compact_memtable(std::move(mem_table));
 
       BATT_REQUIRE_OK(this->checkpoint_update_channel_.write(std::move(delta_batch)));
     }
@@ -489,75 +543,96 @@ void KVStore::memtable_compact_thread_main()
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-void KVStore::checkpoint_update_thread_main(const Checkpoint& base_checkpoint)
+std::unique_ptr<DeltaBatch> KVStore::compact_memtable(boost::intrusive_ptr<MemTable>&& mem_table)
 {
-  Status status = [this, &base_checkpoint]() -> Status {
-    CheckpointGenerator checkpoint_generator{
-        this->worker_pool_,
-        this->tree_options_,
-        this->page_cache(),
-        batt::make_copy(base_checkpoint),
-        *this->checkpoint_log_,
-    };
+  // Convert the MemTable to a DeltaBatch; this compacts all updates per key.
+  //
+  std::unique_ptr<DeltaBatch> delta_batch = std::make_unique<DeltaBatch>(std::move(mem_table));
 
-    usize checkpoint_batch_count = 0;
+  BATT_COLLECT_LATENCY(this->metrics_.compact_batch_latency, delta_batch->merge_compact_edits());
 
+  this->metrics_.batch_edits_count.add(delta_batch->result_set_size());
+
+  return delta_batch;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void KVStore::checkpoint_update_thread_main()
+{
+  Status status = [this]() -> Status {
     for (;;) {
       BATT_ASSIGN_OK_RESULT(std::unique_ptr<DeltaBatch> delta_batch,
                             this->checkpoint_update_channel_.read());
 
-      if (delta_batch) {
-        // Apply the finalized MemTable to the current checkpoint (in-memory).
-        //
-        StatusOr<usize> push_status =
-            BATT_COLLECT_LATENCY(this->metrics_.push_batch_latency,
-                                 checkpoint_generator.push_batch(std::move(delta_batch)));
+      BATT_ASSIGN_OK_RESULT(std::unique_ptr<CheckpointJob> checkpoint_job,
+                            this->apply_batch_to_checkpoint(std::move(delta_batch)));
 
-        BATT_REQUIRE_OK(push_status);
-        BATT_CHECK_EQ(*push_status, 1);
-
-        checkpoint_batch_count += 1;
-      }
-
-      // If we have reached the target checkpoint distance, then flush the checkpoint and start a
-      // new one.
-      //
-      if (checkpoint_batch_count >= this->checkpoint_distance_.load()) {
-        this->metrics_.checkpoint_count.add(1);
-
-        // Allocate a token for the checkpoint job.
-        //
-        BATT_ASSIGN_OK_RESULT(
-            batt::Grant checkpoint_token,
-            this->checkpoint_token_pool_->issue_grant(1, batt::WaitForResource::kTrue));
-
-        // Serialize all pages and create the job.
-        //
-        StatusOr<std::unique_ptr<CheckpointJob>> checkpoint_job =
-            BATT_COLLECT_LATENCY(this->metrics_.finalize_checkpoint_latency,
-                                 checkpoint_generator.finalize_checkpoint(
-                                     std::move(checkpoint_token),
-                                     batt::make_copy(this->checkpoint_token_pool_)));
-
-        BATT_REQUIRE_OK(checkpoint_job);
-
-        BATT_CHECK_NOT_NULLPTR(*checkpoint_job);
-        BATT_CHECK((*checkpoint_job)->append_job_grant);
-        BATT_CHECK((*checkpoint_job)->appendable_job);
-        BATT_CHECK((*checkpoint_job)->prepare_slot_sequencer);
-        BATT_CHECK_NE((*checkpoint_job)->batch_count, 0);
-        BATT_CHECK_EQ((*checkpoint_job)->batch_count, checkpoint_batch_count);
-
-        // Number of batches in the current checkpoint resets to zero.
-        //
-        checkpoint_batch_count = 0;
-
-        BATT_REQUIRE_OK(this->checkpoint_flush_channel_.write(std::move(*checkpoint_job)));
+      if (checkpoint_job) {
+        BATT_REQUIRE_OK(this->checkpoint_flush_channel_.write(std::move(checkpoint_job)));
       }
     }
   }();
 
   LOG(INFO) << "checkpoint_update_thread done: " << BATT_INSPECT(status);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+StatusOr<std::unique_ptr<CheckpointJob>> KVStore::apply_batch_to_checkpoint(
+    std::unique_ptr<DeltaBatch>&& delta_batch)
+{
+  if (delta_batch) {
+    // Apply the finalized MemTable to the current checkpoint (in-memory).
+    //
+    StatusOr<usize> push_status =
+        BATT_COLLECT_LATENCY(this->metrics_.push_batch_latency,
+                             this->checkpoint_generator_.push_batch(std::move(delta_batch)));
+
+    BATT_REQUIRE_OK(push_status);
+    BATT_CHECK_EQ(*push_status, 1);
+
+    this->checkpoint_batch_count_ += 1;
+  }
+
+  // If the batch count is below the checkpoint distance, we are done.
+  //
+  if (this->checkpoint_batch_count_ < this->checkpoint_distance_.load()) {
+    return nullptr;
+  }
+
+  // Else if we have reached the target checkpoint distance, then flush the checkpoint and start a
+  // new one.
+  //
+  this->metrics_.checkpoint_count.add(1);
+
+  // Allocate a token for the checkpoint job.
+  //
+  BATT_ASSIGN_OK_RESULT(batt::Grant checkpoint_token,
+                        this->checkpoint_token_pool_->issue_grant(1, batt::WaitForResource::kTrue));
+
+  // Serialize all pages and create the job.
+  //
+  StatusOr<std::unique_ptr<CheckpointJob>> checkpoint_job =
+      BATT_COLLECT_LATENCY(this->metrics_.finalize_checkpoint_latency,
+                           this->checkpoint_generator_.finalize_checkpoint(
+                               std::move(checkpoint_token),
+                               batt::make_copy(this->checkpoint_token_pool_)));
+
+  BATT_REQUIRE_OK(checkpoint_job);
+
+  BATT_CHECK_NOT_NULLPTR(*checkpoint_job);
+  BATT_CHECK((*checkpoint_job)->append_job_grant);
+  BATT_CHECK((*checkpoint_job)->appendable_job);
+  BATT_CHECK((*checkpoint_job)->prepare_slot_sequencer);
+  BATT_CHECK_NE((*checkpoint_job)->batch_count, 0);
+  BATT_CHECK_EQ((*checkpoint_job)->batch_count, this->checkpoint_batch_count_);
+
+  // Number of batches in the current checkpoint resets to zero.
+  //
+  this->checkpoint_batch_count_ = 0;
+
+  return checkpoint_job;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -569,57 +644,65 @@ void KVStore::checkpoint_flush_thread_main()
       BATT_ASSIGN_OK_RESULT(std::unique_ptr<CheckpointJob> checkpoint_job,
                             this->checkpoint_flush_channel_.read());
 
-      // Durably commit the checkpoint.
-      //
-      StatusOr<llfs::SlotRange> checkpoint_slot_range =
-          BATT_COLLECT_LATENCY(this->metrics_.append_job_latency,                     //
-                               this->checkpoint_log_->append(                         //
-                                   std::move(*checkpoint_job->appendable_job),        //
-                                   *checkpoint_job->append_job_grant,                 //
-                                   std::move(checkpoint_job->prepare_slot_sequencer)  //
-                                   ));
-
-      BATT_REQUIRE_OK(checkpoint_slot_range);
-
-      // Lock the new slot range.
-      //
-      StatusOr<llfs::SlotReadLock> slot_read_lock = this->checkpoint_log_->lock_slots(
-          llfs::SlotRangeSpec::from(*checkpoint_slot_range),
-          llfs::LogReadMode::kSpeculative,
-          /*lock_holder=*/"TabletCheckpointTask::handle_checkpoint_commit");
-
-      BATT_REQUIRE_OK(slot_read_lock);
-
-      // Update the base checkpoint and clear deltas.
-      //
-      Optional<llfs::slot_offset_type> prev_checkpoint_slot;
-      {
-        absl::WriterMutexLock checkpoint_lock{&this->base_checkpoint_mutex_};
-
-        // Save the old checkpoint's slot lower bound so we can trim to it later.
-        //
-        Optional<llfs::SlotRange> prev_slot_range = this->base_checkpoint_.slot_range();
-        if (prev_slot_range) {
-          prev_checkpoint_slot = prev_slot_range->lower_bound;
-        }
-
-        this->base_checkpoint_ = std::move(*checkpoint_job->checkpoint);
-        this->base_checkpoint_.notify_durable(std::move(*slot_read_lock));
-        this->deltas_.erase(this->deltas_.begin(),
-                            this->deltas_.begin() + checkpoint_job->batch_count);
-
-        BATT_CHECK(this->base_checkpoint_.tree()->is_serialized());
-      }
-
-      // Trim the checkpoint volume to free old pages.
-      //
-      if (prev_checkpoint_slot) {
-        BATT_REQUIRE_OK(this->checkpoint_log_->trim(*prev_checkpoint_slot));
-      }
+      BATT_REQUIRE_OK(this->commit_checkpoint(std::move(checkpoint_job)));
     }
   }();
 
   LOG(INFO) << "checkpoint_flush_thread done: " << BATT_INSPECT(status);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Status KVStore::commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_job)
+{
+  // Durably commit the checkpoint.
+  //
+  StatusOr<llfs::SlotRange> checkpoint_slot_range =
+      BATT_COLLECT_LATENCY(this->metrics_.append_job_latency,                     //
+                           this->checkpoint_log_->append(                         //
+                               std::move(*checkpoint_job->appendable_job),        //
+                               *checkpoint_job->append_job_grant,                 //
+                               std::move(checkpoint_job->prepare_slot_sequencer)  //
+                               ));
+
+  BATT_REQUIRE_OK(checkpoint_slot_range);
+
+  // Lock the new slot range.
+  //
+  StatusOr<llfs::SlotReadLock> slot_read_lock = this->checkpoint_log_->lock_slots(
+      llfs::SlotRangeSpec::from(*checkpoint_slot_range),
+      llfs::LogReadMode::kSpeculative,
+      /*lock_holder=*/"TabletCheckpointTask::handle_checkpoint_commit");
+
+  BATT_REQUIRE_OK(slot_read_lock);
+
+  // Update the base checkpoint and clear deltas.
+  //
+  Optional<llfs::slot_offset_type> prev_checkpoint_slot;
+  {
+    absl::WriterMutexLock checkpoint_lock{&this->base_checkpoint_mutex_};
+
+    // Save the old checkpoint's slot lower bound so we can trim to it later.
+    //
+    Optional<llfs::SlotRange> prev_slot_range = this->base_checkpoint_.slot_range();
+    if (prev_slot_range) {
+      prev_checkpoint_slot = prev_slot_range->lower_bound;
+    }
+
+    this->base_checkpoint_ = std::move(*checkpoint_job->checkpoint);
+    this->base_checkpoint_.notify_durable(std::move(*slot_read_lock));
+    this->deltas_.erase(this->deltas_.begin(), this->deltas_.begin() + checkpoint_job->batch_count);
+
+    BATT_CHECK(this->base_checkpoint_.tree()->is_serialized());
+  }
+
+  // Trim the checkpoint volume to free old pages.
+  //
+  if (prev_checkpoint_slot) {
+    BATT_REQUIRE_OK(this->checkpoint_log_->trim(*prev_checkpoint_slot));
+  }
+
+  return OkStatus();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -630,8 +713,8 @@ std::function<void(std::ostream&)> KVStore::debug_info() noexcept
     auto& kv_store = this->metrics_;
     auto& checkpoint_log = *this->checkpoint_log_;
     auto& cache = checkpoint_log.cache();
-    auto& change_log_file = this->mem_table_->change_log_writer().change_log_file();
-    auto& change_log_writer = this->mem_table_->change_log_writer().metrics();
+    auto& change_log_file = this->log_writer_->change_log_file();
+    auto& change_log_writer = this->log_writer_->metrics();
 
     auto& leaf_cache = cache.metrics_for_page_size(this->tree_options_.leaf_size());
     auto& node_cache = cache.metrics_for_page_size(this->tree_options_.node_size());

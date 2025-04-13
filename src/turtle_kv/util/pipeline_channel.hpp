@@ -38,12 +38,8 @@ class PipelineChannel
           }
           break;
 
-        case kStateWriting:
-          BATT_PANIC() << "The writer thread should only try to write one value at a time!";
-          BATT_UNREACHABLE();
-          break;
-
-        case kStateFull:  // fall-through
+        case kStateWriting:  // fall-through
+        case kStateFull:     // fall-through
         case kStateReading:
           // Wait for the reader to catch up...
           //

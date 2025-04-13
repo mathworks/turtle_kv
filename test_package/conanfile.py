@@ -8,6 +8,7 @@ from conan.tools.build import can_run
 class turtle_kvTestConan(ConanFile):
     settings = "os", "compiler", "build_type", "arch"
     generators = "CMakeDeps", "CMakeToolchain"
+    tool_requires = "cmake/[>=3.20]"
 
     def requirements(self):
         self.requires(self.tested_reference_str)

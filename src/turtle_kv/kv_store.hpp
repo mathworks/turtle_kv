@@ -47,10 +47,18 @@ class KVStore : public Table
     static Config with_default_values() noexcept;
   };
 
+  struct RuntimeOptions {
+    bool use_threaded_checkpoint_pipeline;
+
+    //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+    static RuntimeOptions with_default_values() noexcept;
+  };
+
   struct ThreadContext {
     Optional<PinningPageLoader> query_page_loader;
     u64 query_count = 0;
-    ChangeLogWriter& log_writer;
+    ChangeLogWriter& log_writer_;
     u64 current_mem_table_id = 0;
     Optional<ChangeLogWriter::Context> log_writer_context_;
 
@@ -58,15 +66,15 @@ class KVStore : public Table
 
     explicit ThreadContext(KVStore* kv_store) noexcept
         : query_page_loader{kv_store->page_cache()}
-        , log_writer{kv_store->log_writer_ref_}
-        , log_writer_context_{this->log_writer}
+        , log_writer_{*kv_store->log_writer_}
+        , log_writer_context_{this->log_writer_}
     {
     }
 
     ChangeLogWriter::Context& log_writer_context(u64 mem_table_id)
     {
       if (BATT_HINT_FALSE(mem_table_id != this->current_mem_table_id)) {
-        this->log_writer_context_.emplace(this->log_writer);
+        this->log_writer_context_.emplace(this->log_writer_);
         this->current_mem_table_id = mem_table_id;
       }
       return *this->log_writer_context_;
@@ -75,20 +83,22 @@ class KVStore : public Table
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  static Status create(llfs::StorageContext& storage_context,  //
-                       const std::filesystem::path& dir_path,  //
-                       const Config& config,                   //
+  static Status create(llfs::StorageContext& storage_context,
+                       const std::filesystem::path& dir_path,
+                       const Config& config,
                        RemoveExisting remove) noexcept;
 
-  static Status create(const std::filesystem::path& dir_path,  //
-                       const Config& config,                   //
+  static Status create(const std::filesystem::path& dir_path,
+                       const Config& config,
                        RemoveExisting remove) noexcept;
 
-  static StatusOr<std::unique_ptr<KVStore>> open(batt::TaskScheduler& task_scheduler,    //
-                                                 batt::WorkerPool& worker_pool,          //
-                                                 llfs::StorageContext& storage_context,  //
-                                                 const std::filesystem::path& dir_path,  //
-                                                 const TreeOptions& tree_options) noexcept;
+  static StatusOr<std::unique_ptr<KVStore>> open(
+      batt::TaskScheduler& task_scheduler,
+      batt::WorkerPool& worker_pool,
+      llfs::StorageContext& storage_context,
+      const std::filesystem::path& dir_path,
+      const TreeOptions& tree_options,
+      Optional<RuntimeOptions> runtime_options = None) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -137,10 +147,11 @@ class KVStore : public Table
  private:
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  explicit KVStore(batt::TaskScheduler& task_scheduler,                   //
-                   batt::WorkerPool& worker_pool,                         //
-                   const TreeOptions& tree_options,                       //
-                   std::unique_ptr<ChangeLogWriter>&& change_log_writer,  //
+  explicit KVStore(batt::TaskScheduler& task_scheduler,
+                   batt::WorkerPool& worker_pool,
+                   const TreeOptions& tree_options,
+                   const RuntimeOptions& runtime_options,
+                   std::unique_ptr<ChangeLogWriter>&& change_log_writer,
                    std::unique_ptr<llfs::Volume>&& checkpoint_log) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -149,9 +160,16 @@ class KVStore : public Table
 
   void info_task_main() noexcept;
 
+  std::unique_ptr<DeltaBatch> compact_memtable(boost::intrusive_ptr<MemTable>&& mem_table);
+
   void memtable_compact_thread_main();
 
-  void checkpoint_update_thread_main(const Checkpoint& base_checkpoint);
+  StatusOr<std::unique_ptr<CheckpointJob>> apply_batch_to_checkpoint(
+      std::unique_ptr<DeltaBatch>&& delta_batch);
+
+  void checkpoint_update_thread_main();
+
+  Status commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_job);
 
   void checkpoint_flush_thread_main();
 
@@ -165,7 +183,9 @@ class KVStore : public Table
 
   TreeOptions tree_options_;
 
-  ChangeLogWriter& log_writer_ref_;
+  RuntimeOptions runtime_options_;
+
+  std::unique_ptr<ChangeLogWriter> log_writer_;
 
   std::atomic<usize> checkpoint_distance_{1};
 
@@ -191,19 +211,34 @@ class KVStore : public Table
 
   batt::Task info_task_;
 
-  std::atomic<usize> query_count_{0};
+  // TODO [tastolfi 2025-04-11] Try moving the MemTable ordering to the compact thread (maintain a
+  // heap?)
+  //
+  std::atomic<u64> next_mem_table_id_to_push_{MemTable::first_id()};
 
   PipelineChannel<boost::intrusive_ptr<MemTable>> memtable_compact_channel_;
 
+  //----- --- -- -  -  -   -
+  // Checkpoint Update State.
+  //----- --- -- -  -  -   -
+
   PipelineChannel<std::unique_ptr<DeltaBatch>> checkpoint_update_channel_;
+
+  CheckpointGenerator checkpoint_generator_;
+
+  usize checkpoint_batch_count_;
+
+  //----- --- -- -  -  -   -
+  // Checkpoint Flush State.
+  //----- --- -- -  -  -   -
 
   PipelineChannel<std::unique_ptr<CheckpointJob>> checkpoint_flush_channel_;
 
-  std::thread memtable_compact_thread_;
+  Optional<std::thread> memtable_compact_thread_;
 
-  std::thread checkpoint_update_thread_;
+  Optional<std::thread> checkpoint_update_thread_;
 
-  std::thread checkpoint_flush_thread_;
+  Optional<std::thread> checkpoint_flush_thread_;
 };
 
 }  // namespace turtle_kv
