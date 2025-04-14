@@ -10,9 +10,13 @@
 #include <turtle_kv/tree/leaf_page_view.hpp>
 #include <turtle_kv/tree/node_page_view.hpp>
 
+#include <turtle_kv/util/memory_stats.hpp>
+
 #include <turtle_kv/import/constants.hpp>
 
 #include <llfs/bloom_filter_page_view.hpp>
+
+#include <gperftools/malloc_extension.h>
 
 namespace turtle_kv {
 
@@ -61,6 +65,7 @@ std::string_view filter_page_file_name() noexcept
 /*static*/ KVStore::RuntimeOptions KVStore::RuntimeOptions::with_default_values() noexcept
 {
   return RuntimeOptions{
+      .initial_checkpoint_distance = 1,
       .use_threaded_checkpoint_pipeline = true,
   };
 }
@@ -203,6 +208,26 @@ std::string_view filter_page_file_name() noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+/*static*/ Status KVStore::global_init()
+{
+  MallocExtension* m_ext = MallocExtension::instance();
+  BATT_CHECK_NOT_NULLPTR(m_ext);
+
+  m_ext->SetMemoryReleaseRate(0);
+  m_ext->SetNumericProperty("tcmalloc.max_total_thread_cache_bytes", 64 * kGiB);
+
+  // Verify/report the properties we just configured.
+  //
+  usize value = 0;
+  BATT_CHECK(m_ext->GetNumericProperty("tcmalloc.max_total_thread_cache_bytes", &value));
+  LOG(INFO) << "tcmalloc.max_total_thread_cache_bytes=" << value;
+  LOG(INFO) << "(tcmalloc) MemoryReleaseRate=" << m_ext->GetMemoryReleaseRate();
+
+  return OkStatus();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 /*explicit*/ KVStore::KVStore(batt::TaskScheduler& task_scheduler,
                               batt::WorkerPool& worker_pool,
                               const TreeOptions& tree_options,
@@ -214,6 +239,7 @@ std::string_view filter_page_file_name() noexcept
     , tree_options_{tree_options}
     , runtime_options_{runtime_options}
     , log_writer_{std::move(change_log_writer)}
+    , checkpoint_distance_{this->runtime_options_.initial_checkpoint_distance}
     , checkpoint_log_{std::move(checkpoint_log)}
 
     , mem_table_{new MemTable{
@@ -222,6 +248,8 @@ std::string_view filter_page_file_name() noexcept
       }}
 
     , deltas_{}
+
+    , deltas_size_{0}
 
     , checkpoint_token_pool_{std::make_shared<batt::Grant::Issuer>(
           /*max_concurrent_checkpoint_jobs=*/1)}
@@ -242,6 +270,8 @@ std::string_view filter_page_file_name() noexcept
 
     , checkpoint_batch_count_{0}
 {
+  BATT_CHECK_OK(KVStore::global_init());
+
   BATT_CHECK_OK(NodePageView::register_layout(this->page_cache()));
   BATT_CHECK_OK(LeafPageView::register_layout(this->page_cache()));
   BATT_CHECK_OK(llfs::BloomFilterPageView::register_layout(this->page_cache()));
@@ -326,6 +356,13 @@ Status KVStore::put(const KeyView& key, const ValueView& value) noexcept /*overr
 
   if (status == batt::StatusCode::kResourceExhausted) {
     BATT_REQUIRE_OK(this->update_checkpoint(observed_mem_table.get(), observed_mem_table_id));
+
+    // Limit the number of deltas that can build up.
+    //
+    BATT_REQUIRE_OK(this->deltas_size_->await_true([this](usize n) {
+      return n <= this->checkpoint_distance_.load() * 2;
+    }));
+
     return this->put(key, value);
   }
 
@@ -480,6 +517,7 @@ Status KVStore::update_checkpoint(MemTable* observed_mem_table, u64 observed_mem
       // Add to deltas stack, for queries on recent data.
       //
       this->deltas_.emplace_back(old_mem_table);
+      this->deltas_size_->fetch_add(1);
     }
   }
 
@@ -500,7 +538,9 @@ Status KVStore::update_checkpoint(MemTable* observed_mem_table, u64 observed_mem
       BATT_ASSIGN_OK_RESULT(std::unique_ptr<CheckpointJob> checkpoint_job,
                             this->apply_batch_to_checkpoint(std::move(delta_batch)));
 
-      BATT_REQUIRE_OK(this->commit_checkpoint(std::move(checkpoint_job)));
+      if (checkpoint_job) {
+        BATT_REQUIRE_OK(this->commit_checkpoint(std::move(checkpoint_job)));
+      }
     }
 
     this->next_mem_table_id_to_push_.store(next_mem_table_id);
@@ -691,7 +731,11 @@ Status KVStore::commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_jo
 
     this->base_checkpoint_ = std::move(*checkpoint_job->checkpoint);
     this->base_checkpoint_.notify_durable(std::move(*slot_read_lock));
+
+    // Remove the deltas covered by the new base checkpoint.
+    //
     this->deltas_.erase(this->deltas_.begin(), this->deltas_.begin() + checkpoint_job->batch_count);
+    this->deltas_size_->fetch_sub(checkpoint_job->batch_count);
 
     BATT_CHECK(this->base_checkpoint_.tree()->is_serialized());
   }
@@ -826,6 +870,8 @@ std::function<void(std::ostream&)> KVStore::debug_info() noexcept
         << BATT_INSPECT(leaf_cache.hit_rate()) << "\n"                                      //
         << BATT_INSPECT(node_cache.hit_rate()) << "\n"                                      //
         << BATT_INSPECT(filter_cache.hit_rate()) << "\n"                                    //
+        << "\n"                                                                             //
+        << dump_memory_stats() << "\n"                                                      //
         ;
   };
 }

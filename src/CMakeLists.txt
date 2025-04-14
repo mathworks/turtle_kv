@@ -9,6 +9,7 @@ target_link_libraries(
   boost::boost
   llfs::llfs
   vqf::vqf
+  gperftools::gperftools
   )
 
 target_link_libraries(
@@ -24,4 +25,5 @@ target_link_libraries(
   backtrace
   dl
   stdc++fs
+  gperftools::gperftools
   )

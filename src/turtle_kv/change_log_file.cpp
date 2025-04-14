@@ -131,6 +131,14 @@ auto ChangeLogFile::PackedConfig::unpack() const noexcept -> ChangeLogFile::Conf
 {
   BATT_CHECK_EQ(this->config_.block_size & 511, 0);
 
+  std::memset((void*)read_lock_counter_per_block_.get(),
+              0,
+              sizeof(ReadLockCounter) * this->config_.block_count);
+
+  for (i64 i = 0; i < this->config_.block_count; ++i) {
+    BATT_CHECK_EQ(read_lock_counter_per_block_[i]->load(), 0);
+  }
+
   this->metrics_.freed_blocks_count.add(this->free_block_tokens_.total_size());
 }
 
@@ -154,10 +162,13 @@ void ChangeLogFile::lock_for_read(const Interval<i64>& block_range) noexcept
 //
 void ChangeLogFile::unlock_for_read(const Interval<i64>& block_range) noexcept
 {
-  this->for_block_range(block_range, [](i64 block_i [[maybe_unused]], ReadLockCounter& counter) {
-    const auto old_count = counter->fetch_sub(1);
-    BATT_CHECK_GT(old_count, 0);
-  });
+  this->for_block_range(block_range,
+                        [this](i64 block_i [[maybe_unused]], ReadLockCounter& counter) {
+                          const auto old_count = counter->fetch_sub(1);
+                          BATT_CHECK_GT(old_count, 0)
+                              << BATT_INSPECT(batt::to_string(std::hex, (u64)old_count))
+                              << BATT_INSPECT(block_i) << BATT_INSPECT(this->config_.block_count);
+                        });
   this->update_lower_bound(block_range.upper_bound);
 }
 

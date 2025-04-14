@@ -273,12 +273,17 @@ struct InMemoryNode {
 
       usize estimate_segment_count(const TreeOptions& tree_options) const
       {
-        const usize capacity_per_segment = tree_options.flush_size() - tree_options.max_item_size();
         const usize packed_size = this->result_set.get_packed_size();
+        if (packed_size == 0) {
+          return 0;
+        }
+
+        const usize capacity_per_segment = tree_options.flush_size() - tree_options.max_item_size();
         const usize estimated = (packed_size + capacity_per_segment - 1) / capacity_per_segment;
 
         BATT_CHECK_GE(estimated * capacity_per_segment, packed_size);
-        BATT_CHECK_LT((estimated - 1) * capacity_per_segment, packed_size);
+        BATT_CHECK_LT((estimated - 1) * capacity_per_segment, packed_size)
+            << BATT_INSPECT(estimated) << BATT_INSPECT(capacity_per_segment);
 
         return estimated;
       }

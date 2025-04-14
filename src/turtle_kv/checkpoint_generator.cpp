@@ -106,9 +106,31 @@ StatusOr<usize> CheckpointGenerator::push_batch(std::unique_ptr<DeltaBatch>&& ba
 
   this->base_checkpoint_ = std::move(*new_checkpoint);
 
+  this->current_batch_count_ += 1;
+
   // Periodically serialize to unpin some pages, controlling total memory usage.
   //
-  this->current_batch_count_ += 1;
+  static const usize serialize_limit =
+      batt::getenv_as<usize>("TURTLE_KV_SERIALIZE_EVERY_N_BATCHES").value_or(0);
+
+  if (serialize_limit != 0 && (this->current_batch_count_ % serialize_limit) == 0) {
+    // const i64 pinned_before_count = this->job_->pinned_page_count();
+    // const i64 new_before_count = this->job_->new_page_count();
+
+    BATT_REQUIRE_OK(this->serialize_checkpoint());
+
+    const llfs::PageId root_id = batt::get_or_panic(this->base_checkpoint_.maybe_root_id());
+    this->job_->new_root(root_id);
+    this->clear_old_roots();
+
+    BATT_REQUIRE_OK(this->job_->prune(/*callers=*/0));
+
+    this->job_->delete_root(root_id);
+    this->job_->unpin_all();
+
+    // const i64 pinned_after_count = this->job_->pinned_page_count();
+    // const i64 new_after_count = this->job_->new_page_count();
+  }
 
   return {1u};
 }
@@ -135,8 +157,6 @@ Status CheckpointGenerator::serialize_checkpoint() noexcept
   BATT_ASSIGN_OK_RESULT(
       this->base_checkpoint_,
       this->base_checkpoint_.serialize(this->tree_options_, *this->job_, this->worker_pool_));
-
-  this->current_batch_count_ = 0;
 
   return OkStatus();
 }
@@ -174,6 +194,8 @@ StatusOr<std::unique_ptr<CheckpointJob>> CheckpointGenerator::finalize_checkpoin
   const usize batch_count = this->current_batch_count_;
 
   BATT_REQUIRE_OK(this->serialize_checkpoint());
+
+  this->current_batch_count_ = 0;
 
   this->clear_old_roots();
 

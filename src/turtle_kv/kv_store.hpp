@@ -19,6 +19,7 @@
 #include <llfs/storage_context.hpp>
 #include <llfs/volume.hpp>
 
+#include <batteries/async/watch.hpp>
 #include <batteries/hint.hpp>
 #include <batteries/small_vec.hpp>
 
@@ -48,6 +49,7 @@ class KVStore : public Table
   };
 
   struct RuntimeOptions {
+    usize initial_checkpoint_distance;
     bool use_threaded_checkpoint_pipeline;
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -100,6 +102,8 @@ class KVStore : public Table
       const TreeOptions& tree_options,
       Optional<RuntimeOptions> runtime_options = None) noexcept;
 
+  static Status global_init();
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   ~KVStore() noexcept;
@@ -122,6 +126,11 @@ class KVStore : public Table
   Status remove(const KeyView& key) noexcept override;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  const TreeOptions& tree_options() const
+  {
+    return this->tree_options_;
+  }
 
   KVStoreMetrics& metrics() noexcept
   {
@@ -187,7 +196,7 @@ class KVStore : public Table
 
   std::unique_ptr<ChangeLogWriter> log_writer_;
 
-  std::atomic<usize> checkpoint_distance_{1};
+  std::atomic<usize> checkpoint_distance_;
 
   absl::Mutex base_checkpoint_mutex_;
 
@@ -200,6 +209,8 @@ class KVStore : public Table
   // Recent MemTables that have been compacted/finalized; newest=back, oldest=front.
   //
   std::vector<boost::intrusive_ptr<MemTable>> deltas_ ABSL_GUARDED_BY(base_checkpoint_mutex_);
+
+  batt::CpuCacheLineIsolated<batt::Watch<usize>> deltas_size_;
 
   std::shared_ptr<batt::Grant::Issuer> checkpoint_token_pool_;
 

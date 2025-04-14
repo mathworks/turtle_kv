@@ -216,18 +216,19 @@ inline void ChangeLogFile::for_block_range(const Interval<i64>& block_range, Fn&
 
   i64 block_i = block_range.lower_bound;
   i64 first_addr = block_range.lower_bound % this->config_.block_count;
-  i64 last_addr = first_addr + block_range.size();
-  if (last_addr > this->config_.block_count) {
-    last_addr -= this->config_.block_count;
-  }
+  i64 count = block_range.size();
+  BATT_CHECK_GE(count, 0);
 
-  while (first_addr != last_addr) {
+  while (count != 0) {
+    BATT_CHECK_LT(first_addr, this->config_.block_count);
+
     fn(block_i, this->read_lock_counter_per_block_[first_addr]);
 
+    --count;
     ++block_i;
     ++first_addr;
-    if (first_addr > this->config_.block_count) {
-      first_addr -= this->config_.block_count;
+    if (first_addr == this->config_.block_count) {
+      first_addr = 0;
     }
   }
 }
