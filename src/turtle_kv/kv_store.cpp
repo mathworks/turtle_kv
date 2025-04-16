@@ -13,6 +13,7 @@
 #include <turtle_kv/util/memory_stats.hpp>
 
 #include <turtle_kv/import/constants.hpp>
+#include <turtle_kv/import/env.hpp>
 
 #include <llfs/bloom_filter_page_view.hpp>
 
@@ -213,15 +214,18 @@ std::string_view filter_page_file_name() noexcept
   MallocExtension* m_ext = MallocExtension::instance();
   BATT_CHECK_NOT_NULLPTR(m_ext);
 
-  m_ext->SetMemoryReleaseRate(0);
-  m_ext->SetNumericProperty("tcmalloc.max_total_thread_cache_bytes", 64 * kGiB);
+  const double release_rate = getenv_as<double>("turtlekv_memory_release_rate").value_or(0);
+  const usize thread_cache_mb = getenv_as<usize>("turtlekv_memory_cache_mb").value_or(65536);
+
+  m_ext->SetMemoryReleaseRate(release_rate);
+  m_ext->SetNumericProperty("tcmalloc.max_total_thread_cache_bytes", thread_cache_mb * kMiB);
 
   // Verify/report the properties we just configured.
   //
   usize value = 0;
   BATT_CHECK(m_ext->GetNumericProperty("tcmalloc.max_total_thread_cache_bytes", &value));
-  LOG(INFO) << "tcmalloc.max_total_thread_cache_bytes=" << value;
-  LOG(INFO) << "(tcmalloc) MemoryReleaseRate=" << m_ext->GetMemoryReleaseRate();
+  LOG(INFO) << "tcmalloc.max_total_thread_cache_bytes " << value;
+  LOG(INFO) << "tcmalloc.memory_release_rate " << m_ext->GetMemoryReleaseRate();
 
   return OkStatus();
 }

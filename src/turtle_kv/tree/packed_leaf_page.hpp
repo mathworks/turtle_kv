@@ -658,6 +658,13 @@ inline PackedLeafPage* build_leaf_page(MutableBuffer buffer,
 
         pivot_keys.emplace_back(pivot);
       }
+
+      // If there are too few keys to build a trie index, then stop here.
+      //
+      if (pivot_keys.empty()) {
+        break;
+      }
+
       llfs::BPTrie in_memory_trie{pivot_keys};
 
       const usize packed_trie_size = in_memory_trie.packed_size(/*verbose=*/false);

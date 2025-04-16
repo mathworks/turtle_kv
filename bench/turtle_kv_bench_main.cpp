@@ -334,14 +334,13 @@ void run_load_bench(int argc, char** argv, KVStore& kv_store)
   const usize key_size = kv_store.tree_options().key_size_hint();
   const usize value_size = kv_store.tree_options().value_size_hint();
   const usize n_puts = getenv_as<usize>("N").value_or(kDefaultN);
-  const usize n_unique = getenv_as<usize>("UNIQUE").value_or(n_puts);
+  const usize n_unique = std::min(getenv_as<usize>("UNIQUE").value_or(n_puts),
+                                  random_data.size() - std::max(key_size, value_size));
 
   BATT_CHECK_LE(n_unique, n_puts);
 
   pcg64_unique rng;
-  std::uniform_int_distribution<usize> pick_data{
-      0,
-      std::min(n_unique, random_data.size() - std::max(key_size, value_size))};
+  std::uniform_int_distribution<usize> pick_data{0, n_unique};
 
   const usize ten_percent = (n_puts * 10 + 99) / 100;
 
@@ -353,20 +352,40 @@ void run_load_bench(int argc, char** argv, KVStore& kv_store)
   {
     LatencyTimer timer{put_latency, (n_puts + 500) / 1000};
 
-    for (usize j = 0; j < n_puts; ++j) {
-      LOG_EVERY_N(INFO, ten_percent)
-          << "turtlekv_bench_progress " << j * 100 / n_puts << "%" << [&](std::ostream& out) {
-               put_rate.update(j);
-               out << " puts/second= " << put_rate.get();
-             };
+    if (n_unique != n_puts) {
+      for (usize j = 0; j < n_puts; ++j) {
+        LOG_EVERY_N(INFO, ten_percent)
+            << "turtlekv_bench_progress " << j * 100 / n_puts << "%" << [&](std::ostream& out) {
+                 put_rate.update(j);
+                 out << " puts/second= " << put_rate.get();
+               };
 
-      usize i = pick_data(rng);
-      const char* src_ptr = random_data.begin() + i;
+        usize i = pick_data(rng);
+        const char* src_ptr = random_data.begin() + i;
 
-      const KeyView key{src_ptr, key_size};
-      const ValueView value = ValueView::from_str(std::string_view{src_ptr, value_size});
+        const KeyView key{src_ptr, key_size};
+        const ValueView value = ValueView::from_str(std::string_view{src_ptr, value_size});
 
-      BATT_CHECK_OK(kv_store.put(key, value));
+        BATT_CHECK_OK(kv_store.put(key, value));
+      }
+    } else {
+      LOG(INFO) << "Using sequential scan of random data";
+
+      const char* src_ptr = random_data.begin();
+      const char* end_ptr = src_ptr + n_puts;
+
+      for (usize j = 0; src_ptr != end_ptr; ++src_ptr, ++j) {
+        LOG_EVERY_N(INFO, ten_percent)
+            << "turtlekv_bench_progress " << j * 100 / n_puts << "%" << [&](std::ostream& out) {
+                 put_rate.update(j);
+                 out << " puts/second= " << put_rate.get();
+               };
+
+        const KeyView key{src_ptr, key_size};
+        const ValueView value = ValueView::from_str(std::string_view{src_ptr, value_size});
+
+        BATT_CHECK_OK(kv_store.put(key, value));
+      }
     }
   }
 

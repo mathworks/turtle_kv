@@ -68,12 +68,12 @@ class TurtleKvRecipe(ConanFile):
 
         self.test_requires("gtest/[>=1.14.0]")
 
-    def configure(self):
-        self.options["gtest"].shared = False
-        self.options["boost"].shared = False
-        self.options["boost"].without_test = True
-        self.options["batteries"].with_glog = True
-        self.options["batteries"].header_only = False
+    #def configure(self):
+    #    self.options["gtest"].shared = False
+    #    self.options["boost"].shared = False
+    #    self.options["boost"].without_test = True
+    #    self.options["batteries"].with_glog = True
+    #    self.options["batteries"].header_only = False
 
     #+++++++++++-+-+--+----- --- -- -  -  -   -
 

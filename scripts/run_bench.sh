@@ -18,7 +18,7 @@ if [ "${PERF_STAT:-1}" != "0" ]; then
 fi
 
 if [ "${GDB:-0}" != "0" ]; then
-    runner_tool="${runner_tool} gdb"
+    runner_tool="${runner_tool} gdb --args "
 fi
 
 #=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
@@ -46,7 +46,7 @@ echo "device_bytes_read ${device_bytes_read}"
 echo "device_bytes_written ${device_bytes_written}"
 
 if [ "${N:-}" != "" ]; then
-    user_input_bytes=$(pyexpr "130 * ${N}")
+    user_input_bytes=$(pyexpr "(${turtlekv_key_size_hint:-24} + ${turtlekv_value_size_hint:-100} + 6) * ${N}")
     write_amp=$(pyexpr "${device_bytes_written} / ${user_input_bytes}")
     echo "write_amplification ${write_amp}"
 fi
