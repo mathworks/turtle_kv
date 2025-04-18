@@ -4,6 +4,8 @@
 
 #include <turtle_kv/vqf_filter_page_view.hpp>
 
+#include <turtle_kv/tree/tree_options.hpp>
+
 #include <turtle_kv/core/key_view.hpp>
 #include <turtle_kv/core/value_view.hpp>
 
@@ -47,6 +49,8 @@ struct FilteredKeyQuery {
   llfs::PageCache* page_cache;
   llfs::PageLoader* page_loader;
   llfs::PinnedPage* pinned_page_out;
+  const TreeOptions* tree_options;
+
 #if TURTLE_KV_USE_BLOOM_FILTER
   llfs::BloomFilterQuery<KeyView> bloom_filter_query;
 #endif
@@ -60,10 +64,13 @@ struct FilteredKeyQuery {
   explicit FilteredKeyQuery(llfs::PageCache& cache,
                             llfs::PageLoader& loader,
                             llfs::PinnedPage& page_out,
+                            const TreeOptions& tree_options_arg,
                             const KeyView& key_arg) noexcept
       : page_cache{std::addressof(cache)}
       , page_loader{std::addressof(loader)}
       , pinned_page_out{std::addressof(page_out)}
+      , tree_options{std::addressof(tree_options_arg)}
+
 #if TURTLE_KV_USE_BLOOM_FILTER
       , bloom_filter_query{key_arg}
 #endif
@@ -223,7 +230,8 @@ struct FilteredQuerySubtreeWrapper {
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   template <typename PageLoaderT, typename PinnedPageT>
-  StatusOr<ValueView> find_key(PageLoaderT& page_loader [[maybe_unused]],
+  StatusOr<ValueView> find_key(ParentNodeHeight parent_height,
+                               PageLoaderT& page_loader [[maybe_unused]],
                                PinnedPageT& subtree_pinned_page,
                                const KeyView& key) const
   {
@@ -235,7 +243,7 @@ struct FilteredQuerySubtreeWrapper {
       std::swap(saved_page_out, query_.pinned_page_out);
     });
 
-    return this->subtree_.find_key_filtered(this->query_);
+    return this->subtree_.find_key_filtered(parent_height, this->query_);
   }
 };
 
@@ -245,6 +253,8 @@ template <typename NodeT>
 struct FilteredQueryNodeWrapper {
   NodeT& node_;
   FilteredKeyQuery& query_;
+
+  decltype(NodeT::height) height = this->node_.height;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 

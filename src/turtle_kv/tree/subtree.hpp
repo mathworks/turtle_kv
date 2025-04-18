@@ -26,7 +26,8 @@ namespace turtle_kv {
 struct InMemoryLeaf;
 struct InMemoryNode;
 
-struct Subtree {
+class Subtree
+{
  public:
   std::variant<llfs::PageIdSlot, std::unique_ptr<InMemoryLeaf>, std::unique_ptr<InMemoryNode>> impl;
 
@@ -58,11 +59,13 @@ struct Subtree {
 
   SubtreeViability get_viability() const;
 
-  StatusOr<ValueView> find_key(llfs::PageLoader& page_loader,
+  StatusOr<ValueView> find_key(ParentNodeHeight parent_height,
+                               llfs::PageLoader& page_loader,
                                llfs::PinnedPage& pinned_page_out,
                                const KeyView& key) const;
 
-  StatusOr<ValueView> find_key_filtered(FilteredKeyQuery& query) const;
+  StatusOr<ValueView> find_key_filtered(ParentNodeHeight parent_height,
+                                        FilteredKeyQuery& query) const;
 
   std::function<void(std::ostream&)> dump(i32 detail_level = 1) const;
 

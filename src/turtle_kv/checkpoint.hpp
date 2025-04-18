@@ -49,6 +49,10 @@ class Checkpoint
       //
       std::shared_ptr<Subtree>&& tree,
 
+      // The height of the tree.
+      //
+      i32 tree_height,
+
       // The upper-bound of the deltas covered by this checkpoint.
       //
       DeltaBatchId batch_upper_bound,
@@ -82,6 +86,11 @@ class Checkpoint
   const std::shared_ptr<Subtree>& tree() const
   {
     return this->tree_;
+  }
+
+  i32 tree_height() const
+  {
+    return this->tree_height_;
   }
 
   /** \brief The slot upper bound (one past the last byte) of deltas that are included in this
@@ -136,9 +145,18 @@ class Checkpoint
   Checkpoint clone() const noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  StatusOr<ValueView> find_key(llfs::PageLoader& page_loader,
+                               llfs::PinnedPage& pinned_page_out,
+                               const KeyView& key) const;
+
+  StatusOr<ValueView> find_key_filtered(FilteredKeyQuery& query) const;
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
   Optional<llfs::PageId> root_id_;
   std::shared_ptr<Subtree> tree_;
+  i32 tree_height_;
   DeltaBatchId batch_upper_bound_;
 
   // Read lock that keeps this Checkpoint from being recycled by the llfs::Volume; the locked slot

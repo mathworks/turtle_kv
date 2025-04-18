@@ -1,16 +1,31 @@
 #include <turtle_kv/mem_table.hpp>
 //
 
+#include <turtle_kv/import/env.hpp>
+
 #include <batteries/async/task.hpp>
 
 namespace turtle_kv {
+
+namespace {
+
+i32 get_n_shards_log2()
+{
+  static const i32 n_shards = getenv_as<i32>("turtlekv_memtable_hash_shards")
+                                  .value_or((std::thread::hardware_concurrency() + 1) / 2);
+  static const i32 n_shards_log2 =
+      std::min<i32>(MemTable::kMaxShardsLog2, batt::log2_ceil(n_shards));
+
+  return n_shards_log2;
+}
+
+}  // namespace
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 /*explicit*/ MemTable::MemTable(usize max_byte_size, Optional<u64> id) noexcept
     : is_finalized_{false}
-    , n_shards_log2_{std::min<i32>(MemTable::kMaxShardsLog2,
-                                   batt::log2_ceil(std::thread::hardware_concurrency()))}
+    , n_shards_log2_{get_n_shards_log2()}
     , n_shards_{usize{1} << this->n_shards_log2_}
     , shard_mask_{this->n_shards_ - 1}
     , hash_mutex_storage_(this->n_shards_)
@@ -194,12 +209,6 @@ bool MemTable::finalize() noexcept
     this->hashed_mutex_for_shard(n_shards_locked)->Lock();
   }
 
-#if 0
-  // MUST come after the hash index shard locks!
-  //
-  absl::WriterMutexLock ordered_lock{this->ordered_mutex()};
-#endif
-
   const bool prior_value = this->is_finalized_;
   this->is_finalized_ = true;
   return prior_value == false;
@@ -228,12 +237,6 @@ MergeCompactor::ResultSet</*decay_to_items=*/false> MemTable::compact() noexcept
     for (const HashedIndex& shard : this->hashed_) {
       const auto last = shard.end();
       for (auto iter = shard.begin(); iter != last; ++iter) {
-#if 0
-      for (const KeyView& key : this->ordered_) {
-        MemTableQuery query{key};
-        const usize shard_i = this->shard_for_hash_val(query.hash_val);
-        auto iter = this->hashed_[shard_i].find(query);
-#endif
         KeyView key = get_key(*iter);
         ValueView value = iter->value_;
         if (value.needs_combine()) {

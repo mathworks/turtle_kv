@@ -52,6 +52,7 @@ namespace turtle_kv {
 {
   return Checkpoint{llfs::PageId{llfs::kInvalidPageId},
                     std::make_shared<Subtree>(Subtree::make_empty()),
+                    /*tree_height=*/0,
                     batch_id,
                     CheckpointLock::make_durable_detached()};
 }
@@ -61,6 +62,7 @@ namespace turtle_kv {
 Checkpoint::Checkpoint() noexcept
     : root_id_{llfs::PageId{llfs::kInvalidPageId}}
     , tree_{std::make_shared<Subtree>(Subtree::make_empty())}
+    , tree_height_{0}
     , batch_upper_bound_{0}
     , checkpoint_lock_{CheckpointLock::make_durable_detached()}
 {
@@ -70,10 +72,12 @@ Checkpoint::Checkpoint() noexcept
 //
 Checkpoint::Checkpoint(Optional<llfs::PageId> root_id,
                        std::shared_ptr<Subtree>&& tree,
+                       i32 tree_height,
                        DeltaBatchId batch_upper_bound,
                        CheckpointLock&& checkpoint_lock) noexcept
     : root_id_{root_id}
     , tree_{std::move(tree)}
+    , tree_height_{tree_height}
     , batch_upper_bound_{batch_upper_bound}
     , checkpoint_lock_{std::move(checkpoint_lock)}
 {
@@ -107,9 +111,13 @@ StatusOr<Checkpoint> Checkpoint::serialize(const TreeOptions& tree_options,
 
   const llfs::PageId new_tree_root_id = pinned_root_page.page_id();
 
+  BATT_ASSIGN_OK_RESULT(const i32 serialized_height, this->tree_->get_height(job));
+  BATT_CHECK_EQ(serialized_height, this->tree_height_);
+
   return Checkpoint{
       new_tree_root_id,
       batt::make_copy(this->tree_),
+      this->tree_height_,
       this->batch_upper_bound_,
       batt::make_copy(this->checkpoint_lock_),
   };
@@ -159,17 +167,18 @@ StatusOr<Checkpoint> Checkpoint::flush_batch(batt::WorkerPool& worker_pool,
       .edit_size_totals = None,
   };
 
-  BATT_ASSIGN_OK_RESULT(i32 tree_height, this->tree_->get_height(job));
-
   BATT_REQUIRE_OK(this->tree_->apply_batch_update(tree_options,
-                                                  ParentNodeHeight{tree_height + 1},
+                                                  ParentNodeHeight{this->tree_height_ + 1},
                                                   update,
                                                   /*key_upper_bound=*/global_max_key(),
                                                   IsRoot{true}));
 
+  BATT_ASSIGN_OK_RESULT(i32 new_tree_height, this->tree_->get_height(job));
+
   return Checkpoint{
       /*root_page_id=*/this->tree_->get_page_id(),
       batt::make_copy(this->tree_),
+      /*tree_height=*/new_tree_height,
       delta_batch->batch_id(),
       CheckpointLock::make_speculative(std::move(delta_batch),
                                        batt::make_copy(this->checkpoint_lock_)),
@@ -182,8 +191,28 @@ Checkpoint Checkpoint::clone() const noexcept
 {
   return Checkpoint{this->root_id_,
                     std::make_shared<Subtree>(this->tree_->clone_serialized_or_panic()),
+                    this->tree_height_,
                     this->batch_upper_bound_,
                     this->clone_checkpoint_lock()};
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+StatusOr<ValueView> Checkpoint::find_key(llfs::PageLoader& page_loader,
+                                         llfs::PinnedPage& pinned_page_out,
+                                         const KeyView& key) const
+{
+  return this->tree_->find_key(ParentNodeHeight{this->tree_height_ + 1},
+                               page_loader,
+                               pinned_page_out,
+                               key);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+StatusOr<ValueView> Checkpoint::find_key_filtered(FilteredKeyQuery& query) const
+{
+  return this->tree_->find_key_filtered(ParentNodeHeight{this->tree_height_ + 1}, query);
 }
 
 }  // namespace turtle_kv

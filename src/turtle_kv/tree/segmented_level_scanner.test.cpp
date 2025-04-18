@@ -24,6 +24,10 @@
 #include <map>
 #include <random>
 
+#ifdef BATT_USE_BOOST_OPTIONAL
+#error !
+#endif
+
 namespace {
 
 using namespace turtle_kv::int_types;
@@ -252,6 +256,9 @@ class SegmentedLevelScannerTest : public ::testing::Test
     Optional<llfs::StableStringStore> string_store;
     Optional<std::default_random_engine> rng{std::random_device{}()};
     RandomLeafGenerator leaf_generator;
+
+    static_assert(!std::is_same_v<Optional<FakePageLoader>, std::optional<FakePageLoader>>);
+
     Optional<FakePageLoader> fake_page_loader{llfs::PageSize{256 * 1024}};
   };
 };

@@ -183,7 +183,8 @@ struct NodeAlgorithms {
     PinnedPageT subtree_pinned_page;
 
     StatusOr<ValueView> subtree_result =
-        this->node_.get_child(key_pivot_i).find_key(page_loader, subtree_pinned_page, key);
+        this->node_.get_child(key_pivot_i)
+            .find_key(ParentNodeHeight{this->node_.height}, page_loader, subtree_pinned_page, key);
 
     BATT_REQUIRE_OK(combine_in_place(&value, subtree_result));
 

@@ -274,6 +274,8 @@ std::string_view filter_page_file_name() noexcept
 
     , checkpoint_batch_count_{0}
 {
+  this->tree_options_.set_trie_index_reserve_size(this->tree_options_.trie_index_reserve_size());
+
   BATT_CHECK_OK(KVStore::global_init());
 
   BATT_CHECK_OK(NodePageView::register_layout(this->page_cache()));
@@ -433,13 +435,17 @@ StatusOr<ValueView> KVStore::get(const KeyView& key) noexcept /*override*/
   BATT_CHECK(this->base_checkpoint_.tree()->is_serialized());
 
 #if TURTLE_KV_ENABLE_LEAF_FILTERS
-  FilteredKeyQuery query{this->page_cache(), *this->query_page_loader(), pinned_page_out, key};
+  FilteredKeyQuery query{this->page_cache(),
+                         *this->query_page_loader(),
+                         pinned_page_out,
+                         this->tree_options_,
+                         key};
 #endif
 
   StatusOr<ValueView> value_from_checkpoint =
       BATT_COLLECT_LATENCY_SAMPLE(batt::Every2ToTheConst<12>{},
                                   this->metrics_.checkpoint_get_latency,
-                                  this->base_checkpoint_.tree()->
+                                  this->base_checkpoint_.
   //----- --- -- -  -  -   -
 #if TURTLE_KV_ENABLE_LEAF_FILTERS
                                   find_key_filtered(query)

@@ -14,6 +14,8 @@ namespace {
 using namespace turtle_kv::int_types;
 using namespace turtle_kv::constants;
 
+using llfs::PageSize;
+
 using turtle_kv::KeyView;
 using turtle_kv::KVStore;
 using turtle_kv::OkStatus;
@@ -43,8 +45,12 @@ TEST(KVStoreTest, CreateAndOpen)
 
     LOG(INFO) << BATT_INSPECT(kv_store_config.tree_options.filter_bits_per_key());
 
-    kv_store_config.tree_options.set_key_size_hint(24);
-    kv_store_config.tree_options.set_value_size_hint(10);
+    auto& tree_options = kv_store_config.tree_options;
+
+    tree_options.set_node_size(4 * kKiB);
+    tree_options.set_leaf_size(1 * kMiB);
+    tree_options.set_key_size_hint(24);
+    tree_options.set_value_size_hint(10);
 
     for (usize chi : {1, 2, 3, 4, 5, 6, 7, 8}) {
       for (const char* workload_file : {
@@ -74,12 +80,39 @@ TEST(KVStoreTest, CreateAndOpen)
             llfs::StorageContext::make_shared(batt::Runtime::instance().default_scheduler(),  //
                                               scoped_io_ring->get_io_ring());
 
+        {
+          auto page_cache_options = llfs::PageCacheOptions::with_default_values();
+
+          const PageSize leaf_size = tree_options.leaf_size();
+          const PageSize node_size = tree_options.node_size();
+          const PageSize filter_size = tree_options.filter_page_size();
+          const PageSize trie_index_size{
+              u32{1} << batt::log2_ceil(tree_options.trie_index_reserve_size())};
+
+          LOG_FIRST_N(INFO, 1) << BATT_INSPECT(leaf_size) << BATT_INSPECT(node_size)
+                               << BATT_INSPECT(filter_size) << BATT_INSPECT(trie_index_size);
+
+          page_cache_options  //
+              .set_max_cached_pages_per_size(node_size, (32 * kGiB) / node_size)
+              .set_max_cached_pages_per_size(leaf_size, (32 * kGiB) / leaf_size)
+              .set_max_cached_pages_per_size(filter_size, (4 * kGiB) / filter_size)
+              .set_max_cached_pages_per_size(trie_index_size, (4 * kGiB) / trie_index_size)
+              .add_sharded_view(leaf_size, node_size)
+              .add_sharded_view(leaf_size, trie_index_size);
+
+          p_storage_context->set_page_cache_options(page_cache_options);
+        }
+
+        auto runtime_options = KVStore::RuntimeOptions::with_default_values();
+        runtime_options.use_threaded_checkpoint_pipeline = false;
+
         StatusOr<std::unique_ptr<KVStore>> kv_store_opened =
-            KVStore::open(batt::Runtime::instance().default_scheduler(),  //
-                          batt::WorkerPool::default_pool(),               //
-                          *p_storage_context,                             //
-                          test_kv_store_dir,                              //
-                          kv_store_config.tree_options);
+            KVStore::open(batt::Runtime::instance().default_scheduler(),
+                          batt::WorkerPool::default_pool(),
+                          *p_storage_context,
+                          test_kv_store_dir,
+                          kv_store_config.tree_options,
+                          runtime_options);
 
         ASSERT_TRUE(kv_store_opened.ok()) << BATT_INSPECT(kv_store_opened.status());
 

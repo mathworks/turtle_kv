@@ -10,6 +10,8 @@
 #include <turtle_kv/tree/the_key.hpp>
 #include <turtle_kv/tree/visit_tree_page.hpp>
 
+#include <llfs/sharded_page_view.hpp>
+
 #include <batteries/stream_util.hpp>
 
 namespace turtle_kv {
@@ -332,7 +334,8 @@ SubtreeViability Subtree::get_viability() const
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<ValueView> Subtree::find_key(llfs::PageLoader& page_loader,
+StatusOr<ValueView> Subtree::find_key(ParentNodeHeight parent_height,
+                                      llfs::PageLoader& page_loader,
                                       llfs::PinnedPage& pinned_page_out,
                                       const KeyView& key) const
 {
@@ -366,8 +369,13 @@ StatusOr<ValueView> Subtree::find_key(llfs::PageLoader& page_loader,
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<ValueView> Subtree::find_key_filtered(FilteredKeyQuery& query) const
+StatusOr<ValueView> Subtree::find_key_filtered(ParentNodeHeight parent_height,
+                                               FilteredKeyQuery& query) const
 {
+  if (parent_height < 2) {
+    return {batt::StatusCode::kNotFound};
+  }
+
   return batt::case_of(
       this->impl,
       [&](const llfs::PageIdSlot& page_id_slot) -> StatusOr<ValueView> {
@@ -375,7 +383,123 @@ StatusOr<ValueView> Subtree::find_key_filtered(FilteredKeyQuery& query) const
           return {batt::StatusCode::kNotFound};
         }
 
-        return visit_tree_page(  //
+        if (parent_height != 2) {
+          return visit_node_page(*query.page_loader,
+                                 *query.pinned_page_out,
+                                 page_id_slot,
+                                 [&](const PackedNodePage& packed_node) -> StatusOr<ValueView> {
+                                   return packed_node.find_key_filtered(query);
+                                 });
+        }
+        BATT_CHECK_EQ(parent_height, 2);
+
+        PageSliceReader slice_reader{*query.page_loader, page_id_slot, llfs::PageSize{4096}};
+
+        const auto head_shard_size =
+            llfs::PageSize{(u32)query.tree_options->trie_index_sharded_view_size()};
+
+        PageSliceStorage head_storage;
+        BATT_ASSIGN_OK_RESULT(ConstBuffer head_buffer,
+                              slice_reader.read_slice(head_shard_size,
+                                                      Interval<usize>{0, head_shard_size},
+                                                      head_storage));
+
+        const void* page_start = head_buffer.data();
+        const void* payload_start = advance_pointer(page_start, sizeof(llfs::PackedPageHeader));
+        const auto& packed_leaf_page = *static_cast<const PackedLeafPage*>(payload_start);
+
+        // Sanity check; make sure this is a leaf!
+        //
+        packed_leaf_page.check_magic();
+
+        // There should be a Trie index, and it should have fit inside the head_buffer; sanity
+        // check these assertions.
+        //
+        const void* trie_begin = packed_leaf_page.trie_index.get();
+        const void* trie_end = advance_pointer(trie_begin, packed_leaf_page.trie_index_size);
+        BATT_CHECK_LE(byte_distance(page_start, trie_end), head_shard_size);
+
+        // We have the Trie index in memory; query it to find the range containing our query key.
+        //
+        usize key_prefix_match = 0;
+        const Interval<usize> search_range =
+            packed_leaf_page.calculate_search_range(query.key(), key_prefix_match);
+
+        // Calculate the leaf page slice containing the range of PackedKeyValue objects we will need
+        // to binary search.  We add two to the end of the range; one because we only know how long
+        // a key is by comparing its offset to the offset of the next key, and two because we must
+        // know the size of the key after that in order to know the value size.
+        //
+        const PackedKeyValue* head_items = packed_leaf_page.items->data();
+        const Interval<usize> items_slice{
+            (usize)byte_distance(page_start, head_items + search_range.lower_bound),
+            (usize)byte_distance(page_start, head_items + (search_range.upper_bound + 2)),
+        };
+
+        // To binary-search the keys, we must pin *both* the portion of the items array we will
+        // access (items_slice) *and* the key data pointed to by those items.  Once both are pinned,
+        // we calculate a single offset delta to add to the packed offsets inside our KeyOrder
+        // comparator.
+        //
+        PageSliceStorage items_storage;
+        BATT_ASSIGN_OK_RESULT(ConstBuffer items_buffer,
+                              slice_reader.read_slice(items_slice, items_storage));
+
+        const auto items_begin = (const PackedKeyValue*)items_buffer.data();
+        const auto items_end = items_begin + search_range.size();
+
+        // We must include the data of the two keys beyond the nominal search range; since
+        // `items_end` is already one past, we must add one to that to get the final upper bound.
+        //
+        Interval<usize> key_data_slice{
+            (usize)(items_slice.lower_bound + items_begin->key_offset),
+            (usize)(items_slice.upper_bound + (items_end + 1)->key_offset),
+        };
+
+        PageSliceStorage key_data_storage;
+        BATT_ASSIGN_OK_RESULT(ConstBuffer key_data_buffer,
+                              slice_reader.read_slice(key_data_slice, key_data_storage));
+
+        // `items_begin + items_begin->key_offset` corresponds to the start of the key data buffer;
+        // calculate their (signed) difference now that both shards are pinned.
+        //
+        const isize offset_base = items_begin->key_offset;
+        const isize offset_target = byte_distance(items_begin, key_data_buffer.data());
+        const isize offset_delta = offset_target - offset_base;
+
+        // Binary search to find the query key.
+        //
+        auto it = std::lower_bound(items_begin,
+                                   items_end,
+                                   query.key(),
+                                   ShiftedPackedKeyOrder{offset_delta});
+        if (it == items_end) {
+          return {batt::StatusCode::kNotFound};
+        }
+
+        // IMPORTANT: we must use `shifted_key_view` and not `key_view` here, or the referenced data
+        // will be invalid!
+        //
+        const KeyView found_lower_bound = it->shifted_key_view(offset_delta);
+        if (found_lower_bound != query.key()) {
+          return {batt::StatusCode::kNotFound};
+        }
+
+        // Calculate the location within the page containing the value data.
+        //
+        Interval<usize> value_data_slice;
+
+        value_data_slice.lower_bound =
+            key_data_slice.lower_bound +
+            (usize)byte_distance(key_data_buffer.data(), it->shifted_value_data(offset_delta));
+
+        value_data_slice.upper_bound =
+            value_data_slice.lower_bound + it->shifted_value_size(offset_delta);
+
+        // TODO [tastolfi 2025-04-18] REMOVE ME!
+        //  Do a whole-page query and compare the result with the sharded view query result.
+        //
+        StatusOr<ValueView> whole_page_result = visit_leaf_page(  //
             *query.page_loader,
             *query.pinned_page_out,
             page_id_slot,
@@ -386,11 +510,34 @@ StatusOr<ValueView> Subtree::find_key_filtered(FilteredKeyQuery& query) const
                 return {batt::StatusCode::kNotFound};
               }
               return get_value(*found);
-            },
-
-            [&](const PackedNodePage& packed_node) -> StatusOr<ValueView> {
-              return packed_node.find_key_filtered(query);
             });
+
+        BATT_CHECK_OK(whole_page_result);
+
+        llfs::PinnedPage& pinned_whole_leaf = *query.pinned_page_out;
+        Interval<usize> expected_value_data_slice;
+
+        expected_value_data_slice.lower_bound =
+            byte_distance(pinned_whole_leaf.raw_data(), whole_page_result->as_str().data()) -
+            (1 /*for the op_code byte*/);
+
+        expected_value_data_slice.upper_bound = expected_value_data_slice.lower_bound +
+                                                whole_page_result->size() +
+                                                (1 /*for the op_code byte*/);
+
+        static std::atomic<usize> success_count{0};
+        static std::atomic<usize> failure_count{0};
+
+        if (value_data_slice == expected_value_data_slice) {
+          success_count.fetch_add(1);
+        } else {
+          failure_count.fetch_add(1);
+          LOG(INFO) << BATT_INSPECT(success_count) << BATT_INSPECT(failure_count);
+        }
+        //        BATT_CHECK_EQ(value_data_slice, expected_value_data_slice) <<
+        //        BATT_INSPECT(success_count);
+
+        return whole_page_result;
       },
       [&](const std::unique_ptr<InMemoryLeaf>& leaf) -> StatusOr<ValueView> {
         return leaf->find_key(query.key());

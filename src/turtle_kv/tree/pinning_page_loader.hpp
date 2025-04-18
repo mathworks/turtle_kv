@@ -7,6 +7,7 @@
 
 #include <llfs/packed_page_header.hpp>
 #include <llfs/page_loader.hpp>
+#include <llfs/sharded_page_view.hpp>
 
 #include <absl/container/flat_hash_map.h>
 
@@ -40,6 +41,11 @@ class PinningPageLoader : public llfs::PageLoader
   //+++++++++++-+-+--+----- --- -- -  -  -   -
   // llfs::PageLoader interface
 
+  llfs::PageCache* page_cache() const override
+  {
+    return this->base_loader_.page_cache();
+  }
+
   void prefetch_hint(llfs::PageId page_id) override
   {
     LatencyTimer timer{Every2ToTheConst<16>{}, this->metrics_.prefetch_hint_latency};
@@ -58,7 +64,9 @@ class PinningPageLoader : public llfs::PageLoader
                                             this->metrics_.hash_map_lookup_latency,
                                             this->pinned_pages_.find(page_id.int_value()));
     if (iter != this->pinned_pages_.end()) {
-      BATT_REQUIRE_OK(llfs::require_page_layout(iter->second.page_buffer(), required_layout));
+      if (required_layout && *required_layout != llfs::ShardedPageView::page_layout_id()) {
+        BATT_REQUIRE_OK(llfs::require_page_layout(iter->second.page_buffer(), required_layout));
+      }
       return iter->second;
     }
 

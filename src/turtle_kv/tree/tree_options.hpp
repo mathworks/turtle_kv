@@ -103,14 +103,12 @@ class TreeOptions
   {
     this->leaf_size_log2_ = log2_ceil(size);
     BATT_CHECK_EQ(size, this->leaf_size()) << "leaf_size must be a power of 2";
-    this->trie_index_reserve_size_ = None;
     return *this;
   }
 
   Self& set_leaf_size_log2(u8 size_log2)
   {
     this->leaf_size_log2_ = size_log2;
-    this->trie_index_reserve_size_ = None;
     return *this;
   }
 
@@ -229,7 +227,6 @@ class TreeOptions
   Self& set_key_size_hint(u32 n_bytes)
   {
     this->key_size_hint_ = n_bytes;
-    this->trie_index_reserve_size_ = None;
     return *this;
   }
 
@@ -241,7 +238,6 @@ class TreeOptions
   Self& set_value_size_hint(u32 n_bytes)
   {
     this->value_size_hint_ = n_bytes;
-    this->trie_index_reserve_size_ = None;
     return *this;
   }
 
@@ -263,7 +259,21 @@ class TreeOptions
 
   usize trie_index_reserve_size() const
   {
+    if (BATT_HINT_TRUE(this->trie_index_reserve_size_)) {
+      return *this->trie_index_reserve_size_;
+    }
     return ((this->expected_items_per_leaf() * this->key_size_hint() + 15) / 16) * 5 / 8;
+  }
+
+  Self& set_trie_index_reserve_size(Optional<usize> n_bytes)
+  {
+    this->trie_index_reserve_size_ = n_bytes;
+    return *this;
+  }
+
+  usize trie_index_sharded_view_size() const
+  {
+    return usize{1} << batt::log2_ceil(this->trie_index_reserve_size());
   }
 
   usize flush_size() const

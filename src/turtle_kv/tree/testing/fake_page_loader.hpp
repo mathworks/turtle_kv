@@ -37,6 +37,11 @@ class FakePageLoader : public llfs::BasicPageLoader<FakePinnedPage>
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  llfs::PageCache* page_cache() const override
+  {
+    return nullptr;
+  }
+
   void prefetch_hint(llfs::PageId page_id [[maybe_unused]]) override
   {
     // nothing to do.

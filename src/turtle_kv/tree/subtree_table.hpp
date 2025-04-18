@@ -25,7 +25,11 @@ class SubtreeTable : public Table
 
   StatusOr<ValueView> get(const KeyView& key) override
   {
-    return this->subtree_.find_key(this->page_loader_, this->latest_pinned_page_, key);
+    BATT_ASSIGN_OK_RESULT(i32 height, this->subtree_.get_height(this->page_loader_));
+    return this->subtree_.find_key(ParentNodeHeight{height + 1},
+                                   this->page_loader_,
+                                   this->latest_pinned_page_,
+                                   key);
   }
 
   StatusOr<usize> scan(const KeyView& min_key,

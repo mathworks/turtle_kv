@@ -7,14 +7,7 @@ import numpy as np
 
 KB_PER_SPEEDUP_PCT = False
 
-
-if len(sys.argv) < 2:
-    print("Error: must provide at least one argument (the result log to process)",
-          file=sys.stderr)
-    sys.exit(1);
-
-
-logs = sys.argv[1:]
+#=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+--------------
 
 def parse_val(line, pattern, val_type, pos, dst):
     parts = []
@@ -39,6 +32,9 @@ def split_kv(val_type, sep='='):
 class ChiScalingResult:
     def __init__(self, log):
         self.log = log
+
+        # Input key params
+        #
         self.n_records = []
         self.n_unique = []
         self.key_size = []
@@ -47,6 +43,9 @@ class ChiScalingResult:
         self.chi = []
         self.leaf_cache = []
         self.cp_pipeline = []
+
+        # Output values
+        #
         self.thruput_k = []
         self.write_amp = []
         self.page_faults = []
@@ -56,6 +55,7 @@ class ChiScalingResult:
         self.cache_ref = []
         self.max_thread_cache = []
         self.mem_release_rate = []
+
         self.fig = None
         self.ax = None
         self.ax2 = None
@@ -66,6 +66,43 @@ class ChiScalingResult:
                 line = line.strip()
                 self.visit(line)
 
+    def get_input_count(self):
+        return min(
+            len(self.n_records),
+            len(self.n_unique),
+            len(self.key_size),
+            len(self.value_size),
+            len(self.leaf_size),
+            len(self.chi),
+            len(self.leaf_cache),
+            len(self.cp_pipeline),
+        )
+
+    def get_input_key(self, i):
+        return (
+            self.n_records[i],
+            self.n_unique[i],
+            self.key_size[i],
+            self.value_size[i],
+            self.leaf_size[i],
+            self.chi[i],
+            self.leaf_cache[i],
+            self.cp_pipeline[i],
+        )
+
+    def get_output_values(self, i):
+        return (
+            self.thruput_k[i],
+            self.write_amp[i],
+            self.page_faults[i],
+            self.mem_used[i],
+            self.cpu_util[i],
+            self.cache_miss[i],
+            self.cache_ref[i],
+            self.max_thread_cache[i],
+            self.mem_release_rate[i],
+        )
+
     def visit(self, line):
         parse_val(line, r'.* n_puts == ', int, -1, self.n_records)
         parse_val(line, r'.* n_unique == ', int, -1, self.n_unique)
@@ -75,17 +112,22 @@ class ChiScalingResult:
         parse_val(line, r'^# turtlekv  leaf_cache_size ==', int, -2, self.leaf_cache)
         parse_val(line, r'^# turtlekv  leaf_size ==', int, -2, self.leaf_size)
         parse_val(line, r'^# turtlekv  checkpoint_pipeline ==', int, -1, self.cp_pipeline)
-        parse_val(line, r'^\[ycsbc output\]	turtlekv	workloads/load.spec', float, -1, self.thruput_k)
-        parse_val(line, r'^write_amplification', float, -1, self.write_amp)
-        parse_val(line, r'^perf_stat.page-faults', int, -1, self.page_faults)
-        parse_val(line, r'.*Actual memory used.*', int, 2, self.mem_used)
-        parse_val(line, r'^cpu_utilization', float, -1, self.cpu_util)
-        parse_val(line, r'^perf_stat.cache-misses', int, -1, self.cache_miss)
-        parse_val(line, r'^perf_stat.cache-references', int, -1, self.cache_ref)
-        parse_val(line, r'.*tcmalloc.max_total_thread_cache_bytes=.*', split_kv(int), -1, self.max_thread_cache)
-        parse_val(line, r'.*tcmalloc.max_total_thread_cache_bytes ', int, -1, self.max_thread_cache)
-        parse_val(line, r'.*\(tcmalloc\) MemoryReleaseRate=.*', split_kv(float), -1, self.mem_release_rate)
-        parse_val(line, r'.*tcmalloc.memory_release_rate ', float, -1, self.mem_release_rate)
+
+        if "turtle_kv_bench: Killed" in line:
+            self.thruput_k += [1]
+            self.mem_used += [1]
+        else:
+            parse_val(line, r'^\[ycsbc output\].*turtlekv.*workloads/load.spec', float, -1, self.thruput_k)
+            parse_val(line, r'^write_amplification', float, -1, self.write_amp)
+            parse_val(line, r'^perf_stat.page-faults', int, -1, self.page_faults)
+            parse_val(line, r'.*Actual memory used.*', int, 2, self.mem_used)
+            parse_val(line, r'^cpu_utilization', float, -1, self.cpu_util)
+            parse_val(line, r'^perf_stat.cache-misses', int, -1, self.cache_miss)
+            parse_val(line, r'^perf_stat.cache-references', int, -1, self.cache_ref)
+            parse_val(line, r'.*tcmalloc.max_total_thread_cache_bytes=.*', split_kv(int), -1, self.max_thread_cache)
+            parse_val(line, r'.*tcmalloc.max_total_thread_cache_bytes ', int, -1, self.max_thread_cache)
+            parse_val(line, r'.*\(tcmalloc\) MemoryReleaseRate=.*', split_kv(float), -1, self.mem_release_rate)
+            parse_val(line, r'.*tcmalloc.memory_release_rate ', float, -1, self.mem_release_rate)
 
     def _new_plot(self):
         plt.close()
@@ -139,7 +181,7 @@ class ChiScalingResult:
 
         self.ax2 = self.ax.twinx()
         self.series += self.ax2.plot(self.chi, self.page_faults, color='green', label='Page Faults')
-        self.ax2.set_ylim(0, 1.6e7)
+        self.ax2.set_ylim(0, 5e7)
 
         self._write_image('page-faults')
 
@@ -190,12 +232,22 @@ class ChiScalingResult:
         self.series += self.ax2.plot(self.chi,
                                      [miss * 100 / ref for (miss, ref) in zip(self.cache_miss, self.cache_ref)],
                                      color='green', label='CPU Cache Miss Rate (%)')
-        self.ax2.set_ylim(0, 100)
+        self.ax2.set_ylim(0, 30)
 
         self._write_image('cache-miss-rate')
 
 
 #=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+--------------
+
+if len(sys.argv) < 2:
+    print("Error: must provide at least one argument (the result log to process)",
+          file=sys.stderr)
+    sys.exit(1);
+
+
+logs = sys.argv[1:]
+
+combined = {}
 
 for log in logs:
     print(f"Processing {log}...")
@@ -206,5 +258,9 @@ for log in logs:
         result.plot_mem_used()
         result.plot_cpu_util()
         result.plot_cache_miss_rate()
+
+        for i in range(result.get_input_count()):
+            combined[result.get_input_key(i)] = result.get_output_values(i)
+
     except:
         print(f"...incomplete/bad result; skipping")

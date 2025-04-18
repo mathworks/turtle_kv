@@ -70,9 +70,14 @@ struct PackedLeafPage {
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  void check_invariants(Optional<usize> payload_size) const
+  void check_magic() const
   {
     BATT_CHECK_EQ(this->magic, PackedLeafPage::kMagic);
+  }
+
+  void check_invariants(Optional<usize> payload_size) const
+  {
+    this->check_magic();
     BATT_CHECK(this->items);
     if (payload_size) {
       BATT_CHECK_GE(*payload_size, this->total_packed_size);
@@ -668,7 +673,7 @@ inline PackedLeafPage* build_leaf_page(MutableBuffer buffer,
       llfs::BPTrie in_memory_trie{pivot_keys};
 
       const usize packed_trie_size = in_memory_trie.packed_size(/*verbose=*/false);
-      llfs::DataPacker packer{trie_buffer};
+      llfs::DataPacker packer{MutableBuffer{trie_buffer.data(), packed_trie_size}};
 
       BATT_DEBUG_INFO(BATT_INSPECT(packed_trie_size)
                       << BATT_INSPECT(trie_buffer.size()) << BATT_INSPECT(pivot_keys.size())
