@@ -289,7 +289,7 @@ struct PackedLeafLayoutPlan {
 
   usize page_size;
   usize key_count;
-  bool use_trie_index;
+  usize trie_index_reserved_size;
 
   usize trie_index_begin;
   usize trie_index_end;
@@ -315,7 +315,7 @@ struct PackedLeafLayoutPlan {
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   template <typename ItemsRangeT>
-  static Self from_items(usize page_size, const ItemsRangeT& items, bool use_trie_index);
+  static Self from_items(usize page_size, const ItemsRangeT& items, usize trie_index_reserved_size);
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -339,7 +339,7 @@ BATT_OBJECT_PRINT_IMPL((inline),
                        PackedLeafLayoutPlan,
                        (page_size,
                         key_count,
-                        use_trie_index,
+                        trie_index_reserved_size,
                         trie_index_begin,
                         trie_index_end,
                         leaf_header_begin,
@@ -375,7 +375,7 @@ class PackedLeafLayoutPlanBuilder
   usize key_count = 0;
   usize key_data_size = 0;
   usize value_data_size = 0;
-  bool use_trie_index = false;
+  usize trie_index_reserved_size = 0;
 
   Self& add(const std::string_view& key, const ValueView& value)
   {
@@ -392,7 +392,7 @@ class PackedLeafLayoutPlanBuilder
 
     plan.page_size = this->page_size;
     plan.key_count = BATT_CHECKED_CAST(u32, this->key_count);
-    plan.use_trie_index = this->use_trie_index;
+    plan.trie_index_reserved_size = this->trie_index_reserved_size;
 
     usize offset = 0;
     const auto append = [&offset](usize size) {
@@ -432,8 +432,10 @@ class PackedLeafLayoutPlanBuilder
       plan.check_valid("first");
     }
 
-    if (plan.use_trie_index) {
-      const usize space_for_trie = batt::round_down_bits(6, this->page_size - plan.value_data_end);
+    if (plan.trie_index_reserved_size > 0) {
+      BATT_CHECK_GE(this->page_size - plan.value_data_end, plan.trie_index_reserved_size);
+
+      const usize space_for_trie = batt::round_down_bits(6, plan.trie_index_reserved_size);
 
       offset = plan.leaf_header_end;
       std::tie(plan.trie_index_begin,  //
@@ -512,7 +514,7 @@ struct AddLeafItemsSummary {
 template <typename ItemsRangeT>
 /*static*/ PackedLeafLayoutPlan PackedLeafLayoutPlan::from_items(usize page_size,
                                                                  const ItemsRangeT& items,
-                                                                 bool use_trie_index)
+                                                                 usize trie_index_reserved_size)
 {
   LeafItemsSummary summary = std::accumulate(std::begin(items),
                                              std::end(items),
@@ -527,7 +529,7 @@ template <typename ItemsRangeT>
   plan_builder.key_count = summary.key_count;
   plan_builder.key_data_size = summary.key_data_size;
   plan_builder.value_data_size = summary.value_data_size;
-  plan_builder.use_trie_index = use_trie_index;
+  plan_builder.trie_index_reserved_size = trie_index_reserved_size;
 
   PackedLeafLayoutPlan plan = plan_builder.build();
 
@@ -648,10 +650,11 @@ inline PackedLeafPage* build_leaf_page(MutableBuffer buffer,
   p_header->index_step = 0;
   p_header->trie_index_size = 0;
 
-  if (plan.use_trie_index) {
+  if (plan.trie_index_reserved_size > 0) {
     const MutableBuffer trie_buffer{(void*)advance_pointer(buffer.data(), plan.trie_index_begin),
                                     plan.trie_index_end - plan.trie_index_begin};
     usize step_size = 16;
+    bool retried = false;
     batt::SmallVec<std::string_view, 1024> pivot_keys;
     for (;;) {
       BATT_CHECK_GT(step_size, 0);
@@ -673,7 +676,7 @@ inline PackedLeafPage* build_leaf_page(MutableBuffer buffer,
       llfs::BPTrie in_memory_trie{pivot_keys};
 
       const usize packed_trie_size = in_memory_trie.packed_size(/*verbose=*/false);
-      llfs::DataPacker packer{MutableBuffer{trie_buffer.data(), packed_trie_size}};
+      llfs::DataPacker packer{MutableBuffer{trie_buffer.data(), trie_buffer.size()}};
 
       BATT_DEBUG_INFO(BATT_INSPECT(packed_trie_size)
                       << BATT_INSPECT(trie_buffer.size()) << BATT_INSPECT(pivot_keys.size())
@@ -692,11 +695,16 @@ inline PackedLeafPage* build_leaf_page(MutableBuffer buffer,
         if (step_size * 2 > plan.key_count) {
           break;
         }
+        retried = true;
         LOG(WARNING) << "Retrying with " << BATT_INSPECT(step_size)
                      << BATT_INSPECT(packed_trie_size) << BATT_INSPECT(plan.key_count)
                      << BATT_INSPECT(trie_buffer.size());
         pivot_keys.clear();
         continue;
+      } else if (retried) {
+        LOG(INFO) << "Succeeded after retry;" << BATT_INSPECT(step_size)
+                  << BATT_INSPECT(packed_trie_size) << BATT_INSPECT(plan.key_count)
+                  << BATT_INSPECT(trie_buffer.size());
       }
 
       p_header->trie_index.reset(packed_trie, &bounds_checker);
@@ -715,11 +723,11 @@ StatusOr<llfs::PinnedPage> pin_leaf_page_to_job(llfs::PageCacheJob& page_job,
                                                 std::shared_ptr<llfs::PageBuffer>&& page_buffer);
 
 template <typename ItemsRangeT>
-auto build_leaf_page_in_job(llfs::PageBuffer& page_buffer, const ItemsRangeT& items)
+auto build_leaf_page_in_job(usize trie_index_reserved_size,
+                            llfs::PageBuffer& page_buffer,
+                            const ItemsRangeT& items)
 {
-  auto plan = PackedLeafLayoutPlan::from_items(page_buffer.size(),
-                                               items,
-                                               /*use_trie_index=*/true);
+  auto plan = PackedLeafLayoutPlan::from_items(page_buffer.size(), items, trie_index_reserved_size);
 
   PackedLeafPage* const packed_leaf_page =
       build_leaf_page(page_buffer.mutable_buffer(), plan, items);

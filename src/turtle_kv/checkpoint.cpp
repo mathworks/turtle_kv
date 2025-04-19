@@ -198,21 +198,9 @@ Checkpoint Checkpoint::clone() const noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<ValueView> Checkpoint::find_key(llfs::PageLoader& page_loader,
-                                         llfs::PinnedPage& pinned_page_out,
-                                         const KeyView& key) const
+StatusOr<ValueView> Checkpoint::find_key(KeyQuery& query) const
 {
-  return this->tree_->find_key(ParentNodeHeight{this->tree_height_ + 1},
-                               page_loader,
-                               pinned_page_out,
-                               key);
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-StatusOr<ValueView> Checkpoint::find_key_filtered(FilteredKeyQuery& query) const
-{
-  return this->tree_->find_key_filtered(ParentNodeHeight{this->tree_height_ + 1}, query);
+  return this->tree_->find_key(ParentNodeHeight{this->tree_height_ + 1}, query);
 }
 
 }  // namespace turtle_kv

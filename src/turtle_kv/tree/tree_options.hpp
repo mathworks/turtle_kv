@@ -271,9 +271,9 @@ class TreeOptions
     return *this;
   }
 
-  usize trie_index_sharded_view_size() const
+  llfs::PageSize trie_index_sharded_view_size() const
   {
-    return usize{1} << batt::log2_ceil(this->trie_index_reserve_size());
+    return llfs::PageSize{u32{1} << batt::log2_ceil(this->trie_index_reserve_size() + 256)};
   }
 
   usize flush_size() const

@@ -99,9 +99,8 @@ class RandomLeafGenerator
       //
       std::shared_ptr<llfs::PageBuffer> page_buffer = fake_pinned_page.get_page_buffer();
 
-      auto page_plan = PackedLeafLayoutPlan::from_items(page_buffer->size(),
-                                                        page_items,
-                                                        /*use_trie_index=*/true);
+      auto page_plan =
+          PackedLeafLayoutPlan::from_items(page_buffer->size(), page_items, kTrieIndexReserveSize);
 
       // Build the page from the item slice assigned to it by the multi-page plan.
       //

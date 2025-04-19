@@ -1,6 +1,6 @@
 #pragma once
 
-#include <turtle_kv/tree/filtered_key_query.hpp>
+#include <turtle_kv/tree/key_query.hpp>
 #include <turtle_kv/tree/packed_node_page_key.hpp>
 
 #include <turtle_kv/core/key_view.hpp>
@@ -378,21 +378,9 @@ struct PackedNodePage {
     return kMaxLevels;
   }
 
-  StatusOr<ValueView> find_key(llfs::PageLoader& page_loader,
-                               llfs::PinnedPage& pinned_page_out,
-                               const KeyView& key) const;
+  StatusOr<ValueView> find_key(KeyQuery& query) const;
 
-  StatusOr<ValueView> find_key_in_level(usize level_i,                      //
-                                        llfs::PageLoader& page_loader,      //
-                                        llfs::PinnedPage& pinned_page_out,  //
-                                        i32 key_pivot_i,                    //
-                                        const KeyView& key) const;
-
-  StatusOr<ValueView> find_key_filtered(FilteredKeyQuery& query) const;
-
-  StatusOr<ValueView> find_key_in_level_filtered(usize level_i,
-                                                 i32 key_pivot_i,
-                                                 FilteredKeyQuery& query) const;
+  StatusOr<ValueView> find_key_in_level(usize level_i, KeyQuery& query, i32 key_pivot_i) const;
 
   //----- --- -- -  -  -   -
 

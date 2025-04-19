@@ -355,29 +355,7 @@ struct SegmentedLevelAlgorithms {
         });
   }
 
-  /** \brief Finds the given key in the segments of this level.
-   */
-  StatusOr<ValueView> find_key(PinnedPageT& pinned_page_out, i32 key_pivot_i, const KeyView& key)
-  {
-    static_assert(page_loader_available());
-
-    StatusOr<ValueView> result{Status{batt::StatusCode::kNotFound}};
-
-    this->for_each_active_segment_in(
-        key_pivot_i,
-        [&](const SegmentT& segment) -> Optional<batt::seq::LoopControl> {
-          return in_segment(segment).find_key(this->page_loader_,
-                                              pinned_page_out,
-                                              this->level_,
-                                              key,
-                                              key_pivot_i,
-                                              &result);
-        });
-
-    return result;
-  }
-
-  StatusOr<ValueView> find_key_filtered(i32 key_pivot_i, FilteredKeyQuery& query)
+  StatusOr<ValueView> find_key(i32 key_pivot_i, KeyQuery& query)
   {
     StatusOr<ValueView> result{Status{batt::StatusCode::kNotFound}};
 
@@ -387,12 +365,7 @@ struct SegmentedLevelAlgorithms {
           if (query.reject_page(segment.get_leaf_page_id())) {
             return batt::seq::LoopControl::kContinue;
           }
-          return in_segment(segment).find_key(*query.page_loader,
-                                              *query.pinned_page_out,
-                                              this->level_,
-                                              query.key(),
-                                              key_pivot_i,
-                                              &result);
+          return in_segment(segment).find_key(this->level_, key_pivot_i, query, &result);
         });
 
     return result;

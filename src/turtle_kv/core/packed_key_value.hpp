@@ -14,6 +14,18 @@
 
 namespace turtle_kv {
 
+inline ValueView unpack_value_view(const void* data, usize size)
+{
+  const char* bytes = static_cast<const char*>(data);
+  return ValueView::from_packed(static_cast<ValueView::OpCode>(bytes[0]),
+                                std::string_view{bytes + 1, size - 1});
+}
+
+inline ValueView unpack_value_view(const ConstBuffer& buffer)
+{
+  return unpack_value_view(buffer.data(), buffer.size());
+}
+
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 //
 struct PackedKeyValue {
@@ -126,9 +138,7 @@ struct PackedKeyValue {
 
   ValueView value_view() const
   {
-    const char* p_value_data = this->value_data();
-    return ValueView::from_packed(static_cast<ValueView::OpCode>(*p_value_data),
-                                  std::string_view{p_value_data + 1, this->value_size() - 1});
+    return unpack_value_view(this->value_data(), this->value_size());
   }
 
 }

@@ -47,6 +47,16 @@ class FakePageLoader : public llfs::BasicPageLoader<FakePinnedPage>
     // nothing to do.
   }
 
+  StatusOr<FakePinnedPage> try_pin_cached_page(llfs::PageId page_id,
+                                               const Optional<llfs::PageLayoutId>& required_layout,
+                                               llfs::PinPageToJob pin_page_to_job) override
+  {
+    return this->get_page_with_layout_in_job(page_id,
+                                             required_layout,
+                                             pin_page_to_job,
+                                             llfs::OkIfNotFound{true});
+  }
+
   StatusOr<FakePinnedPage> get_page_with_layout_in_job(
       llfs::PageId page_id,
       const Optional<llfs::PageLayoutId>& required_layout,

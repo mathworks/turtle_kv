@@ -115,7 +115,7 @@ Status build_bloom_filter_for_leaf(llfs::PageCache& page_cache,
                                                       llfs::BloomFilterLayout::kBlocked512,
                                                       filter_bits_per_key,
                                                       leaf_page_id,
-                                                      alloc.filter_buffer.get()));
+                                                      alloc.filter_buffer));
 
   {
     auto& metrics = BloomFilterMetrics::instance();
@@ -301,14 +301,15 @@ auto build_filter_for_leaf_in_job(llfs::PageCache& page_cache,
                                   llfs::PageId leaf_page_id,
                                   const ItemsT& items)
 {
-  Status filter_status =
 #if TURTLE_KV_USE_BLOOM_FILTER
-      build_bloom_filter_for_leaf(page_cache, filter_bits_per_key, leaf_page_id, items)
-#endif
-#if TURTLE_KV_USE_QUOTIENT_FILTER
-          build_quotient_filter_for_leaf(page_cache, filter_bits_per_key, leaf_page_id, items)
-#endif
-      ;
+  Status filter_status =
+      build_bloom_filter_for_leaf(page_cache, filter_bits_per_key, leaf_page_id, items);
+
+#elif TURTLE_KV_USE_QUOTIENT_FILTER
+  Status filter_status =
+      build_quotient_filter_for_leaf(page_cache, filter_bits_per_key, leaf_page_id, items);
+
+#endif  //----- --- -- -  -  -   -
 
   if (!filter_status.ok()) {
     LOG_FIRST_N(WARNING, 10) << "Failed to build filter: " << filter_status;

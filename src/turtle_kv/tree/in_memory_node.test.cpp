@@ -240,7 +240,9 @@ void SubtreeBatchUpdateScenario::run()
 
   TreeOptions tree_options = TreeOptions::with_default_values()  //
                                  .set_leaf_size(512 * kKiB)
-                                 .set_node_size(4 * kKiB);
+                                 .set_node_size(4 * kKiB)
+                                 .set_key_size_hint(24)
+                                 .set_value_size_hint(100);
 
   const usize items_per_leaf = tree_options.flush_size() / packed_item_size;
 
@@ -268,7 +270,7 @@ void SubtreeBatchUpdateScenario::run()
 
   ASSERT_TRUE(tree.is_serialized());
 
-  SubtreeTable actual_table{*page_cache, tree};
+  SubtreeTable actual_table{*page_cache, tree_options, tree};
 
   if (my_id == 0) {
     std::cout << BATT_INSPECT(tree.dump()) << std::endl;

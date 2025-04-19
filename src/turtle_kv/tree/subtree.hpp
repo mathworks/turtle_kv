@@ -1,7 +1,7 @@
 #pragma once
 
 #include <turtle_kv/tree/batch_update.hpp>
-#include <turtle_kv/tree/filtered_key_query.hpp>
+#include <turtle_kv/tree/key_query.hpp>
 #include <turtle_kv/tree/subtree_viability.hpp>
 #include <turtle_kv/tree/tree_options.hpp>
 #include <turtle_kv/tree/tree_serialize_context.hpp>
@@ -59,13 +59,7 @@ class Subtree
 
   SubtreeViability get_viability() const;
 
-  StatusOr<ValueView> find_key(ParentNodeHeight parent_height,
-                               llfs::PageLoader& page_loader,
-                               llfs::PinnedPage& pinned_page_out,
-                               const KeyView& key) const;
-
-  StatusOr<ValueView> find_key_filtered(ParentNodeHeight parent_height,
-                                        FilteredKeyQuery& query) const;
+  StatusOr<ValueView> find_key(ParentNodeHeight parent_height, KeyQuery& query) const;
 
   std::function<void(std::ostream&)> dump(i32 detail_level = 1) const;
 

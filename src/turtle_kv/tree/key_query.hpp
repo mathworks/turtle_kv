@@ -9,6 +9,9 @@
 #include <turtle_kv/core/key_view.hpp>
 #include <turtle_kv/core/value_view.hpp>
 
+#include <turtle_kv/util/page_slice_reader.hpp>
+
+#include <turtle_kv/import/int_types.hpp>
 #include <turtle_kv/import/metrics.hpp>
 #include <turtle_kv/import/optional.hpp>
 #include <turtle_kv/import/status.hpp>
@@ -16,6 +19,8 @@
 #include <llfs/bloom_filter.hpp>
 #include <llfs/bloom_filter_page_view.hpp>
 #include <llfs/page_cache.hpp>
+#include <llfs/page_id.hpp>
+#include <llfs/page_id_slot.hpp>
 #include <llfs/page_loader.hpp>
 #include <llfs/pinned_page.hpp>
 
@@ -23,8 +28,8 @@
 
 namespace turtle_kv {
 
-struct FilteredKeyQuery {
-  using Self = FilteredKeyQuery;
+struct KeyQuery {
+  using Self = KeyQuery;
 
   struct Metrics {
     FastCountMetric<u64> total_filter_query_count;
@@ -46,9 +51,9 @@ struct FilteredKeyQuery {
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  llfs::PageCache* page_cache;
   llfs::PageLoader* page_loader;
-  llfs::PinnedPage* pinned_page_out;
+  llfs::PageCache* page_cache;
+  PageSliceStorage* page_slice_storage;
   const TreeOptions* tree_options;
 
 #if TURTLE_KV_USE_BLOOM_FILTER
@@ -61,15 +66,14 @@ struct FilteredKeyQuery {
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  explicit FilteredKeyQuery(llfs::PageCache& cache,
-                            llfs::PageLoader& loader,
-                            llfs::PinnedPage& page_out,
-                            const TreeOptions& tree_options_arg,
-                            const KeyView& key_arg) noexcept
-      : page_cache{std::addressof(cache)}
-      , page_loader{std::addressof(loader)}
-      , pinned_page_out{std::addressof(page_out)}
-      , tree_options{std::addressof(tree_options_arg)}
+  explicit KeyQuery(llfs::PageLoader& loader,
+                    PageSliceStorage& slice_storage,
+                    const TreeOptions& tree_opts,
+                    const KeyView& key_arg) noexcept
+      : page_loader{std::addressof(loader)}
+      , page_cache{this->page_loader->page_cache()}
+      , page_slice_storage{std::addressof(slice_storage)}
+      , tree_options{std::addressof(tree_opts)}
 
 #if TURTLE_KV_USE_BLOOM_FILTER
       , bloom_filter_query{key_arg}
@@ -167,10 +171,10 @@ struct FilteredKeyQuery {
 #endif
         ;
 
+#if TURTLE_KV_USE_BLOOM_FILTER
     //+++++++++++-+-+--+----- --- -- -  -  -   -
     // PARAOID CHECK - TODO [tastolfi 2025-04-04] remove once debugged.
     //
-#if TURTLE_KV_USE_BLOOM_FILTER
     if (false) {
       filter_page_view.check_integrity();
     }
@@ -211,95 +215,14 @@ struct FilteredKeyQuery {
   }
 };
 
-//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
-//
-template <typename SubtreeT>
-struct FilteredQuerySubtreeWrapper {
-  SubtreeT subtree_;
-  FilteredKeyQuery& query_;
+static constexpr u32 kDefaultLeafShardedViewSize = 4096;
 
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
+StatusOr<ValueView> find_key_in_leaf(llfs::PageId leaf_page_id,
+                                     KeyQuery& query,
+                                     usize& item_index_out);
 
-  template <typename SubtreeArgT>
-  explicit FilteredQuerySubtreeWrapper(SubtreeArgT&& subtree_arg, FilteredKeyQuery& query) noexcept
-      : subtree_{BATT_FORWARD(subtree_arg)}
-      , query_{query}
-  {
-  }
-
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-
-  template <typename PageLoaderT, typename PinnedPageT>
-  StatusOr<ValueView> find_key(ParentNodeHeight parent_height,
-                               PageLoaderT& page_loader [[maybe_unused]],
-                               PinnedPageT& subtree_pinned_page,
-                               const KeyView& key) const
-  {
-    BATT_CHECK_EQ(std::addressof(this->query_.key()), std::addressof(key));
-
-    PinnedPageT* saved_page_out = std::addressof(subtree_pinned_page);
-    std::swap(saved_page_out, query_.pinned_page_out);
-    auto on_scope_exit = batt::finally([&] {
-      std::swap(saved_page_out, query_.pinned_page_out);
-    });
-
-    return this->subtree_.find_key_filtered(parent_height, this->query_);
-  }
-};
-
-//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
-//
-template <typename NodeT>
-struct FilteredQueryNodeWrapper {
-  NodeT& node_;
-  FilteredKeyQuery& query_;
-
-  decltype(NodeT::height) height = this->node_.height;
-
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-
-  explicit FilteredQueryNodeWrapper(NodeT& node, FilteredKeyQuery& query) noexcept
-      : node_{node}
-      , query_{query}
-  {
-  }
-
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-
-  BATT_ALWAYS_INLINE decltype(auto) get_pivot_keys() const
-  {
-    return this->node_.get_pivot_keys();
-  }
-
-  BATT_ALWAYS_INLINE decltype(auto) get_level_count() const
-  {
-    return this->node_.get_level_count();
-  }
-
-  BATT_ALWAYS_INLINE auto get_child(i32 key_pivot_i) const
-  {
-    using SubtreeT = decltype(this->node_.get_child(key_pivot_i));
-
-    return FilteredQuerySubtreeWrapper<SubtreeT>{this->node_.get_child(key_pivot_i), this->query_};
-  }
-
-  template <typename PageLoaderT, typename PinnedPageT>
-  StatusOr<ValueView> find_key_in_level(usize level_i,
-                                        PageLoaderT& page_loader [[maybe_unused]],
-                                        PinnedPageT& pinned_page_out,
-                                        i32 key_pivot_i,
-                                        const KeyView& key) const
-  {
-    BATT_CHECK_EQ(std::addressof(this->query_.key()), std::addressof(key));
-
-    PinnedPageT* saved_page_out = std::addressof(pinned_page_out);
-    std::swap(saved_page_out, query_.pinned_page_out);
-    auto on_scope_exit = batt::finally([&] {
-      std::swap(saved_page_out, query_.pinned_page_out);
-    });
-
-    return this->node_.find_key_in_level_filtered(level_i, key_pivot_i, this->query_);
-  }
-};
+StatusOr<ValueView> find_key_in_leaf(const llfs::PageIdSlot& leaf_page_id,
+                                     KeyQuery& query,
+                                     usize& item_index_out);
 
 }  // namespace turtle_kv

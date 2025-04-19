@@ -9,8 +9,11 @@ namespace turtle_kv {
 class SubtreeTable : public Table
 {
  public:
-  explicit SubtreeTable(llfs::PageLoader& page_loader, Subtree& subtree) noexcept
+  explicit SubtreeTable(llfs::PageLoader& page_loader,
+                        const TreeOptions& tree_options,
+                        Subtree& subtree) noexcept
       : page_loader_{page_loader}
+      , tree_options_{tree_options}
       , subtree_{subtree}
   {
   }
@@ -26,10 +29,17 @@ class SubtreeTable : public Table
   StatusOr<ValueView> get(const KeyView& key) override
   {
     BATT_ASSIGN_OK_RESULT(i32 height, this->subtree_.get_height(this->page_loader_));
-    return this->subtree_.find_key(ParentNodeHeight{height + 1},
-                                   this->page_loader_,
-                                   this->latest_pinned_page_,
-                                   key);
+
+    this->page_slice_storage_.emplace();
+
+    KeyQuery query{
+        this->page_loader_,
+        *this->page_slice_storage_,
+        this->tree_options_,
+        key,
+    };
+
+    return this->subtree_.find_key(ParentNodeHeight{height + 1}, query);
   }
 
   StatusOr<usize> scan(const KeyView& min_key,
@@ -48,7 +58,8 @@ class SubtreeTable : public Table
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
   llfs::PageLoader& page_loader_;
-  llfs::PinnedPage latest_pinned_page_;
+  TreeOptions tree_options_;
+  Optional<PageSliceStorage> page_slice_storage_;
   Subtree& subtree_;
 };
 

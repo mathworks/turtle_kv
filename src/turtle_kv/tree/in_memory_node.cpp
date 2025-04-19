@@ -899,20 +899,16 @@ StatusOr<std::unique_ptr<InMemoryNode>> InMemoryNode::try_split(llfs::PageLoader
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<ValueView> InMemoryNode::find_key(llfs::PageLoader& page_loader,
-                                           llfs::PinnedPage& pinned_page_out,
-                                           const KeyView& key) const
+StatusOr<ValueView> InMemoryNode::find_key(KeyQuery& query) const
 {
-  return in_node(*this).find_key(page_loader, pinned_page_out, key);
+  return in_node(*this).find_key(query);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<ValueView> InMemoryNode::find_key_in_level(usize level_i,                      //
-                                                    llfs::PageLoader& page_loader,      //
-                                                    llfs::PinnedPage& pinned_page_out,  //
-                                                    i32 key_pivot_i,                    //
-                                                    const KeyView& key) const
+StatusOr<ValueView> InMemoryNode::find_key_in_level(usize level_i,
+                                                    KeyQuery& query,
+                                                    i32 key_pivot_i) const
 {
   const Level& level = this->update_buffer.levels[level_i];
 
@@ -922,11 +918,11 @@ StatusOr<ValueView> InMemoryNode::find_key_in_level(usize level_i,              
         return {batt::StatusCode::kNotFound};
       },
       [&](const MergedLevel& merged_level) -> StatusOr<ValueView> {
-        return merged_level.result_set.find_key(key);
+        return merged_level.result_set.find_key(query.key());
       },
       [&](const SegmentedLevel& segmented_level) -> StatusOr<ValueView> {
-        return in_segmented_level(*this, segmented_level, page_loader)
-            .find_key(pinned_page_out, key_pivot_i, key);
+        return in_segmented_level(*this, segmented_level, *query.page_loader)
+            .find_key(key_pivot_i, query);
       });
 }
 
@@ -964,8 +960,9 @@ Status InMemoryNode::start_serialize(TreeSerializeContext& context)
             [](const EmptyLevel&) -> Status {
               return OkStatus();
             },
-            [&context, &total_segments](MergedLevel& merged_level) -> Status {
-              BATT_ASSIGN_OK_RESULT(usize segment_count, merged_level.start_serialize(context));
+            [this, &context, &total_segments](MergedLevel& merged_level) -> Status {
+              BATT_ASSIGN_OK_RESULT(usize segment_count,
+                                    merged_level.start_serialize(*this, context));
               total_segments += segment_count;
               return OkStatus();
             },
@@ -1059,7 +1056,8 @@ StatusOr<llfs::PinnedPage> Segment::load_leaf_page(llfs::PageLoader& page_loader
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<usize> MergedLevel::start_serialize(TreeSerializeContext& context)
+StatusOr<usize> MergedLevel::start_serialize(const InMemoryNode& node,
+                                             TreeSerializeContext& context)
 {
   batt::RunningTotal running_total =
       compute_running_total(context.worker_pool(), this->result_set, DecayToItem<false>{});
@@ -1080,7 +1078,7 @@ StatusOr<usize> MergedLevel::start_serialize(TreeSerializeContext& context)
             context.tree_options().leaf_size(),
             packed_leaf_page_layout_id(),
             /*task_count=*/2,
-            [this, part_extents, filter_bits_per_key](
+            [this, &node, part_extents, filter_bits_per_key](
                 usize task_i,
                 llfs::PageCache& page_cache,
                 llfs::PageBuffer& page_buffer) -> TreeSerializeContext::PinPageToJobFn {
@@ -1089,7 +1087,9 @@ StatusOr<usize> MergedLevel::start_serialize(TreeSerializeContext& context)
               const auto items_in_this_page = batt::slice_range(all_items_in_level, part_extents);
 
               if (task_i == 0) {
-                return build_leaf_page_in_job(page_buffer, items_in_this_page);
+                return build_leaf_page_in_job(node.tree_options.trie_index_reserve_size(),
+                                              page_buffer,
+                                              items_in_this_page);
               }
               BATT_CHECK_EQ(task_i, 1);
 

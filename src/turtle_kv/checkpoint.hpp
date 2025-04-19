@@ -146,11 +146,7 @@ class Checkpoint
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  StatusOr<ValueView> find_key(llfs::PageLoader& page_loader,
-                               llfs::PinnedPage& pinned_page_out,
-                               const KeyView& key) const;
-
-  StatusOr<ValueView> find_key_filtered(FilteredKeyQuery& query) const;
+  StatusOr<ValueView> find_key(KeyQuery& query) const;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:

@@ -12,6 +12,7 @@
 #include <turtle_kv/core/table.hpp>
 
 #include <turtle_kv/util/object_thread_storage.hpp>
+#include <turtle_kv/util/page_slice_reader.hpp>
 #include <turtle_kv/util/pipeline_channel.hpp>
 
 #include <turtle_kv/import/int_types.hpp>
@@ -59,6 +60,7 @@ class KVStore : public Table
 
   struct ThreadContext {
     Optional<PinningPageLoader> query_page_loader;
+    Optional<PageSliceStorage> query_result_storage;
     u64 query_count = 0;
     ChangeLogWriter& log_writer_;
     u64 current_mem_table_id = 0;
@@ -181,8 +183,6 @@ class KVStore : public Table
   Status commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_job);
 
   void checkpoint_flush_thread_main();
-
-  Optional<PinningPageLoader>& query_page_loader();
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 

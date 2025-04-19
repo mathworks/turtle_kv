@@ -175,7 +175,9 @@ Status InMemoryLeaf::start_serialize(TreeSerializeContext& context)
             //----- --- -- -  -  -   -
 
             if (task_i == 0) {
-              return build_leaf_page_in_job(page_buffer, this->result_set.get());
+              return build_leaf_page_in_job(this->tree_options.trie_index_reserve_size(),
+                                            page_buffer,
+                                            this->result_set.get());
             }
             BATT_CHECK_EQ(task_i, 1);
 

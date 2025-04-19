@@ -83,6 +83,11 @@ struct InMemoryNode {
         };
       }
 
+      const llfs::PageIdSlot& get_leaf_page_id() const
+      {
+        return this->page_id_slot;
+      }
+
       u32 get_flushed_item_upper_bound(const SegmentedLevel&, i32 pivot_i) const;
 
       void set_flushed_item_upper_bound(i32 pivot_i, u32 upper_bound);
@@ -290,7 +295,7 @@ struct InMemoryNode {
 
       /** \brief Returns the number of segment leaf page build jobs added to the context.
        */
-      StatusOr<usize> start_serialize(TreeSerializeContext& context);
+      StatusOr<usize> start_serialize(const InMemoryNode& node, TreeSerializeContext& context);
 
       StatusOr<SegmentedLevel> finish_serialize(const InMemoryNode& node,
                                                 TreeSerializeContext& context);
@@ -378,15 +383,9 @@ struct InMemoryNode {
     return this->pivot_keys_.back();
   }
 
-  StatusOr<ValueView> find_key(llfs::PageLoader& page_loader,      //
-                               llfs::PinnedPage& pinned_page_out,  //
-                               const KeyView& key) const;
+  StatusOr<ValueView> find_key(KeyQuery& query) const;
 
-  StatusOr<ValueView> find_key_in_level(usize level_i,                      //
-                                        llfs::PageLoader& page_loader,      //
-                                        llfs::PinnedPage& pinned_page_out,  //
-                                        i32 key_pivot_i,                    //
-                                        const KeyView& key) const;
+  StatusOr<ValueView> find_key_in_level(usize level_i, KeyQuery& query, i32 key_pivot_i) const;
 
   usize get_level_count() const
   {

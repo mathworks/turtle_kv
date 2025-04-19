@@ -1,6 +1,6 @@
 #pragma once
 
-#include <turtle_kv/tree/filtered_key_query.hpp>
+#include <turtle_kv/tree/key_query.hpp>
 
 #include <turtle_kv/core/algo/tuning_defaults.hpp>
 #include <turtle_kv/core/edit_view.hpp>
@@ -152,21 +152,19 @@ struct NodeAlgorithms {
     }
   }
 
-  /** \brief Executes a point query for the given key, returning the value (if found).
+  /** \brief Executes a point query, using page filters to skip leaf pages where the key is known
+   * not to be.
    */
-  template <typename PageLoaderT, typename PinnedPageT>
-  StatusOr<ValueView> find_key(PageLoaderT& page_loader,
-                               PinnedPageT& pinned_page_out,
-                               const KeyView& key)
+  StatusOr<ValueView> find_key(KeyQuery& query)
   {
     Optional<ValueView> value;
 
-    const i32 key_pivot_i = this->find_pivot_containing(key);
+    const i32 key_pivot_i = this->find_pivot_containing(query.key());
     const usize level_count = this->node_.get_level_count();
 
     for (usize level_i = 0; level_i < level_count; ++level_i) {
       StatusOr<ValueView> found_in_level =
-          this->node_.find_key_in_level(level_i, page_loader, pinned_page_out, key_pivot_i, key);
+          this->node_.find_key_in_level(level_i, query, key_pivot_i);
 
       BATT_ASSIGN_OK_RESULT(const bool done, combine_in_place(&value, found_in_level));
       if (done) {
@@ -175,45 +173,17 @@ struct NodeAlgorithms {
       }
     }
 
-    // We need to pass a *different* pinned_page variable to Subtree::find_key below, because we
-    // need any previously found ValueView to stay valid until we call `combine_in_place`; after
-    // that, we only need the most recently searched (which is actually _least_ recently updated)
-    // page.
-    //
-    PinnedPageT subtree_pinned_page;
-
-    StatusOr<ValueView> subtree_result =
-        this->node_.get_child(key_pivot_i)
-            .find_key(ParentNodeHeight{this->node_.height}, page_loader, subtree_pinned_page, key);
+    StatusOr<ValueView> subtree_result = this->node_  //
+                                             .get_child(key_pivot_i)
+                                             .find_key(ParentNodeHeight{this->node_.height}, query);
 
     BATT_REQUIRE_OK(combine_in_place(&value, subtree_result));
 
     if (!value) {
-      // No need to keep the last page searched pinned; unpin now.
-      //
-      pinned_page_out = llfs::PinnedPage{};
-
       return {batt::StatusCode::kNotFound};
     }
 
-    // If we found the key in the subtree, then set `pinned_page_out` to whatever subtree page was
-    // returned in `subtree_pinned_page`.
-    //
-    if (subtree_result.ok()) {
-      pinned_page_out = std::move(subtree_pinned_page);
-    }
-
     return {std::move(*value)};
-  }
-
-  /** \brief Executes a point query, using page filters to skip leaf pages where the key is known
-   * not to be.
-   */
-  StatusOr<ValueView> find_key_filtered(FilteredKeyQuery& query)
-  {
-    return NodeAlgorithms<const FilteredQueryNodeWrapper<NodeT>>{
-        FilteredQueryNodeWrapper<NodeT>{this->node_, query}}
-        .find_key(*query.page_loader, *query.pinned_page_out, query.key());
   }
 
   /** \brief Splits the given level at the given key, placing the lower and upper halves in
