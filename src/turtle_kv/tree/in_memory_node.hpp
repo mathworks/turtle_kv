@@ -462,7 +462,7 @@ struct InMemoryNode {
 
   Status start_serialize(TreeSerializeContext& context);
 
-  StatusOr<llfs::PinnedPage> finish_serialize(TreeSerializeContext& context);
+  StatusOr<llfs::PageId> finish_serialize(TreeSerializeContext& context);
 };
 
 //=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++

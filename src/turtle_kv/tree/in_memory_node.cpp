@@ -983,7 +983,7 @@ Status InMemoryNode::start_serialize(TreeSerializeContext& context)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<llfs::PinnedPage> InMemoryNode::finish_serialize(TreeSerializeContext& context)
+StatusOr<llfs::PageId> InMemoryNode::finish_serialize(TreeSerializeContext& context)
 {
   Self::metrics().level_depth_stats.update(this->update_buffer.levels.size());
 
@@ -1036,11 +1036,16 @@ StatusOr<llfs::PinnedPage> InMemoryNode::finish_serialize(TreeSerializeContext& 
 
   BATT_REQUIRE_OK(node_page_buffer);
 
+  const llfs::PageId new_page_id = (*node_page_buffer)->page_id();
+
   const PackedNodePage* packed_node = build_node_page((*node_page_buffer)->mutable_buffer(), *this);
   BATT_CHECK_NOT_NULLPTR(packed_node);
 
-  return context.page_job().pin_new(std::make_shared<NodePageView>(std::move(*node_page_buffer)),
-                                    /*callers=*/0);
+  BATT_REQUIRE_OK(
+      context.page_job().pin_new(std::make_shared<NodePageView>(std::move(*node_page_buffer)),
+                                 /*callers=*/0));
+
+  return new_page_id;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

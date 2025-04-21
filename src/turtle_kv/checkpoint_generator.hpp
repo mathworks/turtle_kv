@@ -93,8 +93,12 @@ class CheckpointGenerator
       batt::Grant&& token,
       std::shared_ptr<batt::Grant::Issuer>&& token_issuer) noexcept;
 
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
+  llfs::PageCacheJob& page_cache_job() const
+  {
+    return *this->job_;
+  }
 
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
   /** \brief Creates `this->job_` if not already created.  Sets dependency on `base_job_`.
    */

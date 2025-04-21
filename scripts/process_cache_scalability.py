@@ -22,13 +22,24 @@ for log in logs:
 
     try:
         result = turtle_bench.BenchmarkResult(log)
-        result.plot_page_faults()
-        result.plot_mem_used()
-        result.plot_cpu_util()
-        result.plot_cache_miss_rate()
+
+        print(result.n_records)
+        print(result.thruput_k_load)
+        print(result.thruput_k_a)
+        print(result.thruput_k_b)
+        print(result.thruput_k_c)
+        print(result.thruput_k_d)
+        print(result.thruput_k_e)
+        print(result.thruput_k_f)
+        print(result.node_hit_rate)
+        print([x/2**20 for x in result.mem_used])
+        print([x/2**20 for x in result.node_cache])        
+        print([sum(x)/2**20 for x in zip(result.node_cache, result.leaf_cache,
+                                         result.filter_cache, result.trie_cache)])
 
         for i in range(result.get_input_count()):
             combined[result.get_input_key(i)] = result.get_output_values(i)
 
     except:
+        raise
         print(f"...incomplete/bad result; skipping")

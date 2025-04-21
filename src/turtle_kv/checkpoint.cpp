@@ -106,10 +106,8 @@ StatusOr<Checkpoint> Checkpoint::serialize(const TreeOptions& tree_options,
 
   BATT_REQUIRE_OK(this->tree_->start_serialize(serialize_context));
   BATT_REQUIRE_OK(serialize_context.build_all_pages());
-  BATT_ASSIGN_OK_RESULT(llfs::PinnedPage pinned_root_page,
+  BATT_ASSIGN_OK_RESULT(const llfs::PageId new_tree_root_id,
                         this->tree_->finish_serialize(serialize_context));
-
-  const llfs::PageId new_tree_root_id = pinned_root_page.page_id();
 
   BATT_ASSIGN_OK_RESULT(const i32 serialized_height, this->tree_->get_height(job));
   BATT_CHECK_EQ(serialized_height, this->tree_height_);

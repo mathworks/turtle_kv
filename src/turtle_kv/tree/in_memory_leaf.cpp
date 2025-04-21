@@ -194,7 +194,7 @@ Status InMemoryLeaf::start_serialize(TreeSerializeContext& context)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<llfs::PinnedPage> InMemoryLeaf::finish_serialize(TreeSerializeContext& context)
+StatusOr<llfs::PageId> InMemoryLeaf::finish_serialize(TreeSerializeContext& context)
 {
   BATT_CHECK_EQ(this->tree_options.filter_bits_per_key(),
                 context.tree_options().filter_bits_per_key());
@@ -210,7 +210,7 @@ StatusOr<llfs::PinnedPage> InMemoryLeaf::finish_serialize(TreeSerializeContext& 
   StatusOr<llfs::PinnedPage> pinned_leaf_page =
       context.get_build_page_result(TreeSerializeContext::BuildPageJobId{observed_id});
 
-  return pinned_leaf_page;
+  return pinned_leaf_page->page_id();
 }
 
 }  // namespace turtle_kv

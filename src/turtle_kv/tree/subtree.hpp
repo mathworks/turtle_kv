@@ -86,7 +86,7 @@ class Subtree
 
   Status start_serialize(TreeSerializeContext& context);
 
-  StatusOr<llfs::PinnedPage> finish_serialize(TreeSerializeContext& context);
+  StatusOr<llfs::PageId> finish_serialize(TreeSerializeContext& context);
 
  private:
   Status split_and_grow(llfs::PageLoader& page_loader,

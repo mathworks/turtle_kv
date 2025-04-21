@@ -339,14 +339,14 @@ void SubtreeBatchUpdateScenario::run()
       Status build_status = context.build_all_pages();
       ASSERT_TRUE(build_status.ok()) << BATT_INSPECT(build_status);
 
-      StatusOr<llfs::PinnedPage> finish_status = tree.finish_serialize(context);
+      StatusOr<llfs::PageId> finish_status = tree.finish_serialize(context);
       ASSERT_TRUE(finish_status.ok()) << BATT_INSPECT(finish_status);
 
       if (my_id == 0) {
         LOG(INFO) << "checkpoint OK; verifying checkpoint...";
       }
 
-      page_job->new_root(finish_status->page_id());
+      page_job->new_root(*finish_status);
       Status commit_status = llfs::unsafe_commit_job(std::move(page_job));
       ASSERT_TRUE(commit_status.ok()) << BATT_INSPECT(commit_status);
 

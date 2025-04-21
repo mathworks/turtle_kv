@@ -25,6 +25,8 @@ struct KVStoreMetrics {
   LatencyMetric push_batch_latency;
   LatencyMetric finalize_checkpoint_latency;
   LatencyMetric append_job_latency;
+
+  StatsMetric<u64> checkpoint_pinned_pages_stats;
 };
 
 }  // namespace turtle_kv

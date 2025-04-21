@@ -641,6 +641,8 @@ StatusOr<std::unique_ptr<CheckpointJob>> KVStore::apply_batch_to_checkpoint(
   // new one.
   //
   this->metrics_.checkpoint_count.add(1);
+  this->metrics_.checkpoint_pinned_pages_stats.update(
+      this->checkpoint_generator_.page_cache_job().pinned_page_count());
 
   // Allocate a token for the checkpoint job.
   //
@@ -791,6 +793,7 @@ std::function<void(std::ostream&)> KVStore::debug_info() noexcept
         << "\n"                                                                        //
         << BATT_INSPECT(kv_store.checkpoint_get_count) << "\n"                         //
         << BATT_INSPECT(kv_store.checkpoint_get_latency) << "\n"                       //
+        << BATT_INSPECT(kv_store.checkpoint_pinned_pages_stats) << "\n"                //
         << "\n"                                                                        //
         << BATT_INSPECT(node.level_depth_stats) << "\n"                                //
         << "\n"                                                                        //

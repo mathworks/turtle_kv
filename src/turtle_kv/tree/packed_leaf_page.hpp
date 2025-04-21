@@ -433,9 +433,12 @@ class PackedLeafLayoutPlanBuilder
     }
 
     if (plan.trie_index_reserved_size > 0) {
-      BATT_CHECK_GE(this->page_size - plan.value_data_end, plan.trie_index_reserved_size);
+      BATT_CHECK_GE(this->page_size - plan.value_data_end, plan.trie_index_reserved_size - 63);
 
-      const usize space_for_trie = batt::round_down_bits(6, plan.trie_index_reserved_size);
+      const usize space_for_trie =
+          batt::round_down_bits(6,
+                                std::min(this->page_size - plan.value_data_end,  //
+                                         plan.trie_index_reserved_size));
 
       offset = plan.leaf_header_end;
       std::tie(plan.trie_index_begin,  //

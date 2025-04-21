@@ -15,6 +15,7 @@
 
 #include <llfs/sharded_page_view.hpp>
 
+#include <batteries/bool_status.hpp>
 #include <batteries/stream_util.hpp>
 
 namespace turtle_kv {
@@ -516,28 +517,34 @@ Status Subtree::start_serialize(TreeSerializeContext& context)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<llfs::PinnedPage> Subtree::finish_serialize(TreeSerializeContext& context)
+StatusOr<llfs::PageId> Subtree::finish_serialize(TreeSerializeContext& context)
 {
-  StatusOr<llfs::PinnedPage> pinned_page = batt::case_of(
+  batt::BoolStatus newly_serialized = batt::BoolStatus::kUnknown;
+
+  StatusOr<llfs::PageId> page_id = batt::case_of(
       this->impl,
-      [&context](llfs::PageIdSlot& page_id_slot) -> StatusOr<llfs::PinnedPage> {
-        return page_id_slot.load_through(context.page_job(),
-                                         /*required_layout=*/None,
-                                         llfs::PinPageToJob::kDefault,
-                                         llfs::OkIfNotFound{false});
+      [&context,
+       &newly_serialized](const llfs::PageIdSlot& page_id_slot) -> StatusOr<llfs::PageId> {
+        newly_serialized = batt::BoolStatus::kFalse;
+        return page_id_slot.page_id;
       },
-      [&context](std::unique_ptr<InMemoryLeaf>& leaf) -> StatusOr<llfs::PinnedPage> {
+      [&context, &newly_serialized](std::unique_ptr<InMemoryLeaf>& leaf) -> StatusOr<llfs::PageId> {
+        newly_serialized = batt::BoolStatus::kTrue;
         return leaf->finish_serialize(context);
       },
-      [&context](std::unique_ptr<InMemoryNode>& node) -> StatusOr<llfs::PinnedPage> {
+      [&context, &newly_serialized](std::unique_ptr<InMemoryNode>& node) -> StatusOr<llfs::PageId> {
+        newly_serialized = batt::BoolStatus::kTrue;
         return node->finish_serialize(context);
       });
 
-  BATT_REQUIRE_OK(pinned_page);
+  BATT_REQUIRE_OK(page_id);
 
-  this->impl.emplace<llfs::PageIdSlot>(llfs::PageIdSlot::from_page_id(pinned_page->page_id()));
+  BATT_CHECK_NE(newly_serialized, batt::BoolStatus::kUnknown);
+  if (newly_serialized == batt::BoolStatus::kTrue) {
+    this->impl.emplace<llfs::PageIdSlot>(llfs::PageIdSlot::from_page_id(*page_id));
+  }
 
-  return pinned_page;
+  return page_id;
 }
 
 }  // namespace turtle_kv
