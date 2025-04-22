@@ -11,6 +11,7 @@
 
 #include <turtle_kv/util/page_slice_reader.hpp>
 
+#include <turtle_kv/import/bool_status.hpp>
 #include <turtle_kv/import/int_types.hpp>
 #include <turtle_kv/import/metrics.hpp>
 #include <turtle_kv/import/optional.hpp>
@@ -41,8 +42,20 @@ struct KeyQuery {
     FastCountMetric<u64> try_pin_leaf_success_count;
     FastCountMetric<u64> sharded_view_find_count;
     FastCountMetric<u64> sharded_view_find_success_count;
+    FastCountMetric<u64> filter_positive_count;
+    FastCountMetric<u64> filter_false_positive_count;
     LatencyMetric reject_page_latency;
     LatencyMetric filter_lookup_latency;
+
+    double filter_false_positive_rate() const noexcept
+    {
+      const double positives = filter_positive_count.get();
+      if (positives == 0) {
+        return -1;
+      }
+      const double false_positives = filter_false_positive_count.get();
+      return false_positives / positives;
+    }
   };
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -132,8 +145,8 @@ struct KeyQuery {
    *
    * If the passed page could not be loaded, returns false.
    */
-  bool reject_page(llfs::PageId page_id_to_reject [[maybe_unused]],
-                   const Optional<llfs::PageId>& filter_page_id)
+  BoolStatus reject_page(llfs::PageId page_id_to_reject [[maybe_unused]],
+                         const Optional<llfs::PageId>& filter_page_id)
   {
     LatencyTimer timer{Every2ToTheConst<16>{}, Self::metrics().reject_page_latency};
 
@@ -141,7 +154,7 @@ struct KeyQuery {
 
     if (!filter_page_id) {
       Self::metrics().no_filter_page_count.add(1);
-      return false;
+      return BoolStatus::kUnknown;
     }
 
     StatusOr<llfs::PinnedPage> filter_pinned_page =
@@ -161,7 +174,7 @@ struct KeyQuery {
     //
     if (!filter_pinned_page.ok()) {
       Self::metrics().filter_page_load_failed_count.add(1);
-      return false;
+      return BoolStatus::kUnknown;
     }
 
     llfs::PinnedPage& pinned_filter_page = *filter_pinned_page;
@@ -189,7 +202,7 @@ struct KeyQuery {
     //
     if (filter_page_view.src_page_id() != page_id_to_reject) {
       Self::metrics().page_id_mismatch_count.add(1);
-      return false;
+      return BoolStatus::kUnknown;
     }
 
     // If the filter says yes, the query key might be in the set; can't reject.
@@ -210,10 +223,10 @@ struct KeyQuery {
       Self::metrics().filter_reject_count.add(1);
     }
 
-    return reject;
+    return bool_status_from(reject);
   }
 
-  bool reject_page(llfs::PageId page_id_to_reject)
+  BoolStatus reject_page(llfs::PageId page_id_to_reject)
   {
     return this->reject_page(page_id_to_reject, this->filter_page_id_for(page_id_to_reject));
   }

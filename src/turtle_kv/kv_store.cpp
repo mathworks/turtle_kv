@@ -872,14 +872,6 @@ std::function<void(std::ostream&)> KVStore::debug_info() noexcept
 
     auto& query_page_loader = PinningPageLoader::metrics();
 
-    double leaf_query_count = (PackedLeafPage::metrics().find_key_failure_count.get() +
-                               PackedLeafPage::metrics().find_key_success_count.get());
-
-    double filter_positive_count = leaf_query_count;
-
-    double filter_false_positive_rate =
-        (double)PackedLeafPage::metrics().find_key_failure_count.get() / filter_positive_count;
-
     out << "\n"
         << BATT_INSPECT(kv_store.mem_table_get_count) << "\n"                          //
         << BATT_INSPECT(kv_store.mem_table_get_latency) << "\n"                        //
@@ -924,8 +916,6 @@ std::function<void(std::ostream&)> KVStore::debug_info() noexcept
         << BATT_INSPECT(PackedLeafPage::metrics().find_key_failure_count) << "\n"      //
         << BATT_INSPECT(PackedLeafPage::metrics().find_key_latency) << "\n"            //
         << "\n"                                                                        //
-        << BATT_INSPECT(filter_false_positive_rate) << "\n"                            //
-        << "\n"                                                                        //
         << BATT_INSPECT(BloomFilterMetrics::instance().word_count_stats) << "\n"       //
         << BATT_INSPECT(BloomFilterMetrics::instance().byte_size_stats) << "\n"        //
         << BATT_INSPECT(BloomFilterMetrics::instance().bit_size_stats) << "\n"         //
@@ -948,6 +938,10 @@ std::function<void(std::ostream&)> KVStore::debug_info() noexcept
         << BATT_INSPECT(KeyQuery::metrics().try_pin_leaf_success_count) << "\n"        //
         << BATT_INSPECT(KeyQuery::metrics().sharded_view_find_count) << "\n"           //
         << BATT_INSPECT(KeyQuery::metrics().sharded_view_find_success_count) << "\n"   //
+        << BATT_INSPECT(KeyQuery::metrics().filter_positive_count) << "\n"             //
+        << BATT_INSPECT(KeyQuery::metrics().filter_false_positive_count) << "\n"       //
+        << "\n"                                                                        //
+        << BATT_INSPECT(KeyQuery::metrics().filter_false_positive_rate()) << "\n"      //
         << "\n"                                                                        //
         << BATT_INSPECT(checkpoint_log.root_log_space()) << "\n"                       //
         << BATT_INSPECT(checkpoint_log.root_log_size()) << "\n"                        //

@@ -362,9 +362,6 @@ struct SegmentedLevelAlgorithms {
     this->for_each_active_segment_in(
         key_pivot_i,
         [&](const SegmentT& segment) -> Optional<batt::seq::LoopControl> {
-          if (query.reject_page(segment.get_leaf_page_id())) {
-            return batt::seq::LoopControl::kContinue;
-          }
           return in_segment(segment).find_key(this->level_, key_pivot_i, query, &result);
         });
 
