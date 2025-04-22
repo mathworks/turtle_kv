@@ -39,7 +39,8 @@ StatusOr<std::unique_ptr<InMemoryLeaf>> InMemoryLeaf::try_split()
   BATT_CHECK_LT(0, plan.split_point);
   BATT_CHECK_LT(plan.split_point, this->result_set.size());
 
-  auto new_sibling = std::make_unique<InMemoryLeaf>(this->tree_options);
+  auto new_sibling =
+      std::make_unique<InMemoryLeaf>(batt::make_copy(this->pinned_leaf_page_), this->tree_options);
 
   new_sibling->result_set = this->result_set;
   {

@@ -126,7 +126,9 @@ int main(int argc, char** argv)
             llfs::StorageContext::make_shared(batt::Runtime::instance().default_scheduler(),
                                               scoped_io_ring->get_io_ring());
 
-        configure_page_cache(kv_store_config, kv_runtime_options, p_storage_context.get());
+        BATT_CHECK_OK(KVStore::configure_storage_context(*p_storage_context,
+                                                         kv_store_config.tree_options,
+                                                         kv_runtime_options));
 
         StatusOr<std::unique_ptr<KVStore>> kv_store_opened =
             KVStore::open(batt::Runtime::instance().default_scheduler(),
@@ -187,6 +189,9 @@ void configure_kv(KVStore::Config* kv_store_config, KVStore::RuntimeOptions* kv_
   auto storage_size =  //
       getenv_as<usize>("turtlekv_storage_size_gb").value_or(256) * kGiB;
 
+  auto cache_size =  //
+      getenv_as<usize>("turtlekv_cache_size_mb").value_or(65536) * kMiB;
+
   auto filter_bits =  //
       getenv_as<usize>("turtlekv_filter_bits").value_or(kDefaultFilterBits);
 
@@ -226,6 +231,7 @@ void configure_kv(KVStore::Config* kv_store_config, KVStore::RuntimeOptions* kv_
 
   kv_runtime_options->initial_checkpoint_distance = checkpoint_distance;
   kv_runtime_options->use_threaded_checkpoint_pipeline = checkpoint_pipeline;
+  kv_runtime_options->cache_size_bytes = cache_size;
 
   {
     const char* pre = "\n# turtlekv ";
@@ -238,6 +244,7 @@ void configure_kv(KVStore::Config* kv_store_config, KVStore::RuntimeOptions* kv_
         << pre << BATT_INSPECT(leaf_size) << " (" << dump_size(leaf_size) << ")"        //
         << pre << BATT_INSPECT(wal_size) << " (" << dump_size(wal_size) << ")"          //
         << pre << BATT_INSPECT(storage_size) << " (" << dump_size(storage_size) << ")"  //
+        << pre << BATT_INSPECT(cache_size) << " (" << dump_size(cache_size) << ")"      //
         << pre << BATT_INSPECT(filter_bits)                                             //
         << pre << BATT_INSPECT(key_size_hint)                                           //
         << pre << BATT_INSPECT(value_size_hint)                                         //
@@ -253,60 +260,6 @@ void configure_kv(KVStore::Config* kv_store_config, KVStore::RuntimeOptions* kv_
   kv_store_config->tree_options = tree_options;
   kv_store_config->initial_capacity_bytes = storage_size;
   kv_store_config->change_log_size_bytes = wal_size;
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-void configure_page_cache(const KVStore::Config& kv_store_config,
-                          const KVStore::RuntimeOptions& kv_runtime_options,
-                          llfs::StorageContext* storage_context)
-{
-  auto node_cache_size =  //
-      getenv_as<usize>("turtlekv_node_cache_size_mb").value_or(1024) * kMiB;
-
-  auto leaf_cache_size =  //
-      getenv_as<usize>("turtlekv_leaf_cache_size_mb").value_or(65536) * kMiB;
-
-  auto filter_cache_size =  //
-      getenv_as<usize>("turtlekv_filter_cache_size_mb").value_or(4096) * kMiB;
-
-  const TreeOptions& tree_options = kv_store_config.tree_options;
-
-  const usize node_size = tree_options.node_size();
-  const usize leaf_size = tree_options.leaf_size();
-  const usize filter_page_size = tree_options.filter_page_size();
-  {
-    const usize node_cache_page_count = (node_cache_size + node_size - 1) / node_size;
-    const usize leaf_cache_page_count = (leaf_cache_size + leaf_size - 1) / leaf_size;
-    const usize filter_cache_page_count =
-        (filter_cache_size + filter_page_size - 1) / filter_page_size;
-
-    if (filter_page_size != 0 && filter_page_size != leaf_size) {
-      storage_context->set_page_cache_options(
-          llfs::PageCacheOptions::with_default_values()  //
-              .set_max_cached_pages_per_size(llfs::PageSize{(u32)node_size}, node_cache_page_count)
-              .set_max_cached_pages_per_size(llfs::PageSize{(u32)leaf_size}, leaf_cache_page_count)
-              .set_max_cached_pages_per_size(llfs::PageSize{(u32)filter_page_size},
-                                             filter_cache_page_count));
-    } else {
-      storage_context->set_page_cache_options(
-          llfs::PageCacheOptions::with_default_values()  //
-              .set_max_cached_pages_per_size(llfs::PageSize{(u32)node_size}, node_cache_page_count)
-              .set_max_cached_pages_per_size(llfs::PageSize{(u32)leaf_size},
-                                             leaf_cache_page_count + filter_cache_page_count));
-    }
-  }
-
-  {
-    const char* pre = "\n# turtlekv ";
-
-    std::cout                                                                                     //
-        << pre << BATT_INSPECT(filter_page_size)                                                  //
-        << pre << BATT_INSPECT(node_cache_size) << " (" << dump_size(node_cache_size) << ")"      //
-        << pre << BATT_INSPECT(leaf_cache_size) << " (" << dump_size(leaf_cache_size) << ")"      //
-        << pre << BATT_INSPECT(filter_cache_size) << " (" << dump_size(filter_cache_size) << ")"  //
-        << std::endl;
-  }
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

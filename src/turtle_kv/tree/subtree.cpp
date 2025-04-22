@@ -79,7 +79,7 @@ Status Subtree::apply_batch_update(const TreeOptions& tree_options,
         if (!page_id_slot.is_valid()) {
           BATT_CHECK_EQ(parent_height, 1);
 
-          auto new_leaf = std::make_unique<InMemoryLeaf>(tree_options);
+          auto new_leaf = std::make_unique<InMemoryLeaf>(llfs::PinnedPage{}, tree_options);
 
           new_leaf->result_set = update.result_set;
 
@@ -111,7 +111,8 @@ Status Subtree::apply_batch_update(const TreeOptions& tree_options,
           // Case: {BatchUpdate} + {PackedLeafPage} => InMemoryLeaf
 
           const PackedLeafPage& packed_leaf = PackedLeafPage::view_of(pinned_page);
-          auto new_leaf = std::make_unique<InMemoryLeaf>(tree_options);
+          auto new_leaf =
+              std::make_unique<InMemoryLeaf>(batt::make_copy(pinned_page), tree_options);
 
           BATT_ASSIGN_OK_RESULT(
               new_leaf->result_set,
@@ -135,8 +136,9 @@ Status Subtree::apply_batch_update(const TreeOptions& tree_options,
 
           const PackedNodePage& packed_node = PackedNodePage::view_of(pinned_page);
 
-          BATT_ASSIGN_OK_RESULT(std::unique_ptr<InMemoryNode> node,
-                                InMemoryNode::unpack(tree_options, packed_node));
+          BATT_ASSIGN_OK_RESULT(
+              std::unique_ptr<InMemoryNode> node,
+              InMemoryNode::unpack(batt::make_copy(pinned_page), tree_options, packed_node));
 
           BATT_REQUIRE_OK(node->apply_batch_update(update, key_upper_bound, is_root));
 

@@ -30,6 +30,7 @@ struct InMemoryLeaf {
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  llfs::PinnedPage pinned_leaf_page_;
   TreeOptions tree_options;
   MergeCompactor::ResultSet</*decay_to_items=*/false> result_set;
   std::shared_ptr<const batt::RunningTotal> shared_edit_size_totals_;
@@ -38,8 +39,10 @@ struct InMemoryLeaf {
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  explicit InMemoryLeaf(const TreeOptions& tree_options_arg) noexcept
-      : tree_options{tree_options_arg}
+  explicit InMemoryLeaf(llfs::PinnedPage&& pinned_leaf_page,
+                        const TreeOptions& tree_options_arg) noexcept
+      : pinned_leaf_page_{std::move(pinned_leaf_page)}
+      , tree_options{tree_options_arg}
   {
   }
 

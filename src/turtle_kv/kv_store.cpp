@@ -19,6 +19,8 @@
 
 #include <gperftools/malloc_extension.h>
 
+#include <set>
+
 namespace turtle_kv {
 
 namespace {
@@ -68,7 +70,35 @@ std::string_view filter_page_file_name() noexcept
   return RuntimeOptions{
       .initial_checkpoint_distance = 1,
       .use_threaded_checkpoint_pipeline = true,
+      .cache_size_bytes = 4 * kGiB,
   };
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+/*static*/ Status KVStore::configure_storage_context(llfs::StorageContext& storage_context,
+                                                     const TreeOptions& tree_options,
+                                                     const RuntimeOptions& runtime_options) noexcept
+{
+  auto page_cache_options = llfs::PageCacheOptions::with_default_values();
+
+  std::set<llfs::PageSize> sharded_leaf_views;
+
+  sharded_leaf_views.insert(llfs::PageSize{4 * kKiB});
+  sharded_leaf_views.insert(tree_options.trie_index_sharded_view_size());
+
+  for (llfs::PageSize view_size : sharded_leaf_views) {
+    if (tree_options.leaf_size() != view_size) {
+      page_cache_options.add_sharded_view(tree_options.leaf_size(), view_size);
+    }
+  }
+
+  page_cache_options.set_byte_size(runtime_options.cache_size_bytes,
+                                   /*default_page_size=*/llfs::PageSize{4 * kKiB});
+
+  storage_context.set_page_cache_options(page_cache_options);
+
+  return OkStatus();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -82,7 +112,7 @@ std::string_view filter_page_file_name() noexcept
                                    llfs::ThreadPoolSize{1});
   BATT_REQUIRE_OK(scoped_io_ring);
 
-  auto p_storage_context =
+  boost::intrusive_ptr<llfs::StorageContext> p_storage_context =
       llfs::StorageContext::make_shared(batt::Runtime::instance().default_scheduler(),  //
                                         scoped_io_ring->get_io_ring());
 
@@ -172,12 +202,44 @@ std::string_view filter_page_file_name() noexcept
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 /*static*/ StatusOr<std::unique_ptr<KVStore>> KVStore::open(
+    const std::filesystem::path& dir_path,
+    const TreeOptions& tree_options,
+    Optional<RuntimeOptions> runtime_options) noexcept
+{
+  BATT_ASSIGN_OK_RESULT(
+      llfs::ScopedIoRing scoped_io_ring,
+      llfs::ScopedIoRing::make_new(llfs::MaxQueueDepth{4096}, llfs::ThreadPoolSize{1}));
+
+  boost::intrusive_ptr<llfs::StorageContext> storage_context =
+      llfs::StorageContext::make_shared(batt::Runtime::instance().default_scheduler(),
+                                        scoped_io_ring.get_io_ring());
+
+  if (!runtime_options) {
+    runtime_options = RuntimeOptions::with_default_values();
+  }
+
+  BATT_REQUIRE_OK(
+      KVStore::configure_storage_context(*storage_context, tree_options, *runtime_options));
+
+  return KVStore::open(batt::Runtime::instance().default_scheduler(),
+                       batt::WorkerPool::default_pool(),
+                       *storage_context,
+                       dir_path,
+                       tree_options,
+                       runtime_options,
+                       std::move(scoped_io_ring));
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+/*static*/ StatusOr<std::unique_ptr<KVStore>> KVStore::open(
     batt::TaskScheduler& task_scheduler,
     batt::WorkerPool& worker_pool,
     llfs::StorageContext& storage_context,
     const std::filesystem::path& dir_path,
     const TreeOptions& tree_options,
-    Optional<RuntimeOptions> runtime_options) noexcept
+    Optional<RuntimeOptions> runtime_options,
+    llfs::ScopedIoRing&& scoped_io_ring) noexcept
 {
   BATT_REQUIRE_OK(storage_context.add_existing_named_file(dir_path / leaf_page_file_name()));
   BATT_REQUIRE_OK(storage_context.add_existing_named_file(dir_path / node_page_file_name()));
@@ -200,6 +262,8 @@ std::string_view filter_page_file_name() noexcept
   return {
       std::unique_ptr<KVStore>{new KVStore{task_scheduler,
                                            worker_pool,
+                                           std::move(scoped_io_ring),
+                                           storage_context.shared_from_this(),
                                            tree_options,
                                            *runtime_options,
                                            std::move(change_log_writer),
@@ -234,12 +298,16 @@ std::string_view filter_page_file_name() noexcept
 //
 /*explicit*/ KVStore::KVStore(batt::TaskScheduler& task_scheduler,
                               batt::WorkerPool& worker_pool,
+                              llfs::ScopedIoRing&& scoped_io_ring,
+                              boost::intrusive_ptr<llfs::StorageContext>&& storage_context,
                               const TreeOptions& tree_options,
                               const RuntimeOptions& runtime_options,
                               std::unique_ptr<ChangeLogWriter>&& change_log_writer,
                               std::unique_ptr<llfs::Volume>&& checkpoint_log) noexcept
     : task_scheduler_{task_scheduler}
     , worker_pool_{worker_pool}
+    , scoped_io_ring_{std::move(scoped_io_ring)}
+    , storage_context_{std::move(storage_context)}
     , tree_options_{tree_options}
     , runtime_options_{runtime_options}
     , log_writer_{std::move(change_log_writer)}
@@ -377,13 +445,52 @@ Status KVStore::put(const KeyView& key, const ValueView& value) noexcept /*overr
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+Status KVStore::force_checkpoint()
+{
+  const usize saved_checkpoint_distance = this->checkpoint_distance_.exchange(1);
+  auto on_scope_exit = batt::finally([&] {
+    usize expected = 1;
+    this->checkpoint_distance_.compare_exchange_strong(expected, saved_checkpoint_distance);
+  });
+
+  boost::intrusive_ptr<MemTable> observed_mem_table = nullptr;
+  {
+    absl::ReaderMutexLock checkpoint_lock{&this->base_checkpoint_mutex_};
+    observed_mem_table = this->mem_table_;
+  }
+
+  const u64 observed_mem_table_id = observed_mem_table->id();
+  BATT_REQUIRE_OK(this->update_checkpoint(observed_mem_table.get(), observed_mem_table_id));
+
+  BATT_REQUIRE_OK(this->deltas_size_->await_true([this](usize n) {
+    return n < 2;
+  }));
+
+  return OkStatus();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void KVStore::set_checkpoint_distance(usize chi) noexcept
+{
+  BATT_CHECK_GT(chi, 0);
+
+  this->checkpoint_distance_.store(chi);
+
+  if (this->runtime_options_.use_threaded_checkpoint_pipeline) {
+    this->checkpoint_update_channel_.poke();
+  }
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 StatusOr<ValueView> KVStore::get(const KeyView& key) noexcept /*override*/
 {
   absl::ReaderMutexLock checkpoint_lock{&this->base_checkpoint_mutex_};
 
   // First check the current active MemTable.
   //
-  Optional<ValueView> value = BATT_COLLECT_LATENCY_SAMPLE(batt::Every2ToTheConst<13>{},
+  Optional<ValueView> value = BATT_COLLECT_LATENCY_SAMPLE(batt::Every2ToTheConst<14>{},
                                                           this->metrics_.mem_table_get_latency,
                                                           this->mem_table_->get(key));
 
@@ -400,7 +507,7 @@ StatusOr<ValueView> KVStore::get(const KeyView& key) noexcept /*override*/
     --i;
     const boost::intrusive_ptr<MemTable>& delta = this->deltas_[i];
 
-    Optional<ValueView> delta_value = BATT_COLLECT_LATENCY_SAMPLE(batt::Every2ToTheConst<20>{},
+    Optional<ValueView> delta_value = BATT_COLLECT_LATENCY_SAMPLE(batt::Every2ToTheConst<18>{},
                                                                   this->metrics_.delta_get_latency,
                                                                   delta->finalized_get(key));
 
@@ -425,7 +532,7 @@ StatusOr<ValueView> KVStore::get(const KeyView& key) noexcept /*override*/
   //
   ThreadContext& thread_context = this->per_thread_.get(this);
 
-  if ((++thread_context.query_count & 0xff) == 0) {
+  if ((++thread_context.query_count & 0x3ff) == 0) {
     thread_context.query_page_loader.emplace(this->page_cache());
   }
   thread_context.query_result_storage.emplace();
@@ -560,15 +667,11 @@ void KVStore::memtable_compact_thread_main()
 {
   Status status = [this]() -> Status {
     for (;;) {
-      BATT_ASSIGN_OK_RESULT(boost::intrusive_ptr<MemTable> mem_table,
-                            this->memtable_compact_channel_.read());
+      StatusOr<boost::intrusive_ptr<MemTable>> mem_table = this->memtable_compact_channel_.read();
+      BATT_REQUIRE_OK(mem_table);
+      BATT_CHECK_NOT_NULLPTR(*mem_table);
 
-      if (mem_table == nullptr) {
-        BATT_REQUIRE_OK(this->checkpoint_update_channel_.write(nullptr));
-        continue;
-      }
-
-      std::unique_ptr<DeltaBatch> delta_batch = this->compact_memtable(std::move(mem_table));
+      std::unique_ptr<DeltaBatch> delta_batch = this->compact_memtable(std::move(*mem_table));
 
       BATT_REQUIRE_OK(this->checkpoint_update_channel_.write(std::move(delta_batch)));
     }
@@ -598,11 +701,14 @@ void KVStore::checkpoint_update_thread_main()
 {
   Status status = [this]() -> Status {
     for (;;) {
-      BATT_ASSIGN_OK_RESULT(std::unique_ptr<DeltaBatch> delta_batch,
-                            this->checkpoint_update_channel_.read());
+      StatusOr<std::unique_ptr<DeltaBatch>> delta_batch = this->checkpoint_update_channel_.read();
+      if (delta_batch.status() == batt::StatusCode::kPoke) {
+        delta_batch = std::unique_ptr<DeltaBatch>{nullptr};
+      }
+      BATT_REQUIRE_OK(delta_batch);
 
       BATT_ASSIGN_OK_RESULT(std::unique_ptr<CheckpointJob> checkpoint_job,
-                            this->apply_batch_to_checkpoint(std::move(delta_batch)));
+                            this->apply_batch_to_checkpoint(std::move(*delta_batch)));
 
       if (checkpoint_job) {
         BATT_REQUIRE_OK(this->checkpoint_flush_channel_.write(std::move(checkpoint_job)));
@@ -758,9 +864,7 @@ std::function<void(std::ostream&)> KVStore::debug_info() noexcept
     auto& change_log_file = this->log_writer_->change_log_file();
     auto& change_log_writer = this->log_writer_->metrics();
 
-    auto& leaf_cache = cache.metrics_for_page_size(this->tree_options_.leaf_size());
-    auto& node_cache = cache.metrics_for_page_size(this->tree_options_.node_size());
-    auto& filter_cache = cache.metrics_for_page_size(this->tree_options_.filter_page_size());
+    auto& cache_slot_pool = llfs::PageCacheSlot::Pool::Metrics::instance();
 
     auto& page_cache = cache.metrics();
 
@@ -840,6 +944,10 @@ std::function<void(std::ostream&)> KVStore::debug_info() noexcept
         << BATT_INSPECT(KeyQuery::metrics().filter_page_load_failed_count) << "\n"     //
         << BATT_INSPECT(KeyQuery::metrics().page_id_mismatch_count) << "\n"            //
         << BATT_INSPECT(KeyQuery::metrics().filter_reject_count) << "\n"               //
+        << BATT_INSPECT(KeyQuery::metrics().try_pin_leaf_count) << "\n"                //
+        << BATT_INSPECT(KeyQuery::metrics().try_pin_leaf_success_count) << "\n"        //
+        << BATT_INSPECT(KeyQuery::metrics().sharded_view_find_count) << "\n"           //
+        << BATT_INSPECT(KeyQuery::metrics().sharded_view_find_success_count) << "\n"   //
         << "\n"                                                                        //
         << BATT_INSPECT(checkpoint_log.root_log_space()) << "\n"                       //
         << BATT_INSPECT(checkpoint_log.root_log_size()) << "\n"                        //
@@ -866,9 +974,11 @@ std::function<void(std::ostream&)> KVStore::debug_info() noexcept
         << BATT_INSPECT(change_log_writer.block_alloc_count) << "\n"                   //
         << BATT_INSPECT(change_log_writer.block_utilization_rate()) << "\n"            //
         << "\n"                                                                        //
-        << BATT_INSPECT(leaf_cache.hit_rate()) << "\n"                                 //
-        << BATT_INSPECT(node_cache.hit_rate()) << "\n"                                 //
-        << BATT_INSPECT(filter_cache.hit_rate()) << "\n"                               //
+        << BATT_INSPECT(cache_slot_pool.hit_rate()) << "\n"                            //
+        << BATT_INSPECT(cache_slot_pool.admit_byte_count) << "\n"                      //
+        << BATT_INSPECT(cache_slot_pool.evict_byte_count) << "\n"                      //
+        << BATT_INSPECT(cache_slot_pool.background_evict_count) << "\n"                //
+        << BATT_INSPECT(cache_slot_pool.background_evict_byte_count) << "\n"           //
         << "\n"                                                                        //
         << dump_memory_stats() << "\n"                                                 //
         ;

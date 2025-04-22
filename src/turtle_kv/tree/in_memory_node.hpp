@@ -317,6 +317,7 @@ struct InMemoryNode {
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  llfs::PinnedPage pinned_node_page_;
   TreeOptions tree_options;
   i32 height = 0;
   SmallVec<Subtree, 64> children;
@@ -329,7 +330,8 @@ struct InMemoryNode {
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  static StatusOr<std::unique_ptr<InMemoryNode>> unpack(const TreeOptions& tree_options,
+  static StatusOr<std::unique_ptr<InMemoryNode>> unpack(llfs::PinnedPage&& pinned_node_page,
+                                                        const TreeOptions& tree_options,
                                                         const PackedNodePage& packed_node);
 
   static StatusOr<std::unique_ptr<InMemoryNode>> from_subtrees(llfs::PageLoader& page_loader,  //
@@ -341,8 +343,10 @@ struct InMemoryNode {
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  explicit InMemoryNode(const TreeOptions& tree_options_arg) noexcept
-      : tree_options{tree_options_arg}
+  explicit InMemoryNode(llfs::PinnedPage&& pinned_node_page,
+                        const TreeOptions& tree_options_arg) noexcept
+      : pinned_node_page_{std::move(pinned_node_page)}
+      , tree_options{tree_options_arg}
   {
   }
 

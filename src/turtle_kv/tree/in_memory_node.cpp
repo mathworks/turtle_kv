@@ -34,10 +34,11 @@ using PackedSegment = PackedUpdateBuffer::Segment;
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 /*static*/ StatusOr<std::unique_ptr<InMemoryNode>> InMemoryNode::unpack(
+    llfs::PinnedPage&& pinned_node_page,
     const TreeOptions& tree_options,
     const PackedNodePage& packed_node)
 {
-  auto node = std::make_unique<InMemoryNode>(tree_options);
+  auto node = std::make_unique<InMemoryNode>(std::move(pinned_node_page), tree_options);
 
   const usize pivot_count = packed_node.pivot_count;
 
@@ -122,7 +123,7 @@ using PackedSegment = PackedUpdateBuffer::Segment;
     const KeyView& key_upper_bound,
     IsRoot is_root)
 {
-  auto new_node = std::make_unique<InMemoryNode>(tree_options);
+  auto new_node = std::make_unique<InMemoryNode>(llfs::PinnedPage{}, tree_options);
 
   BATT_ASSIGN_OK_RESULT(const i32 first_height, first_subtree.get_height(page_loader));
   BATT_ASSIGN_OK_RESULT(const i32 second_height, second_subtree.get_height(page_loader));
@@ -767,7 +768,8 @@ StatusOr<std::unique_ptr<InMemoryNode>> InMemoryNode::try_split(llfs::PageLoader
   usize split_pivot_i = (orig_pivot_count + 1) / 2;
 
   auto* node_lower_half = this;
-  auto node_upper_half = std::make_unique<InMemoryNode>(this->tree_options);
+  auto node_upper_half =
+      std::make_unique<InMemoryNode>(batt::make_copy(this->pinned_node_page_), this->tree_options);
 
   for (;;) {
     // If we ever try the same split point a second time, fail.

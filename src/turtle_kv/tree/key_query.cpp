@@ -35,15 +35,20 @@ StatusOr<ValueView> find_key_in_leaf(llfs::PageId leaf_page_id,
   }
 
   if (try_full_page_query_first()) {
+    KeyQuery::metrics().try_pin_leaf_count.add(1);
+
     StatusOr<llfs::PinnedPage> full_leaf_page =
         query.page_loader->try_pin_cached_page(leaf_page_id,
                                                LeafPageView::page_layout_id(),
                                                llfs::PinPageToJob::kDefault);
 
     if (full_leaf_page.ok()) {
+      KeyQuery::metrics().try_pin_leaf_success_count.add(1);
       return find_key_in_pinned_leaf(*full_leaf_page, query, item_index_out);
     }
   }
+
+  KeyQuery::metrics().sharded_view_find_count.add(1);
 
   StatusOr<ValueView> result =
       find_key_in_leaf_using_sharded_views(leaf_page_id, query, item_index_out);
@@ -57,6 +62,9 @@ StatusOr<ValueView> find_key_in_leaf(llfs::PageId leaf_page_id,
                                                        llfs::OkIfNotFound{false}));
 
     return find_key_in_pinned_leaf(full_leaf_page, query, item_index_out);
+
+  } else if (result.ok()) {
+    KeyQuery::metrics().sharded_view_find_success_count.add(1);
   }
 
   return result;
@@ -73,15 +81,20 @@ StatusOr<ValueView> find_key_in_leaf(const llfs::PageIdSlot& leaf_page_id_slot,
   }
 
   if (try_full_page_query_first()) {
+    KeyQuery::metrics().try_pin_leaf_count.add(1);
+
     StatusOr<llfs::PinnedPage> full_leaf_page =
         leaf_page_id_slot.try_pin_through(*query.page_loader,
                                           LeafPageView::page_layout_id(),
                                           llfs::PinPageToJob::kDefault);
 
     if (full_leaf_page.ok()) {
+      KeyQuery::metrics().try_pin_leaf_success_count.add(1);
       return find_key_in_pinned_leaf(*full_leaf_page, query, item_index_out);
     }
   }
+
+  KeyQuery::metrics().sharded_view_find_count.add(1);
 
   StatusOr<ValueView> result =
       find_key_in_leaf_using_sharded_views(leaf_page_id_slot, query, item_index_out);
@@ -94,6 +107,9 @@ StatusOr<ValueView> find_key_in_leaf(const llfs::PageIdSlot& leaf_page_id_slot,
                                                          llfs::OkIfNotFound{false}));
 
     return find_key_in_pinned_leaf(full_leaf_page, query, item_index_out);
+
+  } else if (result.ok()) {
+    KeyQuery::metrics().sharded_view_find_success_count.add(1);
   }
 
   return result;

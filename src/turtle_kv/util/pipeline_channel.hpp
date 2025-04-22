@@ -20,20 +20,28 @@ class PipelineChannel
   static constexpr u32 kStateFull = 2;
   static constexpr u32 kStateReading = 3;
   static constexpr u32 kStateClosed = 4;
+  static constexpr u32 kStateMask = 0xf;
+  static constexpr u32 kPokeBit = 16;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  void poke()
+  {
+    this->state_.fetch_or(kPokeBit);
+    this->notify().IgnoreError();
+  }
+
   template <typename... Args>
-  Status write(Args&&... args) noexcept
+  Status write(Args&&... args)
   {
     u32 observed_state = this->state_.load();
 
     for (;;) {
-      switch (observed_state) {
+      switch (observed_state & kStateMask) {
         case kStateEmpty:
           if (this->state_.compare_exchange_weak(observed_state, kStateWriting)) {
             this->value_.emplace(BATT_FORWARD(args)...);
-            BATT_CHECK_EQ(this->state_.exchange(kStateFull), kStateWriting);
+            BATT_CHECK_EQ(this->state_.exchange(kStateFull) & kStateMask, kStateWriting);
             return this->notify();
           }
           break;
@@ -57,12 +65,17 @@ class PipelineChannel
     }
   }
 
-  StatusOr<T> read() noexcept
+  StatusOr<T> read()
   {
     u32 observed_state = this->state_.load();
 
     for (;;) {
-      switch (observed_state) {
+      if ((observed_state & kPokeBit) != 0) {
+        this->state_.fetch_and(~kPokeBit);
+        return {batt::StatusCode::kPoke};
+      }
+
+      switch (observed_state & kStateMask) {
         case kStateEmpty: {
           BATT_REQUIRE_OK(this->wait(kStateEmpty));
           observed_state = this->state_.load();
@@ -77,7 +90,7 @@ class PipelineChannel
           if (this->state_.compare_exchange_weak(observed_state, kStateReading)) {
             StatusOr<T> read_value{std::move(*this->value_)};
             this->value_ = None;
-            BATT_CHECK_EQ(this->state_.exchange(kStateEmpty), kStateReading);
+            BATT_CHECK_EQ(this->state_.exchange(kStateEmpty) & kStateMask, kStateReading);
             return read_value;
           }
           break;
@@ -97,12 +110,12 @@ class PipelineChannel
     }
   }
 
-  void close() noexcept
+  void close()
   {
     u32 observed_state = this->state_.load();
 
     for (;;) {
-      switch (observed_state) {
+      switch (observed_state & kStateMask) {
         case kStateClosed:
           return;
 

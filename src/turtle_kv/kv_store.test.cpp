@@ -83,27 +83,8 @@ TEST(KVStoreTest, CreateAndOpen)
             llfs::StorageContext::make_shared(batt::Runtime::instance().default_scheduler(),  //
                                               scoped_io_ring->get_io_ring());
 
-        {
-          auto page_cache_options = llfs::PageCacheOptions::with_default_values();
-
-          const PageSize leaf_size = tree_options.leaf_size();
-          const PageSize node_size = tree_options.node_size();
-          const PageSize filter_size = tree_options.filter_page_size();
-          const PageSize trie_index_size = tree_options.trie_index_sharded_view_size();
-
-          LOG_FIRST_N(INFO, 1) << BATT_INSPECT(leaf_size) << BATT_INSPECT(node_size)
-                               << BATT_INSPECT(filter_size) << BATT_INSPECT(trie_index_size);
-
-          page_cache_options  //
-              .set_max_cached_pages_per_size(node_size, (32 * kGiB) / node_size)
-              .set_max_cached_pages_per_size(leaf_size, (32 * kGiB) / leaf_size)
-              .set_max_cached_pages_per_size(filter_size, (4 * kGiB) / filter_size)
-              .set_max_cached_pages_per_size(trie_index_size, (4 * kGiB) / trie_index_size)
-              .add_sharded_view(leaf_size, PageSize{u32(4 * kKiB)})
-              .add_sharded_view(leaf_size, trie_index_size);
-
-          p_storage_context->set_page_cache_options(page_cache_options);
-        }
+        BATT_CHECK_OK(
+            KVStore::configure_storage_context(*p_storage_context, tree_options, runtime_options));
 
         StatusOr<std::unique_ptr<KVStore>> kv_store_opened =
             KVStore::open(batt::Runtime::instance().default_scheduler(),

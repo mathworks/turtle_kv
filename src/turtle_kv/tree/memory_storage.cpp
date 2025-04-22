@@ -49,15 +49,7 @@ std::shared_ptr<llfs::PageCache> make_memory_page_cache(batt::TaskScheduler& sch
 
   auto cache_options = llfs::PageCacheOptions::with_default_values();
 
-  std::unordered_map<u32 /*page_size*/, usize /*cache_slots*/> cache_slots_per_page_size;
-
-  cache_slots_per_page_size[opts.leaf_size()] += n_leaf_pages;
-  cache_slots_per_page_size[opts.filter_page_size()] += n_leaf_pages;
-  cache_slots_per_page_size[opts.node_size()] += n_node_pages;
-
-  for (const auto& [page_size, cache_slots] : cache_slots_per_page_size) {
-    cache_options.set_max_cached_pages_per_size(llfs::PageSize{page_size}, cache_slots);
-  }
+  cache_options.set_byte_size((byte_capacity * 5 + 1) / 4);
 
   return BATT_OK_RESULT_OR_PANIC(llfs::PageCache::make_shared(
       /*storage_pool=*/std::move(arenas),

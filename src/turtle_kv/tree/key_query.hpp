@@ -37,6 +37,10 @@ struct KeyQuery {
     FastCountMetric<u64> filter_page_load_failed_count;
     FastCountMetric<u64> page_id_mismatch_count;
     FastCountMetric<u64> filter_reject_count;
+    FastCountMetric<u64> try_pin_leaf_count;
+    FastCountMetric<u64> try_pin_leaf_success_count;
+    FastCountMetric<u64> sharded_view_find_count;
+    FastCountMetric<u64> sharded_view_find_success_count;
     LatencyMetric reject_page_latency;
     LatencyMetric filter_lookup_latency;
   };

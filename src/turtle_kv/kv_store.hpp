@@ -52,6 +52,7 @@ class KVStore : public Table
   struct RuntimeOptions {
     usize initial_checkpoint_distance;
     bool use_threaded_checkpoint_pipeline;
+    usize cache_size_bytes;
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -87,6 +88,10 @@ class KVStore : public Table
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  static Status configure_storage_context(llfs::StorageContext& storage_context,
+                                          const TreeOptions& tree_options,
+                                          const RuntimeOptions& runtime_options) noexcept;
+
   static Status create(llfs::StorageContext& storage_context,
                        const std::filesystem::path& dir_path,
                        const Config& config,
@@ -100,6 +105,12 @@ class KVStore : public Table
       batt::TaskScheduler& task_scheduler,
       batt::WorkerPool& worker_pool,
       llfs::StorageContext& storage_context,
+      const std::filesystem::path& dir_path,
+      const TreeOptions& tree_options,
+      Optional<RuntimeOptions> runtime_options = None,
+      llfs::ScopedIoRing&& scoped_io_ring = llfs::ScopedIoRing{}) noexcept;
+
+  static StatusOr<std::unique_ptr<KVStore>> open(
       const std::filesystem::path& dir_path,
       const TreeOptions& tree_options,
       Optional<RuntimeOptions> runtime_options = None) noexcept;
@@ -139,13 +150,9 @@ class KVStore : public Table
     return this->metrics_;
   }
 
-  void set_checkpoint_distance(usize chi) noexcept
-  {
-    BATT_CHECK_GT(chi, 0);
-    // TODO [tastolfi 2025-02-21] check `chi` against the change log max size.
+  void set_checkpoint_distance(usize chi) noexcept;
 
-    this->checkpoint_distance_.store(chi);
-  }
+  Status force_checkpoint();
 
   std::function<void(std::ostream&)> debug_info() noexcept;
 
@@ -160,6 +167,8 @@ class KVStore : public Table
 
   explicit KVStore(batt::TaskScheduler& task_scheduler,
                    batt::WorkerPool& worker_pool,
+                   llfs::ScopedIoRing&& scoped_io_ring,
+                   boost::intrusive_ptr<llfs::StorageContext>&& storage_context,
                    const TreeOptions& tree_options,
                    const RuntimeOptions& runtime_options,
                    std::unique_ptr<ChangeLogWriter>&& change_log_writer,
@@ -189,6 +198,10 @@ class KVStore : public Table
   batt::TaskScheduler& task_scheduler_;
 
   batt::WorkerPool& worker_pool_;
+
+  llfs::ScopedIoRing scoped_io_ring_;
+
+  boost::intrusive_ptr<llfs::StorageContext> storage_context_;
 
   TreeOptions tree_options_;
 
