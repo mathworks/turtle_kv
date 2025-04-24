@@ -91,9 +91,11 @@ class RandomLeafGenerator
       // Use the fake loader to allocate a page buffer that will be fake-loadable later on.
       //
       FakePinnedPage fake_pinned_page =
-          BATT_OK_RESULT_OR_PANIC(fake_loader.get_page_with_layout(page_id,
-                                                                   LeafPageView::page_layout_id(),
-                                                                   llfs::OkIfNotFound{false}));
+          BATT_OK_RESULT_OR_PANIC(fake_loader.load_page(page_id,
+                                                        llfs::PageLoadOptions{
+                                                            LeafPageView::page_layout_id(),
+                                                            llfs::OkIfNotFound{false},
+                                                        }));
 
       // Grab the PageBuffer so we can build the page.
       //

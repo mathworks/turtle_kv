@@ -24,5 +24,5 @@ fi
 
 if [ "$*" != "" ]; then
     source "${build_dir}/venv/bin/activate"
-    "$@"
+    PYTHONPATH=${PYTHONPATH:-}:${script_dir} "$@"
 fi

@@ -48,8 +48,9 @@ class BenchmarkResult:
         self.node_size = []
         self.leaf_size = []
         self.filter_size = []
-        self.trie_size = []        
+        self.trie_size = []
 
+        self.cache_size = []
         self.node_cache = []
         self.leaf_cache = []
         self.filter_cache = []
@@ -82,10 +83,12 @@ class BenchmarkResult:
         self.cache_ref = []
         self.max_thread_cache = []
         self.mem_release_rate = []
+        self.reads_per_get_4k = []
 
         self.leaf_hit_rate = []
         self.node_hit_rate = []
         self.filter_hit_rate = []
+        self.cache_hit_rate = []
         
         self.fig = None
         self.ax = None
@@ -148,6 +151,7 @@ class BenchmarkResult:
         parse_val(line, r'^# turtlekv  filter_page_size ==', int, -1, self.filter_size)
         parse_val(line, r'^# turtlekv  key_size_hint ==', int, -1, self.key_size)
         parse_val(line, r'^# turtlekv  leaf_cache_size ==', int, -2, self.leaf_cache)
+        parse_val(line, r'^# turtlekv  cache_size ==', int, -2, self.cache_size)
         parse_val(line, r'^# turtlekv  leaf_size ==', int, -2, self.leaf_size)
         parse_val(line, r'^# turtlekv  max_flush_factor ==', int, -1, self.max_flush)
         parse_val(line, r'^# turtlekv  min_flush_factor ==', int, -1, self.min_flush)
@@ -172,7 +176,8 @@ class BenchmarkResult:
         parse_val(line, r'^\[ycsbc output\].*turtlekv.*workloads/workloadd.spec', float, -1, self.thruput_k_d)
         parse_val(line, r'^\[ycsbc output\].*turtlekv.*workloads/workloade.spec', float, -1, self.thruput_k_e)
         parse_val(line, r'^\[ycsbc output\].*turtlekv.*workloads/workloadf.spec', float, -1, self.thruput_k_f)
-        
+
+        parse_val(line, r'^.*page_reads_per_get_4k ==', float, -1, self.reads_per_get_4k)
         parse_val(line, r'^write_amplification', float, -1, self.write_amp)
         parse_val(line, r'^perf_stat.page-faults', int, -1, self.page_faults)
         parse_val(line, r'^cpu_utilization', float, -1, self.cpu_util)
@@ -186,6 +191,8 @@ class BenchmarkResult:
         parse_val(line, r'.*leaf_cache.hit_rate()', float, -1, self.leaf_hit_rate)
         parse_val(line, r'.*node_cache.hit_rate()', float, -1, self.node_hit_rate)
         parse_val(line, r'.*filter_cache.hit_rate()', float, -1, self.filter_hit_rate)
+        parse_val(line, r'.*cache_slot_pool.hit_rate()', float, -1, self.cache_hit_rate)
+
         
     def _new_plot(self):
         plt.close()

@@ -20,7 +20,8 @@ namespace turtle_kv {
 StatusOr<ConstBuffer> PageSliceReader::read_slice(llfs::PageSize shard_size,
                                                   const Interval<usize>& slice,
                                                   PageSliceStorage& storage_out,
-                                                  llfs::PinPageToJob pin_page_to_job) const
+                                                  llfs::PinPageToJob pin_page_to_job,
+                                                  llfs::LruPriority lru_priority) const
 {
   VLOG(1) << "PageSliceReader::read_slice(shard_size=" << shard_size << ", slice=" << slice << ")";
 
@@ -61,10 +62,11 @@ StatusOr<ConstBuffer> PageSliceReader::read_slice(llfs::PageSize shard_size,
     //
     BATT_ASSIGN_OK_RESULT(
         llfs::PinnedPage pinned_shard,
-        this->page_loader_.get_page_with_layout_in_job(*shard_page_id,
-                                                       llfs::ShardedPageView::page_layout_id(),
-                                                       pin_page_to_job,
-                                                       llfs::OkIfNotFound{false}));
+        this->page_loader_.load_page(*shard_page_id,
+                                     llfs::PageLoadOptions{llfs::ShardedPageView::page_layout_id(),
+                                                           pin_page_to_job,
+                                                           llfs::OkIfNotFound{false},
+                                                           lru_priority}));
 
     storage_out.pinned_pages.emplace_back(pinned_shard);
 
@@ -109,9 +111,12 @@ StatusOr<ConstBuffer> PageSliceReader::read_slice(llfs::PageSize shard_size,
 
     // Pin the next shard.
     //
-    BATT_ASSIGN_OK_RESULT(
-        ConstBuffer shard_buffer,
-        this->read_slice(shard_size, single_shard_subslice, shard_tmp_storage, pin_page_to_job));
+    BATT_ASSIGN_OK_RESULT(ConstBuffer shard_buffer,
+                          this->read_slice(shard_size,
+                                           single_shard_subslice,
+                                           shard_tmp_storage,
+                                           pin_page_to_job,
+                                           lru_priority));
 
     // Copy what we need out of the shard buffer.
     //
@@ -127,9 +132,14 @@ StatusOr<ConstBuffer> PageSliceReader::read_slice(llfs::PageSize shard_size,
 //
 StatusOr<ConstBuffer> PageSliceReader::read_slice(const Interval<usize>& slice,
                                                   PageSliceStorage& storage_out,
-                                                  llfs::PinPageToJob pin_page_to_job) const
+                                                  llfs::PinPageToJob pin_page_to_job,
+                                                  llfs::LruPriority lru_priority) const
 {
-  return this->read_slice(this->default_shard_size_, slice, storage_out, pin_page_to_job);
+  return this->read_slice(this->default_shard_size_,
+                          slice,
+                          storage_out,
+                          pin_page_to_job,
+                          lru_priority);
 }
 
 }  // namespace turtle_kv

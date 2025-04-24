@@ -157,9 +157,9 @@ struct KeyQuery {
       return BoolStatus::kUnknown;
     }
 
-    StatusOr<llfs::PinnedPage> filter_pinned_page =
-        this->page_loader->get_page_with_layout_in_job(  //
-            *filter_page_id,
+    StatusOr<llfs::PinnedPage> filter_pinned_page = this->page_loader->load_page(  //
+        *filter_page_id,
+        llfs::PageLoadOptions{
 #if TURTLE_KV_USE_BLOOM_FILTER
             llfs::BloomFilterPageView::page_layout_id(),
 
@@ -168,7 +168,9 @@ struct KeyQuery {
             VqfFilterPageView::page_layout_id(),
 #endif
             llfs::PinPageToJob::kDefault,
-            llfs::OkIfNotFound{true});
+            llfs::OkIfNotFound{true},
+            llfs::LruPriority{kFilterLruPriority},
+        });
 
     // Failed to load the page; can't reject.
     //

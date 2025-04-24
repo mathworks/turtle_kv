@@ -27,6 +27,19 @@ struct KVStoreMetrics {
   LatencyMetric append_job_latency;
 
   StatsMetric<u64> checkpoint_pinned_pages_stats;
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  u64 total_get_count() const
+  {
+    u64 total = this->mem_table_get_count.get();
+    for (auto& delta_get_count : this->delta_log2_get_count) {
+      total += delta_get_count.get();
+    }
+    total += this->checkpoint_get_count.get();
+
+    return total;
+  }
 };
 
 }  // namespace turtle_kv

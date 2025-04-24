@@ -131,6 +131,7 @@ Status build_bloom_filter_for_leaf(llfs::PageCache& page_cache,
 
   BATT_REQUIRE_OK(page_cache.put_view(
       std::make_shared<llfs::BloomFilterPageView>(batt::make_copy(alloc.filter_buffer)),
+      llfs::LruPriority{kNewFilterLruPriority},
       /*callers=*/0,
       /*job_id=*/0));
 
@@ -283,6 +284,7 @@ Status build_quotient_filter_for_leaf(llfs::PageCache& page_cache,
 
   BATT_REQUIRE_OK(
       page_cache.put_view(std::make_shared<VqfFilterPageView>(batt::make_copy(alloc.filter_buffer)),
+                          llfs::LruPriority{kNewFilterLruPriority},
                           /*callers=*/0,
                           /*job_id=*/0));
 

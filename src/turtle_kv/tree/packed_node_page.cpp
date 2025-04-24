@@ -235,10 +235,13 @@ StatusOr<llfs::PinnedPage> PackedNodePage::UpdateBuffer::Segment::load_leaf_page
     llfs::PageLoader& page_loader,
     llfs::PinPageToJob pin_page_to_job) const
 {
-  return page_loader.get_page_with_layout_in_job(this->leaf_page_id.unpack(),
-                                                 LeafPageView::page_layout_id(),
-                                                 pin_page_to_job,
-                                                 llfs::OkIfNotFound{false});
+  return page_loader.load_page(this->leaf_page_id.unpack(),
+                               llfs::PageLoadOptions{
+                                   LeafPageView::page_layout_id(),
+                                   pin_page_to_job,
+                                   llfs::OkIfNotFound{false},
+                                   llfs::LruPriority{kLeafLruPriority},
+                               });
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

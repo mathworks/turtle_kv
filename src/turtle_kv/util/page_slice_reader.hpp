@@ -49,19 +49,19 @@ class PageSliceReader
    * The read data is returned by reference (zero-copy); therefore the caller must make sure to
    * keep `storage_out` in scope while it is reading the returned data.
    */
-  StatusOr<ConstBuffer> read_slice(
-      llfs::PageSize shard_size,
-      const Interval<usize>& slice,
-      PageSliceStorage& storage_out,
-      llfs::PinPageToJob pin_page_to_job = llfs::PinPageToJob::kDefault) const;
+  StatusOr<ConstBuffer> read_slice(llfs::PageSize shard_size,
+                                   const Interval<usize>& slice,
+                                   PageSliceStorage& storage_out,
+                                   llfs::PinPageToJob pin_page_to_job,
+                                   llfs::LruPriority lru_priority) const;
 
   /** \brief Loads the requested page slice using the default shard size passed in at construction
    * time.
    */
-  StatusOr<ConstBuffer> read_slice(
-      const Interval<usize>& slice,
-      PageSliceStorage& storage_out,
-      llfs::PinPageToJob pin_page_to_job = llfs::PinPageToJob::kDefault) const;
+  StatusOr<ConstBuffer> read_slice(const Interval<usize>& slice,
+                                   PageSliceStorage& storage_out,
+                                   llfs::PinPageToJob pin_page_to_job,
+                                   llfs::LruPriority lru_priority) const;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:

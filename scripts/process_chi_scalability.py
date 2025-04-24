@@ -4,7 +4,7 @@ import sys
 import matplotlib.pyplot as plt
 import numpy as np
 
-from . import turtle_bench
+import turtle_bench
 
 
 if len(sys.argv) < 2:

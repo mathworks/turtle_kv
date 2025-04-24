@@ -22,6 +22,7 @@ StatusOr<llfs::PinnedPage> pin_leaf_page_to_job(llfs::PageCacheJob& page_job,
   BATT_CHECK_OK(LeafPageView::register_layout(page_job.cache()));
 
   return page_job.pin_new(std::make_shared<LeafPageView>(std::move(page_buffer)),
+                          llfs::LruPriority{kNewLeafLruPriority},
                           /*callers=*/0);
 }
 

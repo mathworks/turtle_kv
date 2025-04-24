@@ -1045,6 +1045,7 @@ StatusOr<llfs::PageId> InMemoryNode::finish_serialize(TreeSerializeContext& cont
 
   BATT_REQUIRE_OK(
       context.page_job().pin_new(std::make_shared<NodePageView>(std::move(*node_page_buffer)),
+                                 llfs::LruPriority{kNewNodeLruPriority},
                                  /*callers=*/0));
 
   return new_page_id;
@@ -1056,9 +1057,12 @@ StatusOr<llfs::PinnedPage> Segment::load_leaf_page(llfs::PageLoader& page_loader
                                                    llfs::PinPageToJob pin_page_to_job) const
 {
   return this->page_id_slot.load_through(page_loader,
-                                         LeafPageView::page_layout_id(),
-                                         pin_page_to_job,
-                                         llfs::OkIfNotFound{false});
+                                         llfs::PageLoadOptions{
+                                             LeafPageView::page_layout_id(),
+                                             pin_page_to_job,
+                                             llfs::OkIfNotFound{false},
+                                             llfs::LruPriority{kLeafLruPriority},
+                                         });
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

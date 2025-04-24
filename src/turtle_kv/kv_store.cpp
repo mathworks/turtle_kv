@@ -16,6 +16,7 @@
 #include <turtle_kv/import/env.hpp>
 
 #include <llfs/bloom_filter_page_view.hpp>
+#include <llfs/page_device_metrics.hpp>
 
 #include <gperftools/malloc_extension.h>
 
@@ -48,6 +49,21 @@ std::string_view node_page_file_name() noexcept
 std::string_view filter_page_file_name() noexcept
 {
   return "filter_pages.llfs";
+}
+
+u64 query_page_loader_reset_every_n()
+{
+  static const u64 cached_value = [] {
+    const u64 turtlekv_query_page_loader_reset_every_log2 =
+        getenv_as<u64>("turtlekv_query_page_loader_reset_every_log2").value_or(7);
+
+    LOG(INFO) << BATT_INSPECT(turtlekv_query_page_loader_reset_every_log2);
+
+    const u64 n = (u64{1} << turtlekv_query_page_loader_reset_every_log2) - 1;
+    return n;
+  }();
+
+  return cached_value;
 }
 
 }  // namespace
@@ -532,13 +548,24 @@ StatusOr<ValueView> KVStore::get(const KeyView& key) noexcept /*override*/
   //
   ThreadContext& thread_context = this->per_thread_.get(this);
 
-  if ((++thread_context.query_count & 0x3ff) == 0) {
-    thread_context.query_page_loader.emplace(this->page_cache());
-  }
+  ++thread_context.query_count;
   thread_context.query_result_storage.emplace();
 
+  llfs::PageLoader& page_loader = [&]() -> llfs::PageLoader& {
+    const u64 n = query_page_loader_reset_every_n();
+    if (!n) {
+      return this->page_cache();
+    }
+
+    if ((thread_context.query_count & n) == 0) {
+      thread_context.query_page_loader.emplace(this->page_cache());
+    }
+
+    return *thread_context.query_page_loader;
+  }();
+
   KeyQuery query{
-      *thread_context.query_page_loader,
+      page_loader,
       *thread_context.query_result_storage,
       this->tree_options_,
       key,
@@ -872,6 +899,33 @@ std::function<void(std::ostream&)> KVStore::debug_info() noexcept
 
     auto& query_page_loader = PinningPageLoader::metrics();
 
+    std::array<double, 32> page_reads_per_get;
+    page_reads_per_get.fill(0);
+
+    double total_get_count = kv_store.total_get_count();
+
+    for (usize i = 12; i < 28; ++i) {
+      page_reads_per_get[i] =
+          (double)llfs::PageDeviceMetrics::instance().read_count_per_page_size_log2[i] /
+          total_get_count;
+    }
+
+    double page_reads_per_get_4k = page_reads_per_get[12];
+    double page_reads_per_get_8k = page_reads_per_get[13];
+    double page_reads_per_get_16k = page_reads_per_get[14];
+    double page_reads_per_get_32k = page_reads_per_get[15];
+    double page_reads_per_get_64k = page_reads_per_get[16];
+    double page_reads_per_get_128k = page_reads_per_get[17];
+    double page_reads_per_get_256k = page_reads_per_get[18];
+    double page_reads_per_get_512k = page_reads_per_get[19];
+    double page_reads_per_get_1m = page_reads_per_get[20];
+    double page_reads_per_get_2m = page_reads_per_get[21];
+    double page_reads_per_get_4m = page_reads_per_get[22];
+    double page_reads_per_get_8m = page_reads_per_get[23];
+    double page_reads_per_get_16m = page_reads_per_get[24];
+    double page_reads_per_get_32m = page_reads_per_get[25];
+    double page_reads_per_get_64m = page_reads_per_get[26];
+
     out << "\n"
         << BATT_INSPECT(kv_store.mem_table_get_count) << "\n"                          //
         << BATT_INSPECT(kv_store.mem_table_get_latency) << "\n"                        //
@@ -973,6 +1027,22 @@ std::function<void(std::ostream&)> KVStore::debug_info() noexcept
         << BATT_INSPECT(cache_slot_pool.evict_byte_count) << "\n"                      //
         << BATT_INSPECT(cache_slot_pool.background_evict_count) << "\n"                //
         << BATT_INSPECT(cache_slot_pool.background_evict_byte_count) << "\n"           //
+        << "\n"                                                                        //
+        << BATT_INSPECT(page_reads_per_get_4k) << "\n"                                 //
+        << BATT_INSPECT(page_reads_per_get_8k) << "\n"                                 //
+        << BATT_INSPECT(page_reads_per_get_16k) << "\n"                                //
+        << BATT_INSPECT(page_reads_per_get_32k) << "\n"                                //
+        << BATT_INSPECT(page_reads_per_get_64k) << "\n"                                //
+        << BATT_INSPECT(page_reads_per_get_128k) << "\n"                               //
+        << BATT_INSPECT(page_reads_per_get_256k) << "\n"                               //
+        << BATT_INSPECT(page_reads_per_get_512k) << "\n"                               //
+        << BATT_INSPECT(page_reads_per_get_1m) << "\n"                                 //
+        << BATT_INSPECT(page_reads_per_get_2m) << "\n"                                 //
+        << BATT_INSPECT(page_reads_per_get_4m) << "\n"                                 //
+        << BATT_INSPECT(page_reads_per_get_8m) << "\n"                                 //
+        << BATT_INSPECT(page_reads_per_get_16m) << "\n"                                //
+        << BATT_INSPECT(page_reads_per_get_32m) << "\n"                                //
+        << BATT_INSPECT(page_reads_per_get_64m) << "\n"                                //
         << "\n"                                                                        //
         << dump_memory_stats() << "\n"                                                 //
         ;

@@ -48,33 +48,26 @@ class FakePageLoader : public llfs::BasicPageLoader<FakePinnedPage>
   }
 
   StatusOr<FakePinnedPage> try_pin_cached_page(llfs::PageId page_id,
-                                               const Optional<llfs::PageLayoutId>& required_layout,
-                                               llfs::PinPageToJob pin_page_to_job) override
+                                               const llfs::PageLoadOptions& options) override
   {
-    return this->get_page_with_layout_in_job(page_id,
-                                             required_layout,
-                                             pin_page_to_job,
-                                             llfs::OkIfNotFound{true});
+    return this->load_page(page_id, options.clone().ok_if_not_found(true));
   }
 
-  StatusOr<FakePinnedPage> get_page_with_layout_in_job(
-      llfs::PageId page_id,
-      const Optional<llfs::PageLayoutId>& required_layout,
-      llfs::PinPageToJob pin_page_to_job [[maybe_unused]],
-      llfs::OkIfNotFound ok_if_not_found [[maybe_unused]]) override
+  StatusOr<FakePinnedPage> load_page(llfs::PageId page_id,
+                                     const llfs::PageLoadOptions& options) override
   {
     std::shared_ptr<llfs::PageBuffer>& page_buffer = this->pages_[page_id.int_value()];
 
     if (!page_buffer) {
       page_buffer = llfs::PageBuffer::allocate(this->page_size_, page_id);
-      if (required_layout) {
-        llfs::mutable_page_header(page_buffer.get())->layout_id = *required_layout;
+      if (options.required_layout()) {
+        llfs::mutable_page_header(page_buffer.get())->layout_id = *options.required_layout();
       }
     }
 
-    if (required_layout) {
+    if (options.required_layout()) {
       auto existing_layout_id = llfs::get_page_header(*page_buffer).layout_id;
-      if (existing_layout_id != *required_layout) {
+      if (existing_layout_id != *options.required_layout()) {
         return {batt::StatusCode::kFailedPrecondition};
       }
     }

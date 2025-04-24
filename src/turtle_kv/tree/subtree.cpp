@@ -96,11 +96,14 @@ Status Subtree::apply_batch_update(const TreeOptions& tree_options,
 
         llfs::PageLayoutId expected_layout = Subtree::expected_layout_for_height(parent_height - 1);
 
-        StatusOr<llfs::PinnedPage> status_or_pinned_page =
-            page_id_slot.load_through(update.page_loader,
-                                      expected_layout,
-                                      llfs::PinPageToJob::kDefault,
-                                      llfs::OkIfNotFound{false});
+        StatusOr<llfs::PinnedPage> status_or_pinned_page = page_id_slot.load_through(
+            update.page_loader,
+            llfs::PageLoadOptions{
+                expected_layout,
+                llfs::PinPageToJob::kDefault,
+                llfs::OkIfNotFound{false},
+                llfs::LruPriority{(parent_height > 2) ? kNodeLruPriority : kLeafLruPriority},
+            });
 
         BATT_REQUIRE_OK(status_or_pinned_page) << BATT_INSPECT(parent_height);
 
@@ -349,10 +352,6 @@ StatusOr<ValueView> Subtree::find_key(ParentNodeHeight parent_height, KeyQuery& 
   return batt::case_of(
       this->impl,
       [&](const llfs::PageIdSlot& page_id_slot) -> StatusOr<ValueView> {
-        if (query.reject_page(page_id_slot.page_id)) {
-          return {batt::StatusCode::kNotFound};
-        }
-
         if (parent_height != 2) {
           llfs::PinnedPage pinned_node_page;
           return visit_node_page(*query.page_loader,

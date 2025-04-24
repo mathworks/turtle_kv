@@ -93,15 +93,23 @@ StatusOr<ValueView> find_key_in_leaf(llfs::PageId leaf_page_id,
       query,
       item_index_out,
       [](const llfs::PageId& leaf_page_id, KeyQuery& query) {
-        return query.page_loader->try_pin_cached_page(leaf_page_id,
-                                                      LeafPageView::page_layout_id(),
-                                                      llfs::PinPageToJob::kDefault);
+        return query.page_loader->try_pin_cached_page(  //
+            leaf_page_id,
+            llfs::PageLoadOptions{
+                LeafPageView::page_layout_id(),
+                llfs::PinPageToJob::kDefault,
+                llfs::LruPriority{kLeafLruPriority},
+            });
       },
       [](const llfs::PageId& leaf_page_id, KeyQuery& query) {
-        return query.page_loader->get_page_with_layout_in_job(leaf_page_id,
-                                                              LeafPageView::page_layout_id(),
-                                                              llfs::PinPageToJob::kDefault,
-                                                              llfs::OkIfNotFound{false});
+        return query.page_loader->load_page(  //
+            leaf_page_id,
+            llfs::PageLoadOptions{
+                LeafPageView::page_layout_id(),
+                llfs::PinPageToJob::kDefault,
+                llfs::OkIfNotFound{false},
+                llfs::LruPriority{kLeafLruPriority},
+            });
       });
 }
 
@@ -116,15 +124,23 @@ StatusOr<ValueView> find_key_in_leaf(const llfs::PageIdSlot& leaf_page_id_slot,
       query,
       item_index_out,
       [](const llfs::PageIdSlot& leaf_page_id_slot, KeyQuery& query) {
-        return leaf_page_id_slot.try_pin_through(*query.page_loader,
-                                                 LeafPageView::page_layout_id(),
-                                                 llfs::PinPageToJob::kDefault);
+        return leaf_page_id_slot.try_pin_through(  //
+            *query.page_loader,
+            llfs::PageLoadOptions{
+                LeafPageView::page_layout_id(),
+                llfs::PinPageToJob::kDefault,
+                llfs::LruPriority{kLeafLruPriority},
+            });
       },
       [](const llfs::PageIdSlot& leaf_page_id_slot, KeyQuery& query) {
-        return leaf_page_id_slot.load_through(*query.page_loader,
-                                              LeafPageView::page_layout_id(),
-                                              llfs::PinPageToJob::kDefault,
-                                              llfs::OkIfNotFound{false});
+        return leaf_page_id_slot.load_through(  //
+            *query.page_loader,
+            llfs::PageLoadOptions{
+                LeafPageView::page_layout_id(),
+                llfs::PinPageToJob::kDefault,
+                llfs::OkIfNotFound{false},
+                llfs::LruPriority{kLeafLruPriority},
+            });
       });
 }
 
@@ -198,9 +214,12 @@ StatusOr<ValueView> find_key_in_leaf_using_sharded_views(llfs::PageId leaf_page_
   const llfs::PageSize head_shard_size = query.tree_options->trie_index_sharded_view_size();
 
   PageSliceStorage head_storage;
-  BATT_ASSIGN_OK_RESULT(
-      ConstBuffer head_buffer,
-      slice_reader.read_slice(head_shard_size, Interval<usize>{0, head_shard_size}, head_storage));
+  BATT_ASSIGN_OK_RESULT(ConstBuffer head_buffer,
+                        slice_reader.read_slice(head_shard_size,
+                                                Interval<usize>{0, head_shard_size},
+                                                head_storage,
+                                                llfs::PinPageToJob::kDefault,
+                                                llfs::LruPriority{kTrieIndexLruPriority}));
 
   const void* page_start = head_buffer.data();
   const void* payload_start = advance_pointer(page_start, sizeof(llfs::PackedPageHeader));
@@ -241,7 +260,10 @@ StatusOr<ValueView> find_key_in_leaf_using_sharded_views(llfs::PageId leaf_page_
   //
   PageSliceStorage items_storage;
   BATT_ASSIGN_OK_RESULT(ConstBuffer items_buffer,
-                        slice_reader.read_slice(items_slice, items_storage));
+                        slice_reader.read_slice(items_slice,
+                                                items_storage,
+                                                llfs::PinPageToJob::kDefault,
+                                                llfs::LruPriority{kLeafItemsShardLruPriority}));
 
   const auto items_begin = (const PackedKeyValue*)items_buffer.data();
   const auto items_end = items_begin + search_range.size();
@@ -256,7 +278,10 @@ StatusOr<ValueView> find_key_in_leaf_using_sharded_views(llfs::PageId leaf_page_
 
   PageSliceStorage key_data_storage;
   BATT_ASSIGN_OK_RESULT(ConstBuffer key_data_buffer,
-                        slice_reader.read_slice(key_data_slice, key_data_storage));
+                        slice_reader.read_slice(key_data_slice,
+                                                key_data_storage,
+                                                llfs::PinPageToJob::kDefault,
+                                                llfs::LruPriority{kLeafKeyDataShardLruPriority}));
 
   // `items_begin + items_begin->key_offset` corresponds to the start of the key data buffer;
   // calculate their (signed) difference now that both shards are pinned.
@@ -319,7 +344,10 @@ StatusOr<ValueView> find_key_in_leaf_using_sharded_views(llfs::PageId leaf_page_
   // Success!  Pin the shard containing the value, unpack it, and return.
   //
   BATT_ASSIGN_OK_RESULT(ConstBuffer value_data_buffer,
-                        slice_reader.read_slice(value_data_slice, *query.page_slice_storage));
+                        slice_reader.read_slice(value_data_slice,
+                                                *query.page_slice_storage,
+                                                llfs::PinPageToJob::kDefault,
+                                                llfs::LruPriority{kLeafValueDataShardLruPriority}));
 
   return unpack_value_view(value_data_buffer);
 }

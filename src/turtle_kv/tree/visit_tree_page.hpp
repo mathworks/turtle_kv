@@ -33,9 +33,11 @@ StatusOr<R> visit_tree_page(llfs::PageLoader& page_loader,
   if (!pinned_page_out || pinned_page_out.page_id() != page_id_slot.page_id) {
     BATT_ASSIGN_OK_RESULT(pinned_page_out,
                           page_id_slot.load_through(page_loader,
-                                                    /*required_layout=*/None,
-                                                    llfs::PinPageToJob::kDefault,
-                                                    llfs::OkIfNotFound{false}));
+                                                    llfs::PageLoadOptions{
+                                                        llfs::PinPageToJob::kDefault,
+                                                        llfs::OkIfNotFound{false},
+                                                        llfs::LruPriority{kNodeLruPriority},
+                                                    }));
   }
   const auto& page_header =
       *static_cast<const llfs::PackedPageHeader*>(pinned_page_out.const_buffer().data());
@@ -104,9 +106,12 @@ StatusOr<R> visit_leaf_page(llfs::PageLoader& page_loader,
   if (!pinned_page_out || pinned_page_out.page_id() != page_id_slot.page_id) {
     BATT_ASSIGN_OK_RESULT(pinned_page_out,
                           page_id_slot.load_through(page_loader,
-                                                    LeafPageView::page_layout_id(),
-                                                    llfs::PinPageToJob::kDefault,
-                                                    llfs::OkIfNotFound{false}));
+                                                    llfs::PageLoadOptions{
+                                                        LeafPageView::page_layout_id(),
+                                                        llfs::PinPageToJob::kDefault,
+                                                        llfs::OkIfNotFound{false},
+                                                        llfs::LruPriority{kLeafLruPriority},
+                                                    }));
   }
   return BATT_FORWARD(visitor_fn)(PackedLeafPage::view_of(pinned_page_out));
 }
@@ -138,9 +143,12 @@ StatusOr<R> visit_node_page(llfs::PageLoader& page_loader,
   if (!pinned_page_out || pinned_page_out.page_id() != page_id_slot.page_id) {
     BATT_ASSIGN_OK_RESULT(pinned_page_out,
                           page_id_slot.load_through(page_loader,
-                                                    NodePageView::page_layout_id(),
-                                                    llfs::PinPageToJob::kDefault,
-                                                    llfs::OkIfNotFound{false}));
+                                                    llfs::PageLoadOptions{
+                                                        NodePageView::page_layout_id(),
+                                                        llfs::PinPageToJob::kDefault,
+                                                        llfs::OkIfNotFound{false},
+                                                        llfs::LruPriority{kNodeLruPriority},
+                                                    }));
   }
   return BATT_FORWARD(visitor_fn)(PackedNodePage::view_of(pinned_page_out));
 }
