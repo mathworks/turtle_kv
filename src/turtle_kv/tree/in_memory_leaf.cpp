@@ -115,7 +115,7 @@ auto InMemoryLeaf::make_split_plan() const -> StatusOr<SplitPlan>
         return {batt::StatusCode::kOutOfRange};
       }
       if (direction == 1) {
-        LOG(ERROR) << BATT_INSPECT(plan);
+        LOG(ERROR) << "Failed to create a leaf split plan:" << BATT_INSPECT(plan);
         return {batt::StatusCode::kInternal};
       }
       direction = -1;
@@ -128,7 +128,7 @@ auto InMemoryLeaf::make_split_plan() const -> StatusOr<SplitPlan>
         return {batt::StatusCode::kOutOfRange};
       }
       if (direction == -1) {
-        LOG(ERROR) << BATT_INSPECT(plan);
+        LOG(ERROR) << "Failed to create a leaf split plan:" << BATT_INSPECT(plan);
         return {batt::StatusCode::kInternal};
       }
       direction = 1;

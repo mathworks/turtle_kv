@@ -15,6 +15,7 @@ BATT_STRONG_TYPEDEF(usize, TotalSlotsSize);
 BATT_STRONG_TYPEDEF(bool, RemoveExisting);
 BATT_STRONG_TYPEDEF(i64, BlockSize);
 BATT_STRONG_TYPEDEF(i64, BlockCount);
+BATT_STRONG_TYPEDEF(bool, IsSizeTiered);
 
 using llfs::FileOffset;
 

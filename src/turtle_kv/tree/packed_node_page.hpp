@@ -14,6 +14,8 @@
 #include <turtle_kv/import/seq.hpp>
 #include <turtle_kv/import/slice.hpp>
 
+#include <turtle_kv/api_types.hpp>
+
 #include <llfs/packed_page_id.hpp>
 #include <llfs/packed_pointer.hpp>
 #include <llfs/page_cache.hpp>
@@ -43,6 +45,9 @@ struct PackedNodePage {
   static constexpr usize kMaxLevels = batt::log2_ceil(kMaxPivots);
   static constexpr usize kPivotKeysSize =
       kMaxPivots + 1 /*max_key*/ + 1 /*common_prefix*/ + 1 /*final_offset*/;
+
+  static constexpr u8 kFlagSizeTiered = 0x80;
+  static constexpr u8 kPivotCountMask = 0x3f;
 
   using Key = PackedNodePageKey;
   using FlushedItemUpperBoundPointer = llfs::PackedPointer<little_u32, little_u16>;
@@ -149,7 +154,7 @@ struct PackedNodePage {
     struct SegmentedLevel {
       using Segment = UpdateBuffer::Segment;
 
-      const UpdateBuffer* update_buffer_;
+      const PackedNodePage* packed_node_;
       usize level_i_;
       Slice<const Segment> segments_slice;
 
@@ -184,21 +189,6 @@ struct PackedNodePage {
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-    SegmentedLevel get_level(usize level_i) const
-    {
-      BATT_CHECK_LT(level_i, kMaxLevels);
-
-      const usize level_begin_i = this->level_start[level_i];
-      const usize level_end_i = this->level_start[level_i + 1];
-
-      return SegmentedLevel{
-          .update_buffer_ = this,
-          .level_i_ = level_i,
-          .segments_slice = as_const_slice(std::addressof(this->segments[level_begin_i]),
-                                           std::addressof(this->segments[level_end_i])),
-      };
-    }
-
     usize segment_count() const
     {
       return this->level_start.back();
@@ -218,22 +208,6 @@ struct PackedNodePage {
     {
       return as_const_slice(this->segments_begin(), this->segments_end());
     }
-
-    Slice<const little_u32> get_flushed_item_upper_bounds(usize level_i, usize segment_i) const
-    {
-      BATT_CHECK_LT(level_i, kMaxLevels);
-
-      const usize i = this->level_start[level_i] + segment_i;
-      BATT_CHECK_LT(i, this->level_start[level_i + 1]);
-
-      const Segment& segment = this->segments[i];
-      const usize flushed_pivots_count = bit_count(segment.flushed_pivots);
-
-      const little_u32* const flushed_items_begin = this->flushed_item_upper_bound[i].get();
-      const little_u32* const flushed_items_end = flushed_items_begin + flushed_pivots_count;
-
-      return as_const_slice(flushed_items_begin, flushed_items_end);
-    }
   };
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -241,7 +215,7 @@ struct PackedNodePage {
   // TODO [tastolfi 2025-03-16] shrink pad0_ / optimize&compress layout
 
   little_u8 height;                                     //          +1 -> 1
-  little_u8 pivot_count;                                //          +1 -> 2
+  little_u8 pivot_count_and_flags;                      //          +1 -> 2
   std::array<Key, kPivotKeysSize> pivot_keys_;          // +(2*67=134) -> 136 (=4*34)
   std::array<little_u32, kMaxPivots> pending_bytes;     // +(4*64=256) -> 392 (=8*49)
   std::array<llfs::PackedPageId, kMaxPivots> children;  // +(8*64=512) -> 904 (=8/113)
@@ -265,12 +239,22 @@ struct PackedNodePage {
     BATT_ASSERT_GE(buffer.size(), sizeof(PackedNodePage));
 
     const PackedNodePage& packed_node_page = *static_cast<const PackedNodePage*>(buffer.data());
-    BATT_ASSERT_LE(packed_node_page.pivot_count, 64);
+    BATT_ASSERT_LE(packed_node_page.pivot_count(), 64);
 
     return packed_node_page;
   }
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  u8 pivot_count() const
+  {
+    return this->pivot_count_and_flags & kPivotCountMask;
+  }
+
+  IsSizeTiered is_size_tiered() const
+  {
+    return IsSizeTiered{(this->pivot_count_and_flags & kFlagSizeTiered) == kFlagSizeTiered};
+  }
 
   const llfs::PackedPageId* children_begin() const
   {
@@ -279,7 +263,7 @@ struct PackedNodePage {
 
   const llfs::PackedPageId* children_end() const
   {
-    return this->children_begin() + this->pivot_count;
+    return this->children_begin() + this->pivot_count();
   }
 
   Slice<const llfs::PackedPageId> children_slice() const
@@ -298,7 +282,7 @@ struct PackedNodePage {
 
   usize index_of_key_upper_bound() const
   {
-    return this->pivot_count;
+    return this->pivot_count();
   }
 
   usize index_of_min_key() const
@@ -308,24 +292,24 @@ struct PackedNodePage {
 
   usize index_of_max_key() const
   {
-    return this->pivot_count + 1;
+    return this->pivot_count() + 1;
   }
 
   usize index_of_common_key_prefix() const
   {
-    return this->pivot_count + 2;
+    return this->pivot_count() + 2;
   }
 
   usize index_of_final_key_end() const
   {
-    return this->pivot_count + 3;
+    return this->pivot_count() + 3;
   }
 
   //----- --- -- -  -  -   -
 
   usize pivot_keys_size() const
   {
-    return this->pivot_count + 1;
+    return this->pivot_count() + 1;
   }
 
   KeyIterator pivot_keys_begin() const
@@ -373,6 +357,10 @@ struct PackedNodePage {
 
   usize get_level_count() const
   {
+    if (this->is_size_tiered()) {
+      return this->update_buffer.segment_count();
+    }
+
     // TODO [tastolfi 2025-03-22] optimize using log2_ceil(pivot_count) here?
     //
     return kMaxLevels;
@@ -381,6 +369,64 @@ struct PackedNodePage {
   StatusOr<ValueView> find_key(KeyQuery& query) const;
 
   StatusOr<ValueView> find_key_in_level(usize level_i, KeyQuery& query, i32 key_pivot_i) const;
+
+  //----- --- -- -  -  -   -
+
+  UpdateBuffer::SegmentedLevel get_level(usize level_i) const
+  {
+    BATT_CHECK(!this->is_size_tiered());
+    BATT_CHECK_LT(level_i, kMaxLevels);
+
+    const usize level_begin_i = this->update_buffer.level_start[level_i];
+    const usize level_end_i = this->update_buffer.level_start[level_i + 1];
+
+    return UpdateBuffer::SegmentedLevel{
+        .packed_node_ = this,
+        .level_i_ = level_i,
+        .segments_slice =
+            as_const_slice(std::addressof(this->update_buffer.segments[level_begin_i]),
+                           std::addressof(this->update_buffer.segments[level_end_i])),
+    };
+  }
+
+  UpdateBuffer::SegmentedLevel get_tier(usize tier_i) const
+  {
+    BATT_CHECK(this->is_size_tiered());
+    BATT_CHECK_LT(tier_i, this->update_buffer.segment_count());
+
+    return UpdateBuffer::SegmentedLevel{
+        .packed_node_ = this,
+        .level_i_ = tier_i,
+        .segments_slice = as_const_slice(std::addressof(this->update_buffer.segments[tier_i]),
+                                         std::addressof(this->update_buffer.segments[tier_i + 1])),
+    };
+  }
+
+  Slice<const little_u32> get_flushed_item_upper_bounds(usize level_i, usize segment_i) const
+  {
+    const usize i = [&]() -> usize {
+      if (this->is_size_tiered()) {
+        BATT_CHECK_LT(level_i, this->update_buffer.segment_count());
+        BATT_CHECK_EQ(segment_i, 0);
+        return level_i;
+      }
+      BATT_CHECK_LT(level_i, kMaxLevels);
+      const usize i = this->update_buffer.level_start[level_i] + segment_i;
+      BATT_CHECK_LT(i, this->update_buffer.level_start[level_i + 1]);
+      return i;
+    }();
+
+    const UpdateBuffer::Segment& segment = this->update_buffer.segments[i];
+    const usize flushed_pivots_count = bit_count(segment.flushed_pivots);
+
+    const little_u32* const flushed_items_begin =  //
+        this->update_buffer.flushed_item_upper_bound[i].get();
+
+    const little_u32* const flushed_items_end =  //
+        flushed_items_begin + flushed_pivots_count;
+
+    return as_const_slice(flushed_items_begin, flushed_items_end);
+  }
 
   //----- --- -- -  -  -   -
 
@@ -409,7 +455,7 @@ BATT_STATIC_ASSERT_EQ(sizeof(PackedNodePage::UpdateBuffer), 1648);
 // Verify the packed structure of PackedNodePage.
 //
 TURTLE_KV_ASSERT_PLACEMENT(PackedNodePage, height, 0, 1, 1);
-TURTLE_KV_ASSERT_PLACEMENT(PackedNodePage, pivot_count, 1, 2, 1);
+TURTLE_KV_ASSERT_PLACEMENT(PackedNodePage, pivot_count_and_flags, 1, 2, 1);
 TURTLE_KV_ASSERT_PLACEMENT(PackedNodePage, pivot_keys_, 2, 136, 2);
 TURTLE_KV_ASSERT_PLACEMENT(PackedNodePage, pending_bytes, 136, 392, 4);
 TURTLE_KV_ASSERT_PLACEMENT(PackedNodePage, children, 392, 904, 8);

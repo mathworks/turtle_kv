@@ -53,7 +53,9 @@ PackedNodePage* build_node_page(const MutableBuffer& buffer, const InMemoryNode&
       std::memcpy(copy_dst, src_key.data(), n);
       variable_buffer += n;
     }
-    dst_key.pointer.offset = byte_distance(std::addressof(dst_key.pointer), copy_dst);
+    dst_key.pointer.offset =
+        BATT_CHECKED_CAST(u16, byte_distance(std::addressof(dst_key.pointer), copy_dst));
+
     return (void*)dst_key.pointer.get() == copy_dst;
   };
 
@@ -73,15 +75,21 @@ PackedNodePage* build_node_page(const MutableBuffer& buffer, const InMemoryNode&
 
   const usize pivot_count = src_node.pivot_count();
 
+  BATT_CHECK_LE(pivot_count, PackedNodePage::kMaxPivots);
   BATT_CHECK_EQ(src_node.pivot_keys_.size(), pivot_count + 1);
   BATT_CHECK_EQ(src_node.children.size(), pivot_count);
   BATT_CHECK_EQ(src_node.pending_bytes.size(), pivot_count);
 
-  packed_node->height = src_node.height;
-  packed_node->pivot_count = BATT_CHECKED_CAST(u8, pivot_count);
+  packed_node->height = BATT_CHECKED_CAST(u8, src_node.height);
+  packed_node->pivot_count_and_flags =
+      BATT_CHECKED_CAST(u8, pivot_count & PackedNodePage::kPivotCountMask);
+
+  if (src_node.is_size_tiered()) {
+    packed_node->pivot_count_and_flags |= PackedNodePage::kFlagSizeTiered;
+  }
 
   for (usize pivot_i = 0; pivot_i < pivot_count; ++pivot_i) {
-    packed_node->pending_bytes[pivot_i] = src_node.pending_bytes[pivot_i];
+    packed_node->pending_bytes[pivot_i] = BATT_CHECKED_CAST(u32, src_node.pending_bytes[pivot_i]);
     packed_node->children[pivot_i] = src_node.children[pivot_i].packed_page_id_or_panic();
   }
 
@@ -109,7 +117,9 @@ PackedNodePage* build_node_page(const MutableBuffer& buffer, const InMemoryNode&
     usize dst_segment_i = 0;
     usize level_i = 0;
     for (; level_i < src_node.update_buffer.levels.size(); ++level_i) {
-      packed_node->update_buffer.level_start[level_i] = BATT_CHECKED_CAST(u8, dst_segment_i);
+      if (!src_node.is_size_tiered()) {
+        packed_node->update_buffer.level_start[level_i] = BATT_CHECKED_CAST(u8, dst_segment_i);
+      }
 
       const InMemoryNode::UpdateBuffer::Level& src_level = src_node.update_buffer.levels[level_i];
 
@@ -145,7 +155,8 @@ PackedNodePage* build_node_page(const MutableBuffer& buffer, const InMemoryNode&
           auto* p_item_count =
               std::addressof(packed_node->update_buffer.flushed_item_upper_bound[dst_segment_i]);
 
-          p_item_count->offset = byte_distance(p_item_count, variable_buffer.data());
+          p_item_count->offset =
+              BATT_CHECKED_CAST(u16, byte_distance(p_item_count, variable_buffer.data()));
         }
 
         for (u32 src_value : src_segment.flushed_item_upper_bound_) {
@@ -158,6 +169,9 @@ PackedNodePage* build_node_page(const MutableBuffer& buffer, const InMemoryNode&
 
     // The remainder of the `level_start` array should point to the end of the valid segments range.
     //
+    if (src_node.is_size_tiered()) {
+      level_i = 0;
+    }
     for (; level_i < packed_node->update_buffer.level_start.size(); ++level_i) {
       packed_node->update_buffer.level_start[level_i] = BATT_CHECKED_CAST(u8, dst_segment_i);
     }
@@ -167,37 +181,6 @@ PackedNodePage* build_node_page(const MutableBuffer& buffer, const InMemoryNode&
   page_header->unused_end = buffer.size();
 
   BATT_CHECK_LE(page_header->unused_begin, page_header->unused_end);
-
-  if (/*paraoid_checks==*/false) {
-    for (usize level_i = 0; level_i < src_node.get_level_count(); ++level_i) {
-      batt::case_of(
-          src_node.update_buffer.levels[level_i],
-          [&](const EmptyLevel&) {
-            const auto dst_level = packed_node->update_buffer.get_level(level_i);
-            BATT_CHECK(dst_level.empty());
-          },
-          [&](const SegmentedLevel& src_level) {
-            const auto dst_level = packed_node->update_buffer.get_level(level_i);
-            BATT_CHECK_EQ(src_level.segment_count(), dst_level.segment_count());
-
-            for (usize segment_i = 0; segment_i < src_level.segment_count(); ++segment_i) {
-              const auto& src_segment = src_level.get_segment(segment_i);
-              const auto& dst_segment = dst_level.get_segment(segment_i);
-
-              BATT_CHECK_EQ(src_segment.get_active_pivots(), dst_segment.get_active_pivots());
-              BATT_CHECK_EQ(src_segment.get_flushed_pivots(), dst_segment.get_flushed_pivots());
-
-              for (i32 pivot_i = 0; pivot_i < (i32)pivot_count; ++pivot_i) {
-                BATT_CHECK_EQ(src_segment.get_flushed_item_upper_bound(src_level, pivot_i),
-                              dst_segment.get_flushed_item_upper_bound(dst_level, pivot_i));
-              }
-            }
-          },
-          [&](const auto& merged) {
-            BATT_PANIC() << "Bad level case! " << batt::name_of<std::decay_t<decltype(merged)>>();
-          });
-    }
-  }
 
   return packed_node;
 }
@@ -224,7 +207,8 @@ StatusOr<ValueView> PackedNodePage::find_key_in_level(usize level_i,
                                                       KeyQuery& query,
                                                       i32 key_pivot_i) const
 {
-  UpdateBuffer::SegmentedLevel level = this->update_buffer.get_level(level_i);
+  UpdateBuffer::SegmentedLevel level =
+      this->is_size_tiered() ? this->get_tier(level_i) : this->get_level(level_i);
 
   return in_segmented_level(*this, level, *query.page_loader).find_key(key_pivot_i, query);
 }
@@ -254,10 +238,9 @@ usize PackedNodePage::UpdateBuffer::Segment::get_flushed_item_upper_bound(
     return 0;
   }
 
-  const UpdateBuffer& update_buffer = *level.update_buffer_;
   const usize segment_i = std::distance(level.segments_slice.begin(), this);
   const Slice<const little_u32> flushed_item_upper_bounds =
-      update_buffer.get_flushed_item_upper_bounds(level.level_i_, segment_i);
+      level.packed_node_->get_flushed_item_upper_bounds(level.level_i_, segment_i);
 
   const usize index = bit_rank(this->flushed_pivots, pivot_i);
 
@@ -271,9 +254,10 @@ usize PackedNodePage::UpdateBuffer::Segment::get_flushed_item_upper_bound(
 std::function<void(std::ostream&)> PackedNodePage::dump() const
 {
   return [this](std::ostream& out) {
-    out << "PackedNodePage:" << std::endl                                    //
-        << "  height: " << (i32)this->height.value() << std::endl            //
-        << "  pivot_count: " << (i32)this->pivot_count.value() << std::endl  //
+    out << "PackedNodePage:" << std::endl                              //
+        << "  height: " << (i32)this->height.value() << std::endl      //
+        << "  pivot_count: " << (i32)this->pivot_count() << std::endl  //
+        << "  size_tiered: " << this->is_size_tiered() << std::endl    //
         << "  pivot_keys:" << std::endl;
 
     usize i = 0;

@@ -12,6 +12,8 @@
 #include <turtle_kv/import/math.hpp>
 #include <turtle_kv/import/optional.hpp>
 
+#include <turtle_kv/api_types.hpp>
+
 #include <llfs/config.hpp>
 #include <llfs/packed_bloom_filter_page.hpp>
 #include <llfs/packed_bytes.hpp>
@@ -329,6 +331,19 @@ class TreeOptions
     return llfs::MaxRefsPerPage{this->leaf_size() / kPackedPageRefSizeEstimate};
   }
 
+  //----- --- -- -  -  -   -
+
+  IsSizeTiered is_size_tiered() const
+  {
+    return this->size_tiered_;
+  }
+
+  Self& set_size_tiered(bool b)
+  {
+    this->size_tiered_ = IsSizeTiered{b};
+    return *this;
+  }
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
   TreeOptions() = default;
@@ -372,6 +387,8 @@ class TreeOptions
 
   double min_flush_factor_ = 1.0;
   double max_flush_factor_ = 1.0;
+
+  IsSizeTiered size_tiered_{false};
 };
 
 }  // namespace turtle_kv

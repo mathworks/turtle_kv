@@ -802,6 +802,8 @@ void MergeCompactor::ResultSet<kDecayToItems>::drop_key_range_half_open(
 template <bool kDecayToItems>
 void MergeCompactor::ResultSet<kDecayToItems>::drop_after_n(usize n_to_take)
 {
+  this->invalidate_packed_size();
+
   const isize new_end_offset = n_to_take;
 
   auto next_chunk = this->chunks_.begin();
@@ -823,6 +825,8 @@ void MergeCompactor::ResultSet<kDecayToItems>::drop_after_n(usize n_to_take)
 template <bool kDecayToItems>
 void MergeCompactor::ResultSet<kDecayToItems>::drop_before_n(usize n_to_drop)
 {
+  this->invalidate_packed_size();
+
   auto first_chunk = this->chunks_.begin();
   auto next_chunk = first_chunk;
   auto last_chunk = std::prev(this->chunks_.end());
@@ -942,6 +946,7 @@ KeyView MergeCompactor::ResultSet<kDecayToItems>::get_max_key() const
 template <bool kDecayToItems>
 bool MergeCompactor::ResultSet<kDecayToItems>::empty() const
 {
+  BATT_CHECK_EQ((this->chunks_.size() < 2), (this->size() == 0));
   return this->chunks_.size() < 2;
 }
 

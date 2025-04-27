@@ -319,6 +319,7 @@ struct InMemoryNode {
 
   llfs::PinnedPage pinned_node_page_;
   TreeOptions tree_options;
+  const IsSizeTiered size_tiered_;
   i32 height = 0;
   SmallVec<Subtree, 64> children;
   SmallVec<llfs::PinnedPage, 64> child_pages;
@@ -344,13 +345,20 @@ struct InMemoryNode {
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   explicit InMemoryNode(llfs::PinnedPage&& pinned_node_page,
-                        const TreeOptions& tree_options_arg) noexcept
+                        const TreeOptions& tree_options_arg,
+                        IsSizeTiered size_tiered) noexcept
       : pinned_node_page_{std::move(pinned_node_page)}
       , tree_options{tree_options_arg}
+      , size_tiered_{size_tiered}
   {
   }
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  IsSizeTiered is_size_tiered() const
+  {
+    return this->size_tiered_;
+  }
 
   Slice<const KeyView> get_pivot_keys() const
   {
@@ -409,6 +417,8 @@ struct InMemoryNode {
 
   Status flush_if_necessary(BatchUpdate& update, bool force_flush = false);
 
+  bool has_too_many_tiers() const;
+
   Status flush_to_pivot(BatchUpdate& update, i32 pivot_i);
 
   MaxPendingBytes find_max_pending() const;
@@ -423,6 +433,10 @@ struct InMemoryNode {
   Status set_pivot_items_flushed(llfs::PageLoader& page_loader,
                                  usize pivot_i,
                                  const CInterval<KeyView>& flush_key_crange);
+
+  Status set_pivot_completely_flushed(usize pivot_i, const Interval<KeyView>& pivot_key_range);
+
+  void squash_empty_levels();
 
   const KeyView& get_pivot_key(usize i) const
   {

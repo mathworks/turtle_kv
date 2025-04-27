@@ -38,16 +38,18 @@ using PackedSegment = PackedUpdateBuffer::Segment;
     const TreeOptions& tree_options,
     const PackedNodePage& packed_node)
 {
-  auto node = std::make_unique<InMemoryNode>(std::move(pinned_node_page), tree_options);
+  auto node = std::make_unique<InMemoryNode>(std::move(pinned_node_page),
+                                             tree_options,
+                                             packed_node.is_size_tiered());
 
-  const usize pivot_count = packed_node.pivot_count;
+  const usize pivot_count = packed_node.pivot_count();
 
   node->tree_options = tree_options;
   node->height = packed_node.height;
   node->children.resize(pivot_count);
   node->child_pages.resize(pivot_count);
-  node->pending_bytes.resize(packed_node.pivot_count);
-  node->pivot_keys_.resize(packed_node.pivot_count + 1);
+  node->pending_bytes.resize(pivot_count);
+  node->pivot_keys_.resize(pivot_count + 1);
   node->max_key_ = packed_node.max_key();
   node->common_key_prefix = packed_node.common_key_prefix();
 
@@ -62,11 +64,21 @@ using PackedSegment = PackedUpdateBuffer::Segment;
 
   // Unpack the update buffer.
   //
-  node->update_buffer.levels.resize(tree_options.max_buffer_levels());
+  if (packed_node.is_size_tiered()) {
+    node->update_buffer.levels.resize(packed_node.update_buffer.segment_count());
+  } else {
+    node->update_buffer.levels.resize(tree_options.max_buffer_levels());
+  }
   const usize in_memory_level_count = node->update_buffer.levels.size();
 
-  for (usize level_i = 0; level_i < PackedNodePage::kMaxLevels; ++level_i) {
-    const PackedLevel level = packed_node.update_buffer.get_level(level_i);
+  const usize packed_level_count = packed_node.is_size_tiered()
+                                       ? packed_node.update_buffer.segment_count()
+                                       : PackedNodePage::kMaxLevels;
+
+  for (usize level_i = 0; level_i < packed_level_count; ++level_i) {
+    const PackedLevel level = packed_node.is_size_tiered() ? packed_node.get_tier(level_i)
+                                                           : packed_node.get_level(level_i);
+
     const Slice<const PackedSegment> level_segments = level.segments_slice;
 
     if (level_segments.empty()) {
@@ -87,6 +99,10 @@ using PackedSegment = PackedUpdateBuffer::Segment;
       const usize segment_count = level_segments.size();
       segmented_level.segments.resize(segment_count);
 
+      if (packed_node.is_size_tiered()) {
+        BATT_CHECK_LE(segment_count, 1);
+      }
+
       for (usize segment_i = 0; segment_i < segment_count; ++segment_i) {
         const PackedNodePage::UpdateBuffer::Segment& packed_segment = level_segments[segment_i];
         Segment& segment = segmented_level.segments[segment_i];
@@ -96,7 +112,7 @@ using PackedSegment = PackedUpdateBuffer::Segment;
         segment.flushed_pivots = packed_segment.flushed_pivots;
 
         Slice<const little_u32> packed_flushed_item_upper_bounds =
-            packed_node.update_buffer.get_flushed_item_upper_bounds(level_i, segment_i);
+            packed_node.get_flushed_item_upper_bounds(level_i, segment_i);
 
         BATT_CHECK_EQ(packed_flushed_item_upper_bounds.size(),
                       bit_count(segment.get_flushed_pivots()));
@@ -123,7 +139,9 @@ using PackedSegment = PackedUpdateBuffer::Segment;
     const KeyView& key_upper_bound,
     IsRoot is_root)
 {
-  auto new_node = std::make_unique<InMemoryNode>(llfs::PinnedPage{}, tree_options);
+  auto new_node = std::make_unique<InMemoryNode>(llfs::PinnedPage{},
+                                                 tree_options,
+                                                 tree_options.is_size_tiered());
 
   BATT_ASSIGN_OK_RESULT(const i32 first_height, first_subtree.get_height(page_loader));
   BATT_ASSIGN_OK_RESULT(const i32 second_height, second_subtree.get_height(page_loader));
@@ -216,6 +234,15 @@ Status InMemoryNode::update_buffer_insert(BatchUpdate& update)
     Self::metrics().level_depth_stats.update(this->update_buffer.levels.size());
   });
 
+  if (this->is_size_tiered()) {
+    this->update_buffer.levels.insert(this->update_buffer.levels.begin(),
+                                      MergedLevel{
+                                          .result_set = update.result_set,
+                                          .segment_future_ids_ = {},
+                                      });
+    return OkStatus();
+  }
+
   // Base case 0: UpdateBuffer completely empty.
   //
   if (this->update_buffer.levels.empty()) {
@@ -303,6 +330,7 @@ Status InMemoryNode::update_buffer_insert(BatchUpdate& update)
 
     // Grow the levels vector if under the max depth.
     //
+    BATT_CHECK(!this->is_size_tiered());
     if (this->update_buffer.levels.size() < this->tree_options.max_buffer_levels()) {
       this->update_buffer.levels.emplace_back();
     }
@@ -323,11 +351,48 @@ Status InMemoryNode::flush_if_necessary(BatchUpdate& update, bool force_flush)
   //
   const MaxPendingBytes max_pending = this->find_max_pending();
 
-  if (!force_flush && max_pending.byte_count < this->tree_options.min_flush_size()) {
+  const bool flush_needed = force_flush ||                                                      //
+                            (max_pending.byte_count >= this->tree_options.min_flush_size()) ||  //
+                            this->has_too_many_tiers();
+
+  if (!flush_needed) {
     return OkStatus();
   }
 
-  return this->flush_to_pivot(update, max_pending.pivot_index);
+  BATT_REQUIRE_OK(this->flush_to_pivot(update, max_pending.pivot_index));
+
+  if (this->has_too_many_tiers()) {
+    return this->flush_if_necessary(update, true);
+  }
+
+  return OkStatus();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+bool InMemoryNode::has_too_many_tiers() const
+{
+  constexpr usize kMaxBytesPending = usize{1} << 30;
+
+  if (!this->is_size_tiered()) {
+    return false;
+  }
+
+  if (this->get_level_count() >= 63) {
+    return true;
+  }
+
+  if (this->get_level_count() < this->pivot_count()) {
+    return false;
+  }
+
+  for (usize n_bytes : this->pending_bytes) {
+    if (n_bytes > kMaxBytesPending) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -391,14 +456,25 @@ Status InMemoryNode::flush_to_pivot(BatchUpdate& update, i32 pivot_i)
   child_update.edit_size_totals = None;
 
   // Take the largest prefix of the merged edits as possible, without making the flushed batch too
-  // large.
+  // large.  However, stick to the single-leaf flush size when flushing directly to the bottom layer
+  // *or* if using lazy (size-tiered) compaction.
   //
-  const usize max_flush_size =
-      (this->height == 2) ? this->tree_options.flush_size() : this->tree_options.max_flush_size();
+  const usize max_flush_size = (this->height == 2 || this->is_size_tiered())
+                                   ? this->tree_options.flush_size()
+                                   : this->tree_options.max_flush_size();
 
   const usize byte_size_limit = max_flush_size - (this->tree_options.max_item_size() - 1);
 
   BatchUpdate::TrimResult trim_result = child_update.trim_back_down_to_size(byte_size_limit);
+
+  // If the child update batch is empty, then update our metadata and we are done.
+  //
+  if (child_update.result_set.empty()) {
+    BATT_REQUIRE_OK(this->set_pivot_completely_flushed(pivot_i, pivot_key_range));
+    BATT_CHECK_EQ(trim_result.n_bytes_trimmed, 0);
+    this->pending_bytes[pivot_i] = 0;
+    return OkStatus();
+  }
 
   // Calculate the flushed key range.
   //
@@ -416,6 +492,7 @@ Status InMemoryNode::flush_to_pivot(BatchUpdate& update, i32 pivot_i)
   // Update pending bytes for the flushed pivot; this is equal to the number of bytes we had to trim
   // from the end of the batch to make it fit under the limit.
   //
+  BATT_CHECK_LT(trim_result.n_bytes_trimmed, this->pending_bytes[pivot_i]);
   this->pending_bytes[pivot_i] = trim_result.n_bytes_trimmed;
 
   // Recursively apply batch update.
@@ -565,7 +642,76 @@ Status InMemoryNode::set_pivot_items_flushed(llfs::PageLoader& page_loader,
     }
   }
 
+  if (this->is_size_tiered()) {
+    this->squash_empty_levels();
+  }
+
   return segment_load_status;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Status InMemoryNode::set_pivot_completely_flushed(usize pivot_i,
+                                                  const Interval<KeyView>& pivot_key_range)
+{
+  for (Level& level : this->update_buffer.levels) {
+    bool is_now_empty = false;
+
+    batt::case_of(  //
+        level,      //
+        [](EmptyLevel&) {
+          // nothing to do
+        },
+        [&](MergedLevel& merged_level) {
+          merged_level.result_set.drop_key_range_half_open(pivot_key_range);
+
+          is_now_empty = merged_level.result_set.empty();
+        },
+        [&](SegmentedLevel& segmented_level) {
+          for (usize segment_i = 0; segment_i < segmented_level.segment_count(); ++segment_i) {
+            Segment& segment = segmented_level.get_segment(segment_i);
+
+            segment.set_flushed_item_upper_bound(pivot_i, 0);
+            segment.set_pivot_active(pivot_i, false);
+
+            if (segment.get_active_pivots() == 0) {
+              segmented_level.drop_segment(segment_i);
+            } else {
+              ++segment_i;
+            }
+          }
+          is_now_empty = segmented_level.empty();
+        });
+
+    if (is_now_empty) {
+      level = EmptyLevel{};
+    }
+  }
+
+  if (this->is_size_tiered()) {
+    this->squash_empty_levels();
+  }
+
+  return OkStatus();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void InMemoryNode::squash_empty_levels()
+{
+  BATT_CHECK(this->is_size_tiered());
+
+  const usize level_count = this->update_buffer.levels.size();
+  usize dst_i = 0;
+  for (usize src_i = 0; src_i < level_count; ++src_i) {
+    if (!batt::is_case<UpdateBuffer::EmptyLevel>(this->update_buffer.levels[src_i])) {
+      if (src_i > dst_i) {
+        this->update_buffer.levels[dst_i] = std::move(this->update_buffer.levels[src_i]);
+      }
+      ++dst_i;
+    }
+  }
+  this->update_buffer.levels.resize(dst_i);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -768,13 +914,15 @@ StatusOr<std::unique_ptr<InMemoryNode>> InMemoryNode::try_split(llfs::PageLoader
   usize split_pivot_i = (orig_pivot_count + 1) / 2;
 
   auto* node_lower_half = this;
-  auto node_upper_half =
-      std::make_unique<InMemoryNode>(batt::make_copy(this->pinned_node_page_), this->tree_options);
+  auto node_upper_half = std::make_unique<InMemoryNode>(batt::make_copy(this->pinned_node_page_),
+                                                        this->tree_options,
+                                                        this->is_size_tiered());
 
   for (;;) {
     // If we ever try the same split point a second time, fail.
     //
     if (get_bit(tried_already, split_pivot_i)) {
+      LOG(ERROR) << "Failed to split node";
       return {batt::StatusCode::kInternal};
     }
     tried_already = set_bit(tried_already, split_pivot_i, true);
