@@ -152,6 +152,11 @@ class KVStore : public Table
 
   void set_checkpoint_distance(usize chi) noexcept;
 
+  usize get_checkpoint_distance() const noexcept
+  {
+    return this->checkpoint_distance_.load();
+  }
+
   Status force_checkpoint();
 
   std::function<void(std::ostream&)> debug_info() noexcept;
@@ -160,6 +165,8 @@ class KVStore : public Table
   {
     return this->checkpoint_log_->cache();
   }
+
+  void reset_thread_context() noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:

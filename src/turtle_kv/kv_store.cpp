@@ -500,6 +500,17 @@ void KVStore::set_checkpoint_distance(usize chi) noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+void KVStore::reset_thread_context() noexcept
+{
+  ThreadContext& thread_context = this->per_thread_.get(this);
+
+  thread_context.query_page_loader.emplace(this->page_cache());
+  thread_context.query_result_storage.emplace();
+  thread_context.query_count = 0;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 StatusOr<ValueView> KVStore::get(const KeyView& key) noexcept /*override*/
 {
   absl::ReaderMutexLock checkpoint_lock{&this->base_checkpoint_mutex_};

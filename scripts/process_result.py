@@ -48,10 +48,11 @@ for log in logs:
         print(result.thruput_k_d)
         print(result.thruput_k_f)
 
-        combined = [(chi, tp_load) for chi, tp_load in zip(result.chi, result.thruput_k_load)]
+        combined = list(zip(result.chi, result.thruput_k_load, result.buffer_level_trim)
 
         for c in combined:
             print(c)
         
     except:
+        raise
         print(f"...incomplete/bad result; skipping")

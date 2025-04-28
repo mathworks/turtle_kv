@@ -16,7 +16,7 @@ struct KVStoreMetrics {
 
   FastCountMetric<u64> mem_table_get_count{0};
   LatencyMetric mem_table_get_latency;
-  std::array<FastCountMetric<u64>, 8> delta_log2_get_count;
+  std::array<FastCountMetric<u64>, 32> delta_log2_get_count;
   LatencyMetric delta_get_latency;
   FastCountMetric<u64> checkpoint_get_count{0};
   LatencyMetric checkpoint_get_latency;
