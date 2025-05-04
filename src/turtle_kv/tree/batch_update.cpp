@@ -7,22 +7,19 @@ using TrimResult = BatchUpdate::TrimResult;
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-BatchUpdate BatchUpdate::make_child_update() const
+void BatchUpdate::update_edit_size_totals()
 {
-  return BatchUpdate{
-      .worker_pool = this->worker_pool,
-      .page_loader = this->page_loader,
-      .cancel_token = this->cancel_token,
-      .result_set = MergeCompactor::ResultSet</*kDecayToItems=*/false>{},
-      .edit_size_totals = None,
-  };
+  this->edit_size_totals.emplace(this->context.compute_running_total(this->result_set));
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-void BatchUpdate::update_edit_size_totals()
+usize BatchUpdate::get_byte_size()
 {
-  this->edit_size_totals.emplace(compute_running_total(this->worker_pool, this->result_set));
+  if (!this->edit_size_totals) {
+    this->update_edit_size_totals();
+  }
+  return this->edit_size_totals->back() - this->edit_size_totals->front();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

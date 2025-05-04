@@ -39,6 +39,7 @@ template <bool kDecayToItems>
 using ResultSet = turtle_kv::MergeCompactor::ResultSet<kDecayToItems>;
 
 using turtle_kv::BatchUpdate;
+using turtle_kv::BatchUpdateContext;
 using turtle_kv::bit_count;
 using turtle_kv::DecayToItem;
 using turtle_kv::EditView;
@@ -217,8 +218,13 @@ TEST(InMemoryNodeTest, Subtree)
 {
   llfs::testing::ScenarioRunner runner;
 
-  // runner.n_threads(1);
-  runner.n_seeds(64);
+  u32 n_seeds = getenv_as<u32>("TURTLE_TREE_TEST_N_SEEDS").value_or(64);
+  usize n_threads = getenv_as<usize>("TURTLE_TREE_TEST_N_THREADS").value_or(0);
+
+  if (n_threads != 0) {
+    runner.n_threads(n_threads);
+  }
+  runner.n_seeds(n_seeds);
   runner.n_updates(0);
   runner.run(batt::StaticType<SubtreeBatchUpdateScenario>{});
 }
@@ -227,10 +233,19 @@ TEST(InMemoryNodeTest, Subtree)
 //
 void SubtreeBatchUpdateScenario::run()
 {
-  static std::atomic<int> id{1};
+  static const bool verbose_output = getenv_as<bool>("TURTLE_TREE_TEST_VERBOSE").value_or(false);
+  static std::atomic<int> id{verbose_output ? 0 : 1};
   thread_local int my_id = id.fetch_add(1);
 
+  BATT_DEBUG_INFO(BATT_INSPECT(this->seed));
+
+  std::default_random_engine rng{this->seed};
+
+  std::uniform_int_distribution<int> pick_bool{0, 1};
+
   const usize max_i = getenv_as<usize>("TURTLE_TREE_TEST_BATCH_COUNT").value_or(225);
+  const bool size_tiered =
+      getenv_as<bool>("TURTLE_TREE_TEST_SIZE_TIERED").value_or(pick_bool(rng) != 0);
   const usize chi = 4;
   const usize key_size = 24;
   const usize value_size = 100;
@@ -242,7 +257,8 @@ void SubtreeBatchUpdateScenario::run()
                                  .set_leaf_size(512 * kKiB)
                                  .set_node_size(4 * kKiB)
                                  .set_key_size_hint(24)
-                                 .set_value_size_hint(100);
+                                 .set_value_size_hint(100)
+                                 .set_size_tiered(size_tiered);
 
   const usize items_per_leaf = tree_options.flush_size() / packed_item_size;
 
@@ -261,10 +277,6 @@ void SubtreeBatchUpdateScenario::run()
   turtle_kv::OrderedMapTable<absl::btree_map<std::string_view, std::string_view>> expected_table;
 
   result_set_generator.set_key_size(24).set_value_size(100).set_size(items_per_leaf);
-
-  BATT_DEBUG_INFO(BATT_INSPECT(this->seed));
-
-  std::default_random_engine rng{this->seed};
 
   Subtree tree = Subtree::make_empty();
 
@@ -286,9 +298,12 @@ void SubtreeBatchUpdateScenario::run()
 
   for (usize i = 0; i < max_i; ++i) {
     BatchUpdate update{
-        .worker_pool = worker_pool,
-        .page_loader = *page_loader,
-        .cancel_token = batt::CancelToken{},
+        .context =
+            BatchUpdateContext{
+                .worker_pool = worker_pool,
+                .page_loader = *page_loader,
+                .cancel_token = batt::CancelToken{},
+            },
         .result_set = result_set_generator(DecayToItem<false>{}, rng, strings),
         .edit_size_totals = None,
     };

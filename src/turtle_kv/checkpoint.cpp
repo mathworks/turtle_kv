@@ -158,9 +158,12 @@ StatusOr<Checkpoint> Checkpoint::flush_batch(batt::WorkerPool& worker_pool,
                                              const batt::CancelToken& cancel_token) noexcept
 {
   BatchUpdate update{
-      .worker_pool = worker_pool,
-      .page_loader = job,
-      .cancel_token = cancel_token,
+      .context =
+          BatchUpdateContext{
+              .worker_pool = worker_pool,
+              .page_loader = job,
+              .cancel_token = cancel_token,
+          },
       .result_set = delta_batch->consume_result_set(),
       .edit_size_totals = None,
   };

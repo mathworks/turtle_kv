@@ -195,10 +195,15 @@ struct NodeAlgorithms {
                    LevelVariantT& lower_half_level,
                    LevelVariantT& upper_half_level)
   {
+    BATT_CHECK_NE(std::addressof(lower_half_level), std::addressof(upper_half_level));
+
     const KeyView split_pivot_key = this->node_.get_pivot_key(split_pivot_i);
 
     LevelCaseT& lower_impl = lower_half_level.template emplace<LevelCaseT>(whole_level);
     LevelCaseT& upper_impl = upper_half_level.template emplace<LevelCaseT>(whole_level);
+
+    BATT_CHECK_NE(std::addressof(whole_level), std::addressof(lower_impl));
+    BATT_CHECK_NE(std::addressof(whole_level), std::addressof(upper_impl));
 
     lower_impl.drop_after_pivot(split_pivot_i, split_pivot_key);
     upper_impl.drop_before_pivot(split_pivot_i, split_pivot_key);

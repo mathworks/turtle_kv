@@ -97,7 +97,7 @@ Status Subtree::apply_batch_update(const TreeOptions& tree_options,
         llfs::PageLayoutId expected_layout = Subtree::expected_layout_for_height(parent_height - 1);
 
         StatusOr<llfs::PinnedPage> status_or_pinned_page = page_id_slot.load_through(
-            update.page_loader,
+            update.context.page_loader,
             llfs::PageLoadOptions{
                 expected_layout,
                 llfs::PinPageToJob::kDefault,
@@ -117,19 +117,20 @@ Status Subtree::apply_batch_update(const TreeOptions& tree_options,
           auto new_leaf =
               std::make_unique<InMemoryLeaf>(batt::make_copy(pinned_page), tree_options);
 
-          BATT_ASSIGN_OK_RESULT(
+          BATT_ASSIGN_OK_RESULT(  //
               new_leaf->result_set,
-              update.merge_compact_edits(global_max_key(),
-                                         [&](MergeCompactor::GeneratorContext& context) -> Status {
-                                           MergeFrame frame;
-                                           frame.push_line(update.result_set.live_edit_slices());
-                                           frame.push_line(packed_leaf.as_edit_slice_seq());
-                                           context.push_frame(&frame);
-                                           return context.await_frame_consumed(&frame);
-                                         }));
+              update.context.merge_compact_edits(  //
+                  global_max_key(),
+                  [&](MergeCompactor::GeneratorContext& context) -> Status {
+                    MergeFrame frame;
+                    frame.push_line(update.result_set.live_edit_slices());
+                    frame.push_line(packed_leaf.as_edit_slice_seq());
+                    context.push_frame(&frame);
+                    return context.await_frame_consumed(&frame);
+                  }));
 
           new_leaf->set_edit_size_totals(
-              compute_running_total(update.worker_pool, new_leaf->result_set));
+              update.context.compute_running_total(new_leaf->result_set));
 
           return Subtree{.impl = std::move(new_leaf)};
 
@@ -157,20 +158,21 @@ Status Subtree::apply_batch_update(const TreeOptions& tree_options,
 
         BATT_CHECK_EQ(parent_height, 2);
 
-        BATT_ASSIGN_OK_RESULT(in_memory_leaf->result_set,
-                              update.merge_compact_edits(
-                                  global_max_key(),
-                                  [&](MergeCompactor::GeneratorContext& context) -> Status {
-                                    MergeFrame frame;
-                                    frame.push_line(update.result_set.live_edit_slices());
-                                    frame.push_line(in_memory_leaf->result_set.live_edit_slices());
-                                    context.push_frame(&frame);
-                                    return context.await_frame_consumed(&frame);
-                                  }));
+        BATT_ASSIGN_OK_RESULT(
+            in_memory_leaf->result_set,
+            update.context.merge_compact_edits(
+                global_max_key(),
+                [&](MergeCompactor::GeneratorContext& generator_context) -> Status {
+                  MergeFrame frame;
+                  frame.push_line(update.result_set.live_edit_slices());
+                  frame.push_line(in_memory_leaf->result_set.live_edit_slices());
+                  generator_context.push_frame(&frame);
+                  return generator_context.await_frame_consumed(&frame);
+                }));
 
         in_memory_leaf->result_set.update_has_page_refs(update.result_set.has_page_refs());
         in_memory_leaf->set_edit_size_totals(
-            compute_running_total(update.worker_pool, in_memory_leaf->result_set));
+            update.context.compute_running_total(in_memory_leaf->result_set));
 
         return Subtree{.impl = std::move(in_memory_leaf)};
       },
@@ -199,8 +201,14 @@ Status Subtree::apply_batch_update(const TreeOptions& tree_options,
           // Nothing to fix; tree is viable!
           return OkStatus();
         },
-        [&](const NeedsSplit&) {
-          return new_subtree->split_and_grow(update.page_loader, tree_options, key_upper_bound);
+        [&](NeedsSplit needs_split) {
+          Status status =
+              new_subtree->split_and_grow(update.context, tree_options, key_upper_bound);
+
+          if (!status.ok()) {
+            LOG(INFO) << "split_and_grow failed;" << BATT_INSPECT(needs_split);
+          }
+          return status;
         },
         [&](const NeedsMerge& needs_merge) {
           BATT_CHECK(!needs_merge.single_pivot)
@@ -216,22 +224,24 @@ Status Subtree::apply_batch_update(const TreeOptions& tree_options,
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status Subtree::split_and_grow(llfs::PageLoader& page_loader,
+Status Subtree::split_and_grow(BatchUpdateContext& context,
                                const TreeOptions& tree_options,
                                const KeyView& key_upper_bound)
 {
-  BATT_ASSIGN_OK_RESULT(  //
-      Subtree upper_half_subtree,
-      this->try_split(page_loader));
+  StatusOr<Optional<Subtree>> upper_half_subtree = this->try_split(context);
+  if (upper_half_subtree.ok() && !*upper_half_subtree) {
+    return OkStatus();
+  }
+  BATT_REQUIRE_OK(upper_half_subtree);
 
-  Subtree& lower_half_subtree = *this;
+  Subtree* lower_half_subtree = this;
 
   BATT_ASSIGN_OK_RESULT(  //
       std::unique_ptr<InMemoryNode> new_root,
-      InMemoryNode::from_subtrees(page_loader,
+      InMemoryNode::from_subtrees(context.page_loader,
                                   tree_options,
-                                  std::move(lower_half_subtree),
-                                  std::move(upper_half_subtree),
+                                  std::move(*lower_half_subtree),
+                                  std::move(**upper_half_subtree),
                                   key_upper_bound,
                                   IsRoot{true}));
 
@@ -424,37 +434,43 @@ Optional<llfs::PageId> Subtree::get_page_id() const
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<Subtree> Subtree::try_split(llfs::PageLoader& page_loader)
+StatusOr<Optional<Subtree>> Subtree::try_split(BatchUpdateContext& context)
 {
   return batt::case_of(
       this->impl,
 
-      [&](const llfs::PageIdSlot& page_id_slot) -> StatusOr<Subtree> {
-        BATT_PANIC() << "TODO [tastolfi 2025-03-16] implement me!";
+      [&](const llfs::PageIdSlot& page_id_slot) -> StatusOr<Optional<Subtree>> {
+        BATT_PANIC() << "Splitting a serialized subtree is not supported! (Should have been split "
+                        "*before* serialization)";
 
         return {batt::StatusCode::kUnimplemented};
       },
 
-      [&](const std::unique_ptr<InMemoryLeaf>& leaf) -> StatusOr<Subtree> {
+      [&](const std::unique_ptr<InMemoryLeaf>& leaf) -> StatusOr<Optional<Subtree>> {
         BATT_ASSIGN_OK_RESULT(std::unique_ptr<InMemoryLeaf> leaf_upper_half,  //
                               leaf->try_split());
 
-        return Subtree{.impl = std::move(leaf_upper_half)};
+        if (leaf_upper_half == nullptr) {
+          return Optional<Subtree>{None};
+        }
+        return {Subtree{.impl = std::move(leaf_upper_half)}};
       },
 
-      [&](const std::unique_ptr<InMemoryNode>& node) -> StatusOr<Subtree> {
+      [&](const std::unique_ptr<InMemoryNode>& node) -> StatusOr<Optional<Subtree>> {
         BATT_ASSIGN_OK_RESULT(std::unique_ptr<InMemoryNode> node_upper_half,  //
-                              node->try_split(page_loader));
+                              node->try_split(context));
 
-        return Subtree{.impl = std::move(node_upper_half)};
+        if (node_upper_half == nullptr) {
+          return Optional<Subtree>{None};
+        }
+
+        return {Subtree{.impl = std::move(node_upper_half)}};
       });
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status Subtree::try_flush(batt::WorkerPool& worker_pool,
-                          llfs::PageLoader& page_loader,
-                          const batt::CancelToken& cancel_token)
+Status Subtree::try_flush(BatchUpdateContext& context)
 {
   return batt::case_of(
       this->impl,
@@ -468,7 +484,7 @@ Status Subtree::try_flush(batt::WorkerPool& worker_pool,
       },
 
       [&](const std::unique_ptr<InMemoryNode>& node) -> Status {
-        return node->try_flush(worker_pool, page_loader, cancel_token);
+        return node->try_flush(context);
       });
 }
 

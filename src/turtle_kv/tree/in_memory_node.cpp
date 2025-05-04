@@ -10,6 +10,7 @@
 
 #include <turtle_kv/core/algo/split_parts.hpp>
 #include <turtle_kv/core/key_view.hpp>
+#include <turtle_kv/core/key_view_range.hpp>
 #include <turtle_kv/core/value_view.hpp>
 
 #include <batteries/case_of.hpp>
@@ -49,6 +50,7 @@ using PackedSegment = PackedUpdateBuffer::Segment;
   node->children.resize(pivot_count);
   node->child_pages.resize(pivot_count);
   node->pending_bytes.resize(pivot_count);
+  node->pending_bytes_is_exact = 0;
   node->pivot_keys_.resize(pivot_count + 1);
   node->max_key_ = packed_node.max_key();
   node->common_key_prefix = packed_node.common_key_prefix();
@@ -208,7 +210,7 @@ Status InMemoryNode::apply_batch_update(BatchUpdate& update,
 
   // Update per-pivot pending bytes.
   //
-  in_node(*this).update_pending_bytes(update.worker_pool,
+  in_node(*this).update_pending_bytes(update.context.worker_pool,
                                       update.result_set.get(),
                                       PackedSizeOfEdit{});
 
@@ -218,7 +220,7 @@ Status InMemoryNode::apply_batch_update(BatchUpdate& update,
 
   // Check for flush.
   //
-  BATT_REQUIRE_OK(this->flush_if_necessary(update));
+  BATT_REQUIRE_OK(this->flush_if_necessary(update.context));
 
   // We don't need to check whether _this_ node needs to be split; the caller will take care of
   // that!
@@ -286,20 +288,23 @@ Status InMemoryNode::update_buffer_insert(BatchUpdate& update)
   HasPageRefs has_page_refs{false};
   Status segment_load_status;
 
-  BATT_ASSIGN_OK_RESULT(
+  BATT_ASSIGN_OK_RESULT(  //
       new_merged_level.result_set,
-      update.merge_compact_edits(global_max_key(),
-                                 [&](MergeCompactor::GeneratorContext& context) -> Status {
-                                   MergeFrame frame;
-                                   frame.push_line(update.result_set.live_edit_slices());
-                                   this->push_levels_to_merge(frame,
-                                                              update.page_loader,
-                                                              segment_load_status,
-                                                              has_page_refs,
-                                                              levels_to_merge);
-                                   context.push_frame(&frame);
-                                   return context.await_frame_consumed(&frame);
-                                 }));
+      update.context.merge_compact_edits(  //
+          global_max_key(),
+          [&](MergeCompactor::GeneratorContext& generator_context) -> Status {
+            MergeFrame frame;
+            frame.push_line(update.result_set.live_edit_slices());
+            this->push_levels_to_merge(frame,
+                                       update.context.page_loader,
+                                       segment_load_status,
+                                       has_page_refs,
+                                       levels_to_merge,
+                                       /*min_pivot_i=*/0,
+                                       /*only_pivot=*/false);
+            generator_context.push_frame(&frame);
+            return generator_context.await_frame_consumed(&frame);
+          }));
 
   // Make sure there were no segment leaf page load failures that may have prematurely
   // terminated a merge line.
@@ -315,7 +320,7 @@ Status InMemoryNode::update_buffer_insert(BatchUpdate& update)
   }
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
-  // Insert the new level into the log.
+  // Insert the new level into the levels stack.
 
   // If there is already an empty level slot in the vector, just put the new MergedLevel there.
   //
@@ -345,7 +350,7 @@ Status InMemoryNode::update_buffer_insert(BatchUpdate& update)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status InMemoryNode::flush_if_necessary(BatchUpdate& update, bool force_flush)
+Status InMemoryNode::flush_if_necessary(BatchUpdateContext& context, bool force_flush)
 {
   // If we have enough buffered edit bytes on some pivot to flush, then do it.
   //
@@ -359,11 +364,7 @@ Status InMemoryNode::flush_if_necessary(BatchUpdate& update, bool force_flush)
     return OkStatus();
   }
 
-  BATT_REQUIRE_OK(this->flush_to_pivot(update, max_pending.pivot_index));
-
-  if (this->has_too_many_tiers()) {
-    return this->flush_if_necessary(update, true);
-  }
+  BATT_REQUIRE_OK(this->flush_to_pivot(context, max_pending.pivot_index));
 
   return OkStatus();
 }
@@ -378,7 +379,7 @@ bool InMemoryNode::has_too_many_tiers() const
     return false;
   }
 
-  if (this->get_level_count() >= 63) {
+  if (this->get_level_count() > this->max_segment_count()) {
     return true;
   }
 
@@ -397,63 +398,115 @@ bool InMemoryNode::has_too_many_tiers() const
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status InMemoryNode::try_flush(batt::WorkerPool& worker_pool,
-                               llfs::PageLoader& page_loader,
-                               const batt::CancelToken& cancel_token)
+Status InMemoryNode::compact_update_buffer_levels(BatchUpdateContext& update_context)
 {
-  BatchUpdate fake_update{
-      .worker_pool = worker_pool,
-      .page_loader = page_loader,
-      .cancel_token = cancel_token,
-      .result_set = {},
-      .edit_size_totals = None,
-  };
+  MergedLevel new_merged_level;
 
-  return this->flush_if_necessary(fake_update, /*force_flush=*/true);
+  HasPageRefs has_page_refs{false};
+  Status segment_load_status;
+
+  BATT_ASSIGN_OK_RESULT(new_merged_level.result_set,
+                        update_context.merge_compact_edits(
+                            global_max_key(),
+                            [&](MergeCompactor::GeneratorContext& generator_context) -> Status {
+                              MergeFrame frame;
+                              this->push_levels_to_merge(frame,
+                                                         update_context.page_loader,
+                                                         segment_load_status,
+                                                         has_page_refs,
+                                                         as_slice(this->update_buffer.levels),
+                                                         /*min_pivot_i=*/0,
+                                                         /*only_pivot=*/false);
+                              generator_context.push_frame(&frame);
+                              return generator_context.await_frame_consumed(&frame);
+                            }));
+
+  BATT_REQUIRE_OK(segment_load_status);
+
+  this->update_buffer.levels.clear();
+  this->update_buffer.levels.emplace_back(std::move(new_merged_level));
+
+  return OkStatus();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status InMemoryNode::flush_to_pivot(BatchUpdate& update, i32 pivot_i)
+Status InMemoryNode::try_flush(BatchUpdateContext& context)
 {
-  Interval<KeyView> pivot_key_range = in_node(*this).get_pivot_key_range(pivot_i);
-  BatchUpdate child_update = update.make_child_update();
+  return this->flush_if_necessary(context, /*force_flush=*/true);
+}
 
-  // Merge/compact all edits in the pivot's key range.
-  //
-  {
-    Status segment_load_status;
-    HasPageRefs has_page_refs{false};
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+StatusOr<BatchUpdate> InMemoryNode::collect_pivot_batch(BatchUpdateContext& update_context,
+                                                        i32 pivot_i,
+                                                        const Interval<KeyView>& pivot_key_range)
+{
+  BatchUpdate pivot_batch{
+      .context = update_context,
+      .result_set = {},
+      .edit_size_totals = None,
+  };
 
-    BATT_ASSIGN_OK_RESULT(                            //
-        child_update.result_set,                      //
-        update.merge_compact_edits(                   //
-            /*max_key=*/pivot_key_range.upper_bound,  //
-            [&](MergeCompactor::GeneratorContext& context) -> Status {
-              MergeFrame frame;
-              this->push_levels_to_merge(frame,
-                                         update.page_loader,
-                                         segment_load_status,
-                                         has_page_refs,
-                                         as_slice(this->update_buffer.levels),
-                                         /*min_pivot=*/pivot_i);
-              context.push_frame(&frame);
-              return context.await_frame_consumed(&frame);
-            }));
+  Status segment_load_status;
+  HasPageRefs has_page_refs{false};
 
-    BATT_REQUIRE_OK(segment_load_status);
-  }
+  BATT_ASSIGN_OK_RESULT(                            //
+      pivot_batch.result_set,                       //
+      update_context.merge_compact_edits(           //
+          /*max_key=*/pivot_key_range.upper_bound,  //
+          [&](MergeCompactor::GeneratorContext& context) -> Status {
+            MergeFrame frame;
+            this->push_levels_to_merge(frame,
+                                       update_context.page_loader,
+                                       segment_load_status,
+                                       has_page_refs,
+                                       as_slice(this->update_buffer.levels),
+                                       /*min_pivot_i=*/pivot_i,
+                                       /*only_pivot=*/true);
+            context.push_frame(&frame);
+            return context.await_frame_consumed(&frame);
+          }));
+
+  BATT_REQUIRE_OK(segment_load_status);
 
   // Make sure the result set doesn't contain the first key from the next pivot.
   //
-  child_update.result_set.drop_key_range_half_open(Interval<KeyView>{
+  pivot_batch.result_set.drop_key_range_half_open(Interval<KeyView>{
       pivot_key_range.upper_bound,
       this->key_upper_bound(),
   });
 
   // Reset edit size totals.
   //
-  child_update.edit_size_totals = None;
+  pivot_batch.edit_size_totals = None;
+
+  return pivot_batch;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Status InMemoryNode::flush_to_pivot(BatchUpdateContext& update_context, i32 pivot_i)
+{
+  Interval<KeyView> pivot_key_range = in_node(*this).get_pivot_key_range(pivot_i);
+
+  BATT_ASSIGN_OK_RESULT(BatchUpdate child_update,
+                        this->collect_pivot_batch(update_context, pivot_i, pivot_key_range));
+
+  const usize orig_child_update_byte_size = child_update.get_byte_size();
+
+#if 0
+  //----- --- -- -  -  -   -
+  // TODO [tastolfi 2025-05-03] remove?
+  std::string buffer_before = batt::to_string(this->update_buffer.dump());
+  if (get_bit(this->pending_bytes_is_exact, pivot_i)) {
+    BATT_CHECK_EQ(orig_child_update_byte_size, this->pending_bytes[pivot_i])
+        << BATT_INSPECT(this->pivot_count()) << BATT_INSPECT(pivot_i)
+        << BATT_INSPECT_RANGE(this->pending_bytes)
+        << " pivot_key_range=" << dump_key_range(pivot_key_range) << BATT_INSPECT(buffer_before);
+  }
+  //----- --- -- -  -  -   -
+#endif
 
   // Take the largest prefix of the merged edits as possible, without making the flushed batch too
   // large.  However, stick to the single-leaf flush size when flushing directly to the bottom layer
@@ -473,42 +526,99 @@ Status InMemoryNode::flush_to_pivot(BatchUpdate& update, i32 pivot_i)
     BATT_REQUIRE_OK(this->set_pivot_completely_flushed(pivot_i, pivot_key_range));
     BATT_CHECK_EQ(trim_result.n_bytes_trimmed, 0);
     this->pending_bytes[pivot_i] = 0;
+    this->pending_bytes_is_exact = set_bit(this->pending_bytes_is_exact, pivot_i, true);
+    BATT_CHECK_EQ(get_bit(this->pending_bytes_is_exact, pivot_i), true);
     return OkStatus();
   }
 
   // Calculate the flushed key range.
   //
   CInterval<KeyView> flush_key_crange = child_update.get_key_crange();
-
-  BATT_CHECK_LE(pivot_key_range.lower_bound, flush_key_crange.lower_bound);
-  BATT_CHECK_LT(flush_key_crange.upper_bound, pivot_key_range.upper_bound);
-
   flush_key_crange.lower_bound = pivot_key_range.lower_bound;
 
   // Mark all keys in the child update as flushed.
   //
-  BATT_REQUIRE_OK(this->set_pivot_items_flushed(update.page_loader, pivot_i, flush_key_crange));
+  BATT_REQUIRE_OK(
+      this->set_pivot_items_flushed(update_context.page_loader, pivot_i, flush_key_crange));
+
+#if 0
+  //----- --- -- -  -  -   -
+  // TODO [tastolfi 2025-05-01]  REMOVE
+  std::string buffer_after = batt::to_string(this->update_buffer.dump());
+  {
+    BATT_ASSIGN_OK_RESULT(BatchUpdate after_flush,
+                          this->collect_pivot_batch(update_context, pivot_i, pivot_key_range));
+
+    BATT_CHECK_EQ(after_flush.get_byte_size() + child_update.get_byte_size(),
+                  orig_child_update_byte_size)
+        << BATT_INSPECT(pivot_i) << " " << dump_key_range(pivot_key_range) << std::endl
+        << " flush_key_range == " << dump_key_range(flush_key_crange) << std::endl
+        << " after_flush.key_range == " << dump_key_range(after_flush.get_key_crange()) << std::endl
+        << BATT_INSPECT(after_flush.get_byte_size()) << BATT_INSPECT(trim_result.n_bytes_trimmed)
+        << std::endl
+        << BATT_INSPECT(buffer_before) << std::endl
+        << BATT_INSPECT(buffer_after) << std::endl
+        << BATT_INSPECT(after_flush.result_set.debug_dump());
+
+    BATT_CHECK_EQ(after_flush.get_byte_size(), trim_result.n_bytes_trimmed);
+  }
+  //----- --- -- -  -  -   -
+#endif
 
   // Update pending bytes for the flushed pivot; this is equal to the number of bytes we had to trim
   // from the end of the batch to make it fit under the limit.
   //
-  BATT_CHECK_LT(trim_result.n_bytes_trimmed, this->pending_bytes[pivot_i]);
+  BATT_CHECK_EQ(trim_result.n_bytes_trimmed + child_update.get_byte_size(),
+                orig_child_update_byte_size)
+      << BATT_INSPECT(trim_result.n_bytes_trimmed) << BATT_INSPECT(child_update.get_byte_size());
+
+#if 0
+  //----- --- -- -  -  -   -
+  // BEGIN PARANOIA
+  //
+  if (child_update.get_byte_size() + this->tree_options.max_item_size() < byte_size_limit) {
+    BATT_CHECK_LE(trim_result.n_bytes_trimmed, this->tree_options.max_item_size() - 1)
+        << BATT_INSPECT(child_update.get_byte_size()) << BATT_INSPECT(orig_child_update_byte_size)
+        << BATT_INSPECT(byte_size_limit) << BATT_INSPECT(max_flush_size);
+  }
+  if (get_bit(this->pending_bytes_is_exact, pivot_i)) {
+    BATT_CHECK_LT(trim_result.n_bytes_trimmed, this->pending_bytes[pivot_i]);
+
+    BATT_CHECK_EQ(trim_result.n_bytes_trimmed + child_update.get_byte_size(),
+                  this->pending_bytes[pivot_i])
+        << BATT_INSPECT(child_update.get_byte_size()) << BATT_INSPECT(trim_result.n_bytes_trimmed)
+        << BATT_INSPECT(orig_child_update_byte_size);
+  }
+  //
+  // END PARANOIA
+  //----- --- -- -  -  -   -
+#endif
+
   this->pending_bytes[pivot_i] = trim_result.n_bytes_trimmed;
+  this->pending_bytes_is_exact = set_bit(this->pending_bytes_is_exact, pivot_i, true);
+  BATT_CHECK_EQ(get_bit(this->pending_bytes_is_exact, pivot_i), true);
 
   // Recursively apply batch update.
   //
-  Subtree& child = this->children[pivot_i];
+  BATT_REQUIRE_OK(this->children[pivot_i].apply_batch_update(
+      this->tree_options,
+      ParentNodeHeight{this->height},
+      child_update,
+      /*key_upper_bound=*/this->get_pivot_key(pivot_i + 1),
+      IsRoot{false}));
 
-  BATT_REQUIRE_OK(child.apply_batch_update(this->tree_options,              //
-                                           ParentNodeHeight{this->height},  //
-                                           child_update,                    //
-                                           /*key_upper_bound=*/this->get_pivot_key(pivot_i + 1),
-                                           IsRoot{false}));
+  return this->make_child_viable(update_context, pivot_i);
+}
 
-  // TODO [tastolfi 2025-03-16] put this case_of in a helper function.
-  //
-  return batt::case_of(       //
-      child.get_viability(),  //
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Status InMemoryNode::make_child_viable(BatchUpdateContext& update_context, i32 pivot_i)
+{
+  bool tried_flush = false;
+  bool tried_split = false;
+
+  Status status = batt::case_of(                //
+      this->children[pivot_i].get_viability(),  //
 
       //----- --- -- -  -  -   -
       [](const Viable&) -> Status {
@@ -517,88 +627,27 @@ Status InMemoryNode::flush_to_pivot(BatchUpdate& update, i32 pivot_i)
 
       //----- --- -- -  -  -   -
       [&](const NeedsSplit& needs_split) -> Status {
-        if (needs_split.too_many_segments && !needs_split.too_many_pivots &&
-            !needs_split.keys_too_large) {
-          // If the only thing that's stopping the child from being viable is that it has too many
-          // buffer segments, then attempt to fix the problem by flushing.
-          //
-          Status child_flush_status =
-              child.try_flush(update.worker_pool, update.page_loader, update.cancel_token);
+        // If the only thing that's stopping the child from being viable is that it has too many
+        // buffer segments, then attempt to fix the problem by flushing.
+        //
+        if (needs_split.too_many_segments &&  //
+            !needs_split.too_many_pivots &&   //
+            !needs_split.keys_too_large)      //
+        {
+          tried_flush = true;
 
+          Subtree& child = this->children[pivot_i];
+
+          Status child_flush_status = child.try_flush(update_context);
           if (child_flush_status.ok() && batt::is_case<Viable>(child.get_viability())) {
             return OkStatus();
           }
           //
           // else - fall through and try a regular split.
         }
+        tried_split = true;
 
-        StatusOr<Subtree> sibling = child.try_split(update.page_loader);
-        BATT_REQUIRE_OK(sibling);
-
-        const i32 sibling_pivot_i = pivot_i + 1;
-
-        this->child_pages.insert(this->child_pages.begin() + sibling_pivot_i, llfs::PinnedPage{});
-
-        BATT_ASSIGN_OK_RESULT(            //
-            const KeyView child_max_key,  //
-            child.get_max_key(update.page_loader, this->child_pages[pivot_i]));
-
-        BATT_ASSIGN_OK_RESULT(              //
-            const KeyView sibling_min_key,  //
-            sibling->get_min_key(update.page_loader, this->child_pages[sibling_pivot_i]));
-
-        //----- --- -- -  -  -   -
-        // Update update_buffer levels.  This comes first because we use u64-based bit sets for
-        // active_pivots and flushed_pivots, and we assert that when we insert a new pivot (via
-        // split), it does not overflow the bit set.
-        //
-        for (Level& level : this->update_buffer.levels) {
-          BATT_REQUIRE_OK(batt::case_of(
-              level,
-              [](EmptyLevel&) -> Status {
-                return OkStatus();
-              },
-              [](MergedLevel&) -> Status {
-                return OkStatus();
-              },
-              [&](SegmentedLevel& segmented_level) -> Status {
-                return in_segmented_level(*this, segmented_level, update.page_loader)  //
-                    .split_pivot(pivot_i, pivot_key_range, sibling_min_key);
-              }));
-        }
-
-        //----- --- -- -  -  -   -
-        // Update children.
-        //
-        // This will cause pivot_count() to go up, which is why we must do it *after* inserting the
-        // new pivot into the update buffer levels.
-        //
-        this->children.insert(this->children.begin() + sibling_pivot_i, std::move(*sibling));
-
-        //----- --- -- -  -  -   -
-        // Update pending_bytes.
-        //
-        // We approximate how much of the pending count should belong to each side of the split by
-        // just dividing it in half.  The count for each pivot will be fixed the next time we flush
-        // to that pivot.
-        //
-        this->pending_bytes.insert(this->pending_bytes.begin() + sibling_pivot_i, 0);
-        this->pending_bytes[sibling_pivot_i] = this->pending_bytes[pivot_i] / 2;
-        this->pending_bytes[pivot_i] -= this->pending_bytes[sibling_pivot_i];
-
-        //----- --- -- -  -  -   -
-        // Finally, insert a new pivot key.  Truncate as large a suffix as we can without losing the
-        // ability to partition the keys on either side of the subtree split.
-        //
-        {
-          const KeyView prefix = llfs::find_common_prefix(0, child_max_key, sibling_min_key);
-          const KeyView new_sibling_pivot_key = sibling_min_key.substr(0, prefix.size() + 1);
-
-          this->pivot_keys_.insert(this->pivot_keys_.begin() + sibling_pivot_i,
-                                   new_sibling_pivot_key);
-        }
-
-        return OkStatus();
+        return this->split_child(update_context, pivot_i);
       },
 
       //----- --- -- -  -  -   -
@@ -606,6 +655,114 @@ Status InMemoryNode::flush_to_pivot(BatchUpdate& update, i32 pivot_i)
         BATT_PANIC() << "TODO [tastolfi 2025-03-16] implement me!";
         return batt::StatusCode::kUnimplemented;
       });
+
+#if 0
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+  // TODO [tastolfi 2025-05-04] REMOVE
+  for (i32 child_i = 0; child_i < (i32)this->pivot_count(); ++child_i) {
+    BATT_CHECK(!batt::is_case<NeedsSplit>(this->children[child_i].get_viability()))
+        << BATT_INSPECT(pivot_i) << BATT_INSPECT(child_i) << BATT_INSPECT(tried_split)
+        << BATT_INSPECT(tried_flush) << BATT_INSPECT(this->children[child_i].get_viability());
+  }
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+#endif
+
+  return status;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Status InMemoryNode::split_child(BatchUpdateContext& update_context, i32 pivot_i)
+{
+  Subtree& child = this->children[pivot_i];
+
+  StatusOr<Optional<Subtree>> status_or_sibling = child.try_split(update_context);
+  if (!status_or_sibling.ok()) {
+    LOG(ERROR) << BATT_INSPECT(child.get_viability());
+  }
+  BATT_REQUIRE_OK(status_or_sibling);
+
+  if (!*status_or_sibling) {
+    BATT_CHECK(batt::is_case<Viable>(child.get_viability()));
+    return OkStatus();
+  }
+  Subtree& sibling = **status_or_sibling;
+
+  const i32 sibling_i = pivot_i + 1;
+
+  this->child_pages.insert(this->child_pages.begin() + sibling_i, llfs::PinnedPage{});
+
+  llfs::PinnedPage& child_page = this->child_pages[pivot_i];
+  llfs::PinnedPage& sibling_page = this->child_pages[sibling_i];
+
+  BATT_ASSIGN_OK_RESULT(const KeyView child_max_key,
+                        child.get_max_key(update_context.page_loader, child_page));
+
+  BATT_ASSIGN_OK_RESULT(const KeyView sibling_min_key,
+                        sibling.get_min_key(update_context.page_loader, sibling_page));
+
+  //----- --- -- -  -  -   -
+  // Update update_buffer levels.  This comes first because we use u64-based bit sets for
+  // active_pivots and flushed_pivots, and we assert that when we insert a new pivot (via
+  // split), it does not overflow the bit set.
+  //
+  Interval<KeyView> pivot_key_range = in_node(*this).get_pivot_key_range(pivot_i);
+
+  for (Level& level : this->update_buffer.levels) {
+    BATT_REQUIRE_OK(batt::case_of(
+        level,
+        [](EmptyLevel&) -> Status {
+          return OkStatus();
+        },
+        [](MergedLevel&) -> Status {
+          return OkStatus();
+        },
+        [&](SegmentedLevel& segmented_level) -> Status {
+          return in_segmented_level(*this, segmented_level, update_context.page_loader)  //
+              .split_pivot(pivot_i, pivot_key_range, sibling_min_key);
+        }));
+  }
+
+  //----- --- -- -  -  -   -
+  // Update children.
+  //
+  // This will cause pivot_count() to go up, which is why we must do it *after* inserting the
+  // new pivot into the update buffer levels.
+  //
+  this->children.insert(this->children.begin() + sibling_i, std::move(sibling));
+
+  //----- --- -- -  -  -   -
+  // Update pending_bytes.
+  //
+  // We approximate how much of the pending count should belong to each side of the split by
+  // just dividing it in half.  The count for each pivot will be fixed the next time we flush
+  // to that pivot.
+  //
+  const usize both_pending_bytes = this->pending_bytes[pivot_i];
+  const usize sibling_pending_bytes = both_pending_bytes / 2;
+  this->pending_bytes[pivot_i] -= sibling_pending_bytes;
+
+  BATT_CHECK_EQ(sibling_pending_bytes + this->pending_bytes[pivot_i], both_pending_bytes);
+
+  // The pending bytes counts for this pivot and its new sibling are not exact.
+  //
+  this->pending_bytes_is_exact = set_bit(this->pending_bytes_is_exact, pivot_i, false);
+  this->pending_bytes_is_exact = insert_bit(this->pending_bytes_is_exact, sibling_i, false);
+
+  this->pending_bytes.insert(this->pending_bytes.begin() + sibling_i, sibling_pending_bytes);
+
+  //----- --- -- -  -  -   -
+  // Finally, insert a new pivot key.  Truncate as large a suffix as we can without losing the
+  // ability to partition the keys on either side of the subtree split.
+  //
+  {
+    const KeyView prefix = llfs::find_common_prefix(0, child_max_key, sibling_min_key);
+    const KeyView new_sibling_pivot_key = sibling_min_key.substr(0, prefix.size() + 1);
+
+    this->pivot_keys_.insert(this->pivot_keys_.begin() + sibling_i, new_sibling_pivot_key);
+  }
+
+  return OkStatus();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -614,6 +771,11 @@ Status InMemoryNode::set_pivot_items_flushed(llfs::PageLoader& page_loader,
                                              usize pivot_i,
                                              const CInterval<KeyView>& flush_key_crange)
 {
+  Interval<KeyView> pivot_key_range = in_node(*this).get_pivot_key_range(pivot_i);
+
+  BATT_CHECK_LE(pivot_key_range.lower_bound, flush_key_crange.lower_bound);
+  BATT_CHECK_LT(flush_key_crange.upper_bound, pivot_key_range.upper_bound);
+
   Status segment_load_status;
 
   for (Level& level : this->update_buffer.levels) {
@@ -668,7 +830,7 @@ Status InMemoryNode::set_pivot_completely_flushed(usize pivot_i,
           is_now_empty = merged_level.result_set.empty();
         },
         [&](SegmentedLevel& segmented_level) {
-          for (usize segment_i = 0; segment_i < segmented_level.segment_count(); ++segment_i) {
+          for (usize segment_i = 0; segment_i < segmented_level.segment_count();) {
             Segment& segment = segmented_level.get_segment(segment_i);
 
             segment.set_flushed_item_upper_bound(pivot_i, 0);
@@ -743,7 +905,8 @@ void InMemoryNode::push_levels_to_merge(MergeFrame& frame,
                                         Status& segment_load_status,
                                         HasPageRefs& has_page_refs,
                                         const Slice<Level>& levels_to_merge,
-                                        i32 min_pivot_i)
+                                        i32 min_pivot_i,
+                                        bool only_pivot)
 {
   for (Level& level : levels_to_merge) {
     frame.push_line(batt::case_of(  //
@@ -760,6 +923,10 @@ void InMemoryNode::push_levels_to_merge(MergeFrame& frame,
           //----- --- -- -  -  -   -
           // TODO [tastolfi 2025-03-14] update has_page_refs here!
           //----- --- -- -  -  -   -
+          if (only_pivot && !segmented_level.is_pivot_active(min_pivot_i)) {
+            return seq::Empty<EditSlice>{}  //
+                   | seq::boxed();
+          }
           return SegmentedLevelScanner<const InMemoryNode, const SegmentedLevel, llfs::PageLoader>{
                      *this,
                      segmented_level,
@@ -846,9 +1013,9 @@ SubtreeViability InMemoryNode::get_viability() const
   const usize counts_size = this->flushed_item_counts_byte_size();
   const bool variables_too_large = (keys_size + counts_size) > variable_space;
 
-  needs_split.too_many_pivots = (this->pivot_count() > Self::kMaxPivotCount);
-  needs_split.too_many_segments = (this->segment_count() > Self::kMaxSegmentCount);
-  needs_split.keys_too_large = (keys_size != 0 && variables_too_large);
+  needs_split.too_many_pivots = (this->pivot_count() > this->max_pivot_count());
+  needs_split.too_many_segments = (this->segment_count() > this->max_segment_count());
+  needs_split.keys_too_large = (keys_size > variable_space);
   needs_split.flushed_item_counts_too_large = (counts_size != 0 && variables_too_large);
 
   if (needs_split) {
@@ -886,8 +1053,14 @@ bool InMemoryNode::is_viable(IsRoot is_root) const
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<std::unique_ptr<InMemoryNode>> InMemoryNode::try_split(llfs::PageLoader& page_loader)
+StatusOr<std::unique_ptr<InMemoryNode>> InMemoryNode::try_split(BatchUpdateContext& context)
 {
+  const SubtreeViability orig_viability = this->get_viability();
+
+  if (!batt::is_case<NeedsSplit>(orig_viability)) {
+    return {nullptr};
+  }
+
   const usize orig_pivot_count = this->pivot_count();
   SmallVec<KeyView, 65> orig_pivot_keys = std::move(this->pivot_keys_);
   SmallVec<Level, 6> orig_levels = std::move(this->update_buffer.levels);
@@ -895,6 +1068,7 @@ StatusOr<std::unique_ptr<InMemoryNode>> InMemoryNode::try_split(llfs::PageLoader
   SmallVec<llfs::PinnedPage, 64> orig_child_pages = std::move(this->child_pages);
   SmallVec<usize, 64> orig_pending_bytes = std::move(this->pending_bytes);
   KeyView orig_max_key = this->max_key_;
+  const u64 orig_pending_bytes_is_exact = this->pending_bytes_is_exact;
 
   auto reset_this_on_failure = batt::finally([&] {
     this->pivot_keys_ = std::move(orig_pivot_keys);
@@ -902,11 +1076,14 @@ StatusOr<std::unique_ptr<InMemoryNode>> InMemoryNode::try_split(llfs::PageLoader
     this->children = std::move(orig_children);
     this->child_pages = std::move(orig_child_pages);
     this->pending_bytes = std::move(orig_pending_bytes);
+    this->max_key_ = orig_max_key;
+    this->pending_bytes_is_exact = orig_pending_bytes_is_exact;
   });
 
   this->children.clear();
   this->child_pages.clear();
   this->pending_bytes.clear();
+  this->pending_bytes_is_exact = u64{0};
 
   BATT_CHECK_EQ(orig_pivot_count + 1, orig_pivot_keys.size());
 
@@ -917,15 +1094,44 @@ StatusOr<std::unique_ptr<InMemoryNode>> InMemoryNode::try_split(llfs::PageLoader
   auto node_upper_half = std::make_unique<InMemoryNode>(batt::make_copy(this->pinned_node_page_),
                                                         this->tree_options,
                                                         this->is_size_tiered());
+  node_upper_half->height = this->height;
+
+  SubtreeViability lower_viability;
+  SubtreeViability upper_viability;
 
   for (;;) {
     // If we ever try the same split point a second time, fail.
     //
     if (get_bit(tried_already, split_pivot_i)) {
-      LOG(ERROR) << "Failed to split node";
+      // Reset this node to its original state before trying one last thing...
+      {
+        auto reset_now = std::move(reset_this_on_failure);
+      }
+
+      // If the only thing preventing us from splitting the node is related to there being a lot
+      // of segments/levels, then we can try fixing this by re-compacting the entire update
+      // buffer.
+      //
+      if (compacting_levels_might_fix(this->get_viability())) {
+        BATT_REQUIRE_OK(this->compact_update_buffer_levels(context));
+        return this->try_split(context);
+      }
+
+      LOG(ERROR) << "Failed to split node;" << BATT_INSPECT(orig_pivot_count)
+                 << BATT_INSPECT(this->tree_options.flush_size())
+                 << BATT_INSPECT(this->tree_options.min_flush_size())
+                 << BATT_INSPECT(this->tree_options.max_flush_size())
+                 << BATT_INSPECT(this->update_buffer.levels.size())
+                 << BATT_INSPECT(this->get_viability()) << BATT_INSPECT(orig_viability) << "\n"
+                 << BATT_INSPECT(lower_viability) << BATT_INSPECT(upper_viability) << "\n"
+                 << BATT_INSPECT_RANGE(orig_pending_bytes) << "\n"
+                 << boost::stacktrace::stacktrace{};
+
       return {batt::StatusCode::kInternal};
     }
     tried_already = set_bit(tried_already, split_pivot_i, true);
+
+    //+++++++++++-+-+--+----- --- -- -  -  -   -
 
     // Reset pivot keys and buffer levels for both halves.
     //
@@ -943,16 +1149,59 @@ StatusOr<std::unique_ptr<InMemoryNode>> InMemoryNode::try_split(llfs::PageLoader
     node_lower_half->pivot_keys_.assign(orig_pivot_keys.begin(),
                                         orig_pivot_keys.begin() + split_pivot_i + 1);
 
-    node_lower_half->children.resize(node_lower_half->pivot_keys_.size() - 1);
-
     node_upper_half->pivot_keys_.assign(orig_pivot_keys.begin() + split_pivot_i,
                                         orig_pivot_keys.end());
-
-    node_upper_half->children.resize(node_upper_half->pivot_keys_.size() - 1);
 
     BATT_CHECK_EQ(node_lower_half->pivot_keys_.back(), node_upper_half->pivot_keys_.front());
     BATT_CHECK_EQ(node_lower_half->pivot_keys_.size() + node_upper_half->pivot_keys_.size(),
                   orig_pivot_keys.size() + 1);
+
+    // Initialize children of node_lower_half.
+    //
+    node_lower_half->children.resize(node_lower_half->pivot_keys_.size() - 1);
+
+    const usize lower_half_pivot_count = node_lower_half->children.size();
+
+    BATT_CHECK_EQ(split_pivot_i, lower_half_pivot_count);
+
+    node_lower_half->pending_bytes.resize(lower_half_pivot_count);
+    node_lower_half->pending_bytes_is_exact = 0;
+    node_lower_half->child_pages.resize(lower_half_pivot_count);
+
+    for (usize i = 0; i < lower_half_pivot_count; ++i) {
+      node_lower_half->children[i] = std::move(orig_children[i]);
+      node_lower_half->child_pages[i] = std::move(orig_child_pages[i]);
+      node_lower_half->pending_bytes[i] = orig_pending_bytes[i];
+    }
+
+    BATT_ASSIGN_OK_RESULT(
+        node_lower_half->max_key_,
+        node_lower_half->children.back().get_max_key(context.page_loader,
+                                                     node_lower_half->child_pages.back()));
+
+    node_lower_half->common_key_prefix = "";  // TODO [tastolfi 2025-03-17]
+
+    // Initialize children of node_upper_half.
+    //
+    node_upper_half->children.resize(node_upper_half->pivot_keys_.size() - 1);
+
+    const usize upper_half_pivot_count = node_upper_half->children.size();
+
+    BATT_CHECK_EQ(split_pivot_i + upper_half_pivot_count, orig_children.size());
+
+    node_upper_half->pending_bytes.resize(upper_half_pivot_count);
+    node_upper_half->pending_bytes_is_exact = 0;
+    node_upper_half->child_pages.resize(upper_half_pivot_count);
+
+    for (usize i = 0; i < upper_half_pivot_count; ++i) {
+      const usize orig_i = i + split_pivot_i;
+      node_upper_half->children[i] = std::move(orig_children[orig_i]);
+      node_upper_half->child_pages[i] = std::move(orig_child_pages[orig_i]);
+      node_upper_half->pending_bytes[i] = orig_pending_bytes[orig_i];
+    }
+
+    node_upper_half->max_key_ = orig_max_key;
+    node_upper_half->common_key_prefix = "";  // TODO [tastolfi 2025-03-17]
 
     // Split the original update buffer according to the split point.
     //
@@ -965,16 +1214,33 @@ StatusOr<std::unique_ptr<InMemoryNode>> InMemoryNode::try_split(llfs::PageLoader
       });
     }
 
+    //+++++++++++-+-+--+----- --- -- -  -  -   -
+
     // Now evaluate whether the split works.
     //
-    SubtreeViability lower_viability = node_lower_half->get_viability();
-    SubtreeViability upper_viability = node_upper_half->get_viability();
+    lower_viability = node_lower_half->get_viability();
+    upper_viability = node_upper_half->get_viability();
 
     // If both halves are ok, then break out of the loop and finish building each half-node.
     //
     if (batt::is_case<Viable>(lower_viability) && batt::is_case<Viable>(upper_viability)) {
       reset_this_on_failure.cancel();
       break;
+    }
+
+    //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+    // The split is no good.  We must restore orig_children and orig_child_pages to their initial
+    // state and see if we have other options for where to split.
+    //
+    for (usize i = 0; i < lower_half_pivot_count; ++i) {
+      orig_children[i] = std::move(node_lower_half->children[i]);
+      orig_child_pages[i] = std::move(node_lower_half->child_pages[i]);
+    }
+    for (usize i = 0; i < upper_half_pivot_count; ++i) {
+      const usize orig_i = i + split_pivot_i;
+      orig_children[orig_i] = std::move(node_upper_half->children[i]);
+      orig_child_pages[orig_i] = std::move(node_upper_half->child_pages[i]);
     }
 
     // If the lower half is too large, then move the split point down and retry if possible.
@@ -994,55 +1260,19 @@ StatusOr<std::unique_ptr<InMemoryNode>> InMemoryNode::try_split(llfs::PageLoader
     }
   }
 
-  node_upper_half->height = this->height;
-
-  //----- --- -- -  -  -   -
-  // Initialize remaining fields of node_lower_half.
-  //
-  const usize lower_half_pivot_count = node_lower_half->children.size();
-
-  BATT_CHECK_EQ(split_pivot_i, lower_half_pivot_count);
-
-  node_lower_half->pending_bytes.resize(lower_half_pivot_count);
-  node_lower_half->child_pages.resize(lower_half_pivot_count);
-
-  for (usize i = 0; i < lower_half_pivot_count; ++i) {
-    node_lower_half->children[i] = std::move(orig_children[i]);
-    node_lower_half->child_pages[i] = std::move(orig_child_pages[i]);
-    node_lower_half->pending_bytes[i] = orig_pending_bytes[i];
-  }
-
-  BATT_ASSIGN_OK_RESULT(
-      node_lower_half->max_key_,
-      node_lower_half->children.back().get_max_key(page_loader,
-                                                   node_lower_half->child_pages.back()));
-
-  node_lower_half->common_key_prefix = "";  // TODO [tastolfi 2025-03-17]
-
-  //----- --- -- -  -  -   -
-  // Initialize remaining fields of node_upper_half.
-  //
-  const usize upper_half_pivot_count = node_upper_half->children.size();
-
-  BATT_CHECK_EQ(split_pivot_i + upper_half_pivot_count, orig_children.size());
-
-  node_upper_half->pending_bytes.resize(upper_half_pivot_count);
-  node_upper_half->child_pages.resize(upper_half_pivot_count);
-
-  for (usize i = 0; i < upper_half_pivot_count; ++i) {
-    const usize orig_i = i + split_pivot_i;
-
-    node_upper_half->children[i] = std::move(orig_children[orig_i]);
-    node_upper_half->child_pages[i] = std::move(orig_child_pages[orig_i]);
-    node_upper_half->pending_bytes[i] = orig_pending_bytes[orig_i];
-  }
-
-  node_upper_half->max_key_ = orig_max_key;
-  node_upper_half->common_key_prefix = "";  // TODO [tastolfi 2025-03-17]
-
   // Final sanity checks.
   //
   BATT_CHECK_EQ(node_lower_half->pivot_count() + node_upper_half->pivot_count(), orig_pivot_count);
+
+  BATT_CHECK_EQ(node_lower_half->is_size_tiered(), node_upper_half->is_size_tiered());
+
+  BATT_CHECK(!batt::is_case<NeedsSplit>(node_lower_half->get_viability()))
+      << BATT_INSPECT(node_lower_half->get_viability())
+      << BATT_INSPECT(node_lower_half->update_buffer.dump());
+
+  BATT_CHECK(!batt::is_case<NeedsSplit>(node_upper_half->get_viability()))
+      << BATT_INSPECT(node_upper_half->get_viability())
+      << BATT_INSPECT(node_upper_half->update_buffer.dump());
 
   return {std::move(node_upper_half)};
 }
@@ -1099,7 +1329,8 @@ bool InMemoryNode::is_packable() const
 //
 Status InMemoryNode::start_serialize(TreeSerializeContext& context)
 {
-  BATT_CHECK(!batt::is_case<NeedsSplit>(this->get_viability()));
+  BATT_CHECK(!batt::is_case<NeedsSplit>(this->get_viability()))
+      << BATT_INSPECT(this->get_viability());
 
   usize total_segments = 0;
 
@@ -1122,7 +1353,7 @@ Status InMemoryNode::start_serialize(TreeSerializeContext& context)
             }));
   }
 
-  BATT_CHECK_LE(total_segments, Self::kMaxSegmentCount);
+  BATT_CHECK_LE(total_segments, this->max_segment_count());
 
   for (Subtree& child : this->children) {
     BATT_REQUIRE_OK(child.start_serialize(context));

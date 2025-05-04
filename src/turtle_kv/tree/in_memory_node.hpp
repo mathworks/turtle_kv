@@ -31,9 +31,6 @@ namespace turtle_kv {
 struct InMemoryNode {
   using Self = InMemoryNode;
 
-  static constexpr usize kMaxPivotCount = 63;
-  static constexpr usize kMaxSegmentCount = kMaxPivotCount - 1;
-
   struct Metrics {
     StatsMetric<u16> level_depth_stats;
   };
@@ -73,13 +70,21 @@ struct InMemoryNode {
 
       void check_invariants(const char* file, int line) const;
 
-      auto dump() const
+      auto dump(bool multi_line = true) const
       {
-        return [this](std::ostream& out) {
-          out << "Segment:" << std::endl
-              << "   active=" << std::bitset<64>{this->active_pivots} << std::endl
-              << "  flushed=" << std::bitset<64>{this->flushed_pivots} << std::endl
-              << "  flushed_upper_bounds=" << batt::dump_range(this->flushed_item_upper_bound_);
+        return [this, multi_line](std::ostream& out) {
+          auto active = std::bitset<64>{this->active_pivots};
+          auto flushed = std::bitset<64>{this->flushed_pivots};
+          auto flushed_bounds = batt::dump_range(this->flushed_item_upper_bound_);
+          if (multi_line) {
+            out << "Segment:" << std::endl
+                << "   active=" << active << std::endl
+                << "  flushed=" << flushed << std::endl
+                << "  flushed_upper_bounds=" << flushed_bounds;
+          } else {
+            out << "Segment{.active=" << active << ", .flushed=" << flushed
+                << ", .flushed_upper_bounds=" << flushed_bounds << ",}";
+          }
         };
       }
 
@@ -173,6 +178,13 @@ struct InMemoryNode {
       {
         // Nothing to do!
       }
+
+      auto dump() const
+      {
+        return [](std::ostream& out) {
+          out << "EmptyLevel{}";
+        };
+      }
     };
 
     struct SegmentedLevel {
@@ -242,7 +254,28 @@ struct InMemoryNode {
         this->drop_pivot_range(Interval<i32>{pivot_i, 64});
       }
 
+      bool is_pivot_active(i32 pivot_i) const
+      {
+        for (const Segment& segment : this->segments) {
+          if (segment.is_pivot_active(pivot_i)) {
+            return true;
+          }
+        }
+        return false;
+      }
+
       void check_items_sorted(const InMemoryNode& node, llfs::PageLoader& page_loader) const;
+
+      SmallFn<void(std::ostream&)> dump() const
+      {
+        return [this](std::ostream& out) {
+          out << "SegmentedLevel{\n";
+          for (const Segment& segment : this->segments) {
+            out << "    " << segment.dump(/*multi_line=*/false) << ",\n";
+          }
+          out << "  }";
+        };
+      }
     };
 
     struct MergedLevel {
@@ -299,6 +332,13 @@ struct InMemoryNode {
 
       StatusOr<SegmentedLevel> finish_serialize(const InMemoryNode& node,
                                                 TreeSerializeContext& context);
+
+      auto dump() const
+      {
+        return [this](std::ostream& out) {
+          out << "MergedLevel{" << this->result_set.debug_dump("    ") << "\n}";
+        };
+      }
     };
 
     using Level = std::variant<EmptyLevel, MergedLevel, SegmentedLevel>;
@@ -306,6 +346,21 @@ struct InMemoryNode {
     //+++++++++++-+-+--+----- --- -- -  -  -   -
 
     SmallVec<Level, 6> levels;
+
+    //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+    SmallFn<void(std::ostream&)> dump() const
+    {
+      return [this](std::ostream& out) {
+        out << "UpdateBuffer{.levels={\n";
+        for (const Level& level : levels) {
+          batt::case_of(level, [&out](const auto& level_case) {
+            out << "  " << level_case.dump() << ",\n";
+          });
+        }
+        out << "},}";
+      };
+    }
   };
 
   struct PivotPendingBytes {
@@ -324,6 +379,7 @@ struct InMemoryNode {
   SmallVec<Subtree, 64> children;
   SmallVec<llfs::PinnedPage, 64> child_pages;
   SmallVec<usize, 64> pending_bytes;
+  u64 pending_bytes_is_exact = 0;
   SmallVec<KeyView, 65> pivot_keys_;
   KeyView max_key_;
   KeyView common_key_prefix;
@@ -358,6 +414,16 @@ struct InMemoryNode {
   IsSizeTiered is_size_tiered() const
   {
     return this->size_tiered_;
+  }
+
+  usize max_pivot_count() const
+  {
+    return this->is_size_tiered() ? (64 - 1) : (64 - 1);
+  }
+
+  usize max_segment_count() const
+  {
+    return this->is_size_tiered() ? (64 - 2) : (64 - 2);
   }
 
   Slice<const KeyView> get_pivot_keys() const
@@ -395,10 +461,6 @@ struct InMemoryNode {
     return this->pivot_keys_.back();
   }
 
-  StatusOr<ValueView> find_key(KeyQuery& query) const;
-
-  StatusOr<ValueView> find_key_in_level(usize level_i, KeyQuery& query, i32 key_pivot_i) const;
-
   usize get_level_count() const
   {
     return this->update_buffer.levels.size();
@@ -408,35 +470,6 @@ struct InMemoryNode {
   {
     return this->children[pivot_i];
   }
-
-  //----- --- -- -  -  -   -
-
-  Status apply_batch_update(BatchUpdate& update, const KeyView& key_upper_bound, IsRoot is_root);
-
-  Status update_buffer_insert(BatchUpdate& update);
-
-  Status flush_if_necessary(BatchUpdate& update, bool force_flush = false);
-
-  bool has_too_many_tiers() const;
-
-  Status flush_to_pivot(BatchUpdate& update, i32 pivot_i);
-
-  MaxPendingBytes find_max_pending() const;
-
-  void push_levels_to_merge(MergeFrame& frame,
-                            llfs::PageLoader& page_loader,
-                            Status& segment_load_status,
-                            HasPageRefs& has_page_refs,
-                            const Slice<UpdateBuffer::Level>& levels_to_merge,
-                            i32 min_pivot_i = 0);
-
-  Status set_pivot_items_flushed(llfs::PageLoader& page_loader,
-                                 usize pivot_i,
-                                 const CInterval<KeyView>& flush_key_crange);
-
-  Status set_pivot_completely_flushed(usize pivot_i, const Interval<KeyView>& pivot_key_range);
-
-  void squash_empty_levels();
 
   const KeyView& get_pivot_key(usize i) const
   {
@@ -448,16 +481,55 @@ struct InMemoryNode {
     return this->children.size();
   }
 
+  void add_pending_bytes(usize pivot_i, usize byte_count)
+  {
+    this->pending_bytes_is_exact = set_bit(this->pending_bytes_is_exact, pivot_i, false);
+    BATT_CHECK_EQ(get_bit(this->pending_bytes_is_exact, pivot_i), false);
+
+    this->pending_bytes[pivot_i] += byte_count;
+  }
+
+  //----- --- -- -  -  -   -
+
+  StatusOr<ValueView> find_key(KeyQuery& query) const;
+
+  StatusOr<ValueView> find_key_in_level(usize level_i, KeyQuery& query, i32 key_pivot_i) const;
+
+  Status apply_batch_update(BatchUpdate& update, const KeyView& key_upper_bound, IsRoot is_root);
+
+  Status update_buffer_insert(BatchUpdate& update);
+
+  Status flush_if_necessary(BatchUpdateContext& context, bool force_flush = false);
+
+  bool has_too_many_tiers() const;
+
+  Status flush_to_pivot(BatchUpdateContext& context, i32 pivot_i);
+
+  Status make_child_viable(BatchUpdateContext& context, i32 pivot_i);
+
+  MaxPendingBytes find_max_pending() const;
+
+  void push_levels_to_merge(MergeFrame& frame,
+                            llfs::PageLoader& page_loader,
+                            Status& segment_load_status,
+                            HasPageRefs& has_page_refs,
+                            const Slice<UpdateBuffer::Level>& levels_to_merge,
+                            i32 min_pivot_i,
+                            bool only_pivot);
+
+  Status set_pivot_items_flushed(llfs::PageLoader& page_loader,
+                                 usize pivot_i,
+                                 const CInterval<KeyView>& flush_key_crange);
+
+  Status set_pivot_completely_flushed(usize pivot_i, const Interval<KeyView>& pivot_key_range);
+
+  void squash_empty_levels();
+
   usize key_data_byte_size() const;
 
   usize flushed_item_counts_byte_size() const;
 
   usize segment_count() const;
-
-  void add_pending_bytes(usize pivot_i, usize byte_count)
-  {
-    this->pending_bytes[pivot_i] += byte_count;
-  }
 
   SubtreeViability get_viability() const;
 
@@ -465,13 +537,15 @@ struct InMemoryNode {
 
   /** \brief Split the node and return its new upper half (sibling).
    */
-  StatusOr<std::unique_ptr<InMemoryNode>> try_split(llfs::PageLoader& page_loader);
+  StatusOr<std::unique_ptr<InMemoryNode>> try_split(BatchUpdateContext& context);
 
   /** \brief Attempt to make the node viable by flushing a batch.
    */
-  Status try_flush(batt::WorkerPool& worker_pool,
-                   llfs::PageLoader& page_loader,
-                   const batt::CancelToken& cancel_token);
+  Status try_flush(BatchUpdateContext& context);
+
+  /** \brief Splits the specified child, inserting a new pivot immediately after `pivot_i`.
+   */
+  Status split_child(BatchUpdateContext& update_context, i32 pivot_i);
 
   /** \brief Returns true iff there are no MergedLevels or unserialized Subtree children in this
    * node.
@@ -481,6 +555,21 @@ struct InMemoryNode {
   Status start_serialize(TreeSerializeContext& context);
 
   StatusOr<llfs::PageId> finish_serialize(TreeSerializeContext& context);
+
+  StatusOr<BatchUpdate> collect_pivot_batch(BatchUpdateContext& update_context,
+                                            i32 pivot_i,
+                                            const Interval<KeyView>& pivot_key_range);
+
+  /** \brief Merges and compacts all live edits in all levels/segments, producing a single level (if
+   * not size-tiered), or a series of non-key-overlapping levels with a single segment in each (if
+   * size-tiered).
+   *
+   * This can be done if node splitting fails, to reduce the serialized space required by getting
+   * rid of all the non-zero flushed key upper bounds.  This should NOT be done under normal
+   * circumstances (while applying batch updates), since it will reduce the write-optimization
+   * significantly.
+   */
+  Status compact_update_buffer_levels(BatchUpdateContext& context);
 };
 
 //=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++

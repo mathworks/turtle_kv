@@ -19,28 +19,14 @@ namespace turtle_kv {
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 //
-struct BatchUpdate {
-  struct TrimResult {
-    usize n_items_trimmed = 0;
-    usize n_bytes_trimmed = 0;
-  };
-
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-
+struct BatchUpdateContext {
   batt::WorkerPool& worker_pool;
   llfs::PageLoader& page_loader;
   batt::CancelToken cancel_token;
-  MergeCompactor::ResultSet</*decay_to_items=*/false> result_set;
-  Optional<batt::RunningTotal> edit_size_totals;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  /** \brief Returns a new BatchUpdate that shares the same worker_pool, page_loader, and
-   * cancel_token as this.
-   */
-  BatchUpdate make_child_update() const;
-
-  /** \brief Uses the worker_pool in this update to perform a parallel merge-compaction of the lines
+  /** \brief Uses the worker_pool to perform a parallel merge-compaction of the lines
    * produced by the passed `generator_fn`, up to and including (but stopping at) `max_key`.
    */
   template <typename GeneratorFn>
@@ -55,6 +41,31 @@ struct BatchUpdate {
   StatusOr<MergeCompactor::ResultSet</*decay_to_items=*/false>> merge_compact_edits_in_frame(
       const KeyView& max_key,
       FramePushFn&& frame_push_fn);
+
+  /** \brief Computes and returns the running total (prefix sum) of the edit sizes in result_set.
+   */
+  batt::RunningTotal compute_running_total(
+      const MergeCompactor::ResultSet</*decay_to_items=*/false>& result_set) const
+  {
+    return ::turtle_kv::compute_running_total(this->worker_pool, result_set);
+  }
+};
+
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+//
+struct BatchUpdate {
+  struct TrimResult {
+    usize n_items_trimmed = 0;
+    usize n_bytes_trimmed = 0;
+  };
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  BatchUpdateContext context;
+  MergeCompactor::ResultSet</*decay_to_items=*/false> result_set;
+  Optional<batt::RunningTotal> edit_size_totals;
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   /** \brief Resets `this->edit_size_totals` to reflect `this->result_set`.
    */
@@ -72,6 +83,11 @@ struct BatchUpdate {
    * bytes) is not greater than `byte_size_limit`.
    */
   TrimResult trim_back_down_to_size(usize byte_size_limit);
+
+  /** \brief Calculates the size of `result_set` if necessary, and returns the total number of bytes
+   * in this batch.
+   */
+  usize get_byte_size();
 };
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -84,7 +100,7 @@ std::ostream& operator<<(std::ostream& out, const BatchUpdate::TrimResult& t);
 //
 template <typename GeneratorFn>
 inline StatusOr<MergeCompactor::ResultSet</*decay_to_items=*/false>>
-BatchUpdate::merge_compact_edits(const KeyView& max_key, GeneratorFn&& generator_fn)
+BatchUpdateContext::merge_compact_edits(const KeyView& max_key, GeneratorFn&& generator_fn)
 {
   MergeCompactor compactor{this->worker_pool};
   compactor.set_generator(BATT_FORWARD(generator_fn));
@@ -99,7 +115,8 @@ BatchUpdate::merge_compact_edits(const KeyView& max_key, GeneratorFn&& generator
 //
 template <typename FramePushFn>
 inline StatusOr<MergeCompactor::ResultSet</*decay_to_items=*/false>>
-BatchUpdate::merge_compact_edits_in_frame(const KeyView& max_key, FramePushFn&& frame_push_fn)
+BatchUpdateContext::merge_compact_edits_in_frame(const KeyView& max_key,
+                                                 FramePushFn&& frame_push_fn)
 {
   return this->merge_compact_edits(  //
       max_key,                       //

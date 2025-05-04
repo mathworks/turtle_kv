@@ -2,6 +2,7 @@ import os
 import re
 import sys
 from statistics import mean, stdev
+from itertools import zip_longest
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -30,6 +31,7 @@ logs = sys.argv[1:]
 combined = {}
 
 results = []
+per_chi = {}
 
 for log in logs:
     print(f"Processing {log}...")
@@ -38,21 +40,40 @@ for log in logs:
         result = turtle_bench.BenchmarkResult(log)
         results.append(result)
 
-        print(result.cache_size)
-        print(result.chi)
-        print(result.n_records)
-        print(result.thruput_k_load)
-        print(result.thruput_k_a)
-        print(result.thruput_k_b)
-        print(result.thruput_k_c)
-        print(result.thruput_k_d)
-        print(result.thruput_k_f)
+        print("cache", result.cache_size)
+        print("χ", result.chi)
+        print("Ν", result.n_records)
+        print("load", result.thruput_k_load)
+        print("a", result.thruput_k_a)
+        print("b", result.thruput_k_b)
+        print("c", result.thruput_k_c)
+        print("d", result.thruput_k_d)
+        print("f", result.thruput_k_f)
+        
+        combined = list(zip_longest(
+            result.chi,
+            result.thruput_k_load,
+            result.thruput_k_a,
+            result.thruput_k_b,
+            result.thruput_k_c,
+            result.thruput_k_d,
+            result.thruput_k_f,
+            fillvalue=0,
+        ))
 
-        combined = list(zip(result.chi, result.thruput_k_load, result.buffer_level_trim)
+        for i, chi in enumerate(result.chi):
+            if chi not in per_chi:
+                per_chi[chi] = []
 
+            per_chi[chi].append(combined[i])
+        
         for c in combined:
             print(c)
         
     except:
         raise
         print(f"...incomplete/bad result; skipping")
+
+#for chi, vals in per_chi.items():
+#    zl = [int(round(mean([x for x in xs if x != 0]))) for xs in  zip_longest(*vals)]
+#    print(zl)

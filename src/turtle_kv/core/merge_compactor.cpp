@@ -601,20 +601,22 @@ StatusOr<ValueView> MergeCompactor::ResultSet<kDecayToItems>::find_key(const Key
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <bool kDecayToItems>
-batt::SmallFn<void(std::ostream&)> MergeCompactor::ResultSet<kDecayToItems>::debug_dump() const
+batt::SmallFn<void(std::ostream&)> MergeCompactor::ResultSet<kDecayToItems>::debug_dump(
+    std::string_view indent) const
 {
-  return [this](std::ostream& out) {
+  return [this, indent](std::ostream& out) {
     for (const auto& chunk : this->chunks_) {
       if (chunk.empty()) {
-        out << "\n  {}";
+        out << "\n" << indent << "{}";
       } else {
-        out << "\n  " << batt::c_str_literal(get_key(chunk.items.front())) << ".."
+        out << "\n"
+            << indent << batt::c_str_literal(get_key(chunk.items.front())) << ".."
             << batt::c_str_literal(get_key(chunk.items.back()));
       }
     }
-    out << "\n";
-    out << BATT_INSPECT_RANGE_PRETTY(this->chunks_) << "\n"
-        << BATT_INSPECT_RANGE_PRETTY(this->buffers_);
+    out << "\n"
+        << indent << BATT_INSPECT_RANGE(this->chunks_) << "\n"
+        << indent << BATT_INSPECT_RANGE(this->buffers_);
   };
 }
 

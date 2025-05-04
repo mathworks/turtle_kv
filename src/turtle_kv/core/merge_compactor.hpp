@@ -9,6 +9,7 @@
 #include <turtle_kv/import/interval.hpp>
 #include <turtle_kv/import/ref.hpp>
 #include <turtle_kv/import/seq.hpp>
+#include <turtle_kv/import/small_fn.hpp>
 #include <turtle_kv/import/small_vec.hpp>
 
 #include <batteries/async/continuation.hpp>
@@ -199,7 +200,7 @@ class MergeCompactor
     /** \brief Returns a function that dumps detailed information about this result set, for
      * diagnostic/debug purposes.
      */
-    batt::SmallFn<void(std::ostream&)> debug_dump() const;
+    SmallFn<void(std::ostream&)> debug_dump(std::string_view indent = "  ") const;
 
     /** \brief Returns the result set as a sequence of EditSlice instances.
      */

@@ -235,7 +235,11 @@ inline auto SegmentedLevelScanner<NodeT, LevelT, PageLoaderT>::peek_next_impl(bo
 
     this->pinned_leaf_ = std::move(*loaded_page);
 
-    const i32 target_pivot_i = std::max(first_bit(active_pivots), this->min_pivot_i_);
+    i32 target_pivot_i = std::max(first_bit(active_pivots), this->min_pivot_i_);
+    while (target_pivot_i < (i32)this->node_->pivot_count() &&
+           !get_bit(active_pivots, target_pivot_i)) {
+      ++target_pivot_i;
+    }
 
     this->advance_to_pivot(target_pivot_i,
                            *segment,

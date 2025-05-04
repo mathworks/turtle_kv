@@ -31,6 +31,13 @@ def split_kv(val_type, sep='='):
     return impl
 
 
+def parse_chi_hint(s):
+    s = s.strip()
+    if s.endswith('},'):
+        s = s[:-2]
+    return int(s)
+
+
 #=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+--------------
 
 class BenchmarkResult:
@@ -58,6 +65,12 @@ class BenchmarkResult:
 
         self.buffer_level_trim = []
         self.chi = []
+        self.chi_load = []
+        self.chi_a = []
+        self.chi_b = []
+        self.chi_c = []
+        self.chi_d = []
+        self.chi_f = []
         self.cp_pipeline = []
         self.disk_path = []
         self.filter_bits = []
@@ -162,6 +175,12 @@ class BenchmarkResult:
         parse_val(line, r'^# turtlekv  trie_index_reserve_size ==', int, -1, self.trie_size)
         parse_val(line, r'^# turtlekv  value_size_hint ==', int, -1, self.value_size)
         parse_val(line, r'^# turtlekv  wal_size ==', int, -2, self.wal_size)
+        parse_val(line, r' *{"workloads/load.spec"', parse_chi_hint, -1, self.chi_load)
+        parse_val(line, r' *{"workloads/workloada.spec"', parse_chi_hint, -1, self.chi_a)
+        parse_val(line, r' *{"workloads/workloadb.spec"', parse_chi_hint, -1, self.chi_b)
+        parse_val(line, r' *{"workloads/workloadc.spec"', parse_chi_hint, -1, self.chi_c)
+        parse_val(line, r' *{"workloads/workloadd.spec"', parse_chi_hint, -1, self.chi_d)
+        parse_val(line, r' *{"workloads/workloadf.spec"', parse_chi_hint, -1, self.chi_f)
 
         if "turtle_kv_bench: Killed" in line:
             self.thruput_k_load += [1]

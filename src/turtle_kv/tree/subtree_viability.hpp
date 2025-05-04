@@ -34,9 +34,11 @@ struct NeedsMerge {
   }
 };
 
-inline std::ostream& operator<<(std::ostream& out, const NeedsMerge&)
+inline std::ostream& operator<<(std::ostream& out, const NeedsMerge& t)
 {
-  return out << "NeedsMerge";
+  return out << "NeedsMerge{.single_pivot=" << t.single_pivot
+             << ", .too_few_pivots=" << t.too_few_pivots << ", .too_few_items=" << t.too_few_items
+             << ",}";
 }
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
@@ -62,21 +64,48 @@ struct NeedsSplit {
 
 BATT_STATIC_ASSERT_EQ(sizeof(NeedsSplit), 1);
 
-inline std::ostream& operator<<(std::ostream& out, const NeedsSplit&)
+inline std::ostream& operator<<(std::ostream& out, const NeedsSplit& t)
 {
-  return out << "NeedsSplit";
+  return out << "NeedsSplit{.items_too_large=" << t.items_too_large
+             << ", .keys_too_large=" << t.keys_too_large
+             << ", .too_many_pivots=" << t.too_many_pivots
+             << ", .too_many_segments=" << t.too_many_segments
+             << ", .flushed_item_counts_too_large=" << t.flushed_item_counts_too_large << ",}";
 }
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 
 using SubtreeViability = std::variant<Viable, NeedsMerge, NeedsSplit>;
 
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 inline std::ostream& operator<<(std::ostream& out, const SubtreeViability& t)
 {
   batt::case_of(t, [&out](const auto& case_impl) {
     out << case_impl;
   });
   return out;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+inline bool compacting_levels_might_fix(const SubtreeViability& viability)
+{
+  return batt::case_of(
+      viability,
+      [](const Viable&) {
+        return false;
+      },
+      [](const NeedsMerge&) {
+        return false;
+      },
+      [](const NeedsSplit& needs_split) {
+        return (needs_split.flushed_item_counts_too_large ||  //
+                needs_split.too_many_segments) &&             //
+               !needs_split.items_too_large &&                //
+               !needs_split.keys_too_large &&                 //
+               !needs_split.too_many_pivots;
+      });
 }
 
 }  // namespace turtle_kv
