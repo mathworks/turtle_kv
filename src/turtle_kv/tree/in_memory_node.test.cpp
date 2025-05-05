@@ -122,7 +122,17 @@ void verify_table_point_queries(Table& expected_table, Table& actual_table, Rng&
 }
 
 struct SubtreeBatchUpdateScenario {
+  static std::atomic<usize>& size_tiered_count()
+  {
+    static std::atomic<usize> count_{0};
+    return count_;
+  }
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
   llfs::RandomSeed seed;
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   explicit SubtreeBatchUpdateScenario(llfs::RandomSeed seed_arg) noexcept : seed{seed_arg}
   {
@@ -225,8 +235,15 @@ TEST(InMemoryNodeTest, Subtree)
     runner.n_threads(n_threads);
   }
   runner.n_seeds(n_seeds);
-  runner.n_updates(0);
+
+  if (n_seeds < 128) {
+    runner.n_updates(0);
+  } else {
+    runner.n_updates(n_seeds / 64);
+  }
   runner.run(batt::StaticType<SubtreeBatchUpdateScenario>{});
+
+  LOG(INFO) << BATT_INSPECT(SubtreeBatchUpdateScenario::size_tiered_count());
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -252,6 +269,10 @@ void SubtreeBatchUpdateScenario::run()
   const usize key_overhead = 4;
   const usize value_overhead = 5;
   const usize packed_item_size = key_size + key_overhead + value_size + value_overhead;
+
+  if (size_tiered) {
+    size_tiered_count().fetch_add(1);
+  }
 
   TreeOptions tree_options = TreeOptions::with_default_values()  //
                                  .set_leaf_size(512 * kKiB)
