@@ -451,6 +451,8 @@ StatusOr<BatchUpdate> InMemoryNode::collect_pivot_batch(BatchUpdateContext& upda
   Status segment_load_status;
   HasPageRefs has_page_refs{false};
 
+  // Merge/compact all pending edits for the specified pivot.
+  //
   BATT_ASSIGN_OK_RESULT(                            //
       pivot_batch.result_set,                       //
       update_context.merge_compact_edits(           //
@@ -495,19 +497,6 @@ Status InMemoryNode::flush_to_pivot(BatchUpdateContext& update_context, i32 pivo
 
   const usize orig_child_update_byte_size = child_update.get_byte_size();
 
-#if 0
-  //----- --- -- -  -  -   -
-  // TODO [tastolfi 2025-05-03] remove?
-  std::string buffer_before = batt::to_string(this->update_buffer.dump());
-  if (get_bit(this->pending_bytes_is_exact, pivot_i)) {
-    BATT_CHECK_EQ(orig_child_update_byte_size, this->pending_bytes[pivot_i])
-        << BATT_INSPECT(this->pivot_count()) << BATT_INSPECT(pivot_i)
-        << BATT_INSPECT_RANGE(this->pending_bytes)
-        << " pivot_key_range=" << dump_key_range(pivot_key_range) << BATT_INSPECT(buffer_before);
-  }
-  //----- --- -- -  -  -   -
-#endif
-
   // Take the largest prefix of the merged edits as possible, without making the flushed batch too
   // large.  However, stick to the single-leaf flush size when flushing directly to the bottom layer
   // *or* if using lazy (size-tiered) compaction.
@@ -541,58 +530,12 @@ Status InMemoryNode::flush_to_pivot(BatchUpdateContext& update_context, i32 pivo
   BATT_REQUIRE_OK(
       this->set_pivot_items_flushed(update_context.page_loader, pivot_i, flush_key_crange));
 
-#if 0
-  //----- --- -- -  -  -   -
-  // TODO [tastolfi 2025-05-01]  REMOVE
-  std::string buffer_after = batt::to_string(this->update_buffer.dump());
-  {
-    BATT_ASSIGN_OK_RESULT(BatchUpdate after_flush,
-                          this->collect_pivot_batch(update_context, pivot_i, pivot_key_range));
-
-    BATT_CHECK_EQ(after_flush.get_byte_size() + child_update.get_byte_size(),
-                  orig_child_update_byte_size)
-        << BATT_INSPECT(pivot_i) << " " << dump_key_range(pivot_key_range) << std::endl
-        << " flush_key_range == " << dump_key_range(flush_key_crange) << std::endl
-        << " after_flush.key_range == " << dump_key_range(after_flush.get_key_crange()) << std::endl
-        << BATT_INSPECT(after_flush.get_byte_size()) << BATT_INSPECT(trim_result.n_bytes_trimmed)
-        << std::endl
-        << BATT_INSPECT(buffer_before) << std::endl
-        << BATT_INSPECT(buffer_after) << std::endl
-        << BATT_INSPECT(after_flush.result_set.debug_dump());
-
-    BATT_CHECK_EQ(after_flush.get_byte_size(), trim_result.n_bytes_trimmed);
-  }
-  //----- --- -- -  -  -   -
-#endif
-
   // Update pending bytes for the flushed pivot; this is equal to the number of bytes we had to trim
   // from the end of the batch to make it fit under the limit.
   //
   BATT_CHECK_EQ(trim_result.n_bytes_trimmed + child_update.get_byte_size(),
                 orig_child_update_byte_size)
       << BATT_INSPECT(trim_result.n_bytes_trimmed) << BATT_INSPECT(child_update.get_byte_size());
-
-#if 0
-  //----- --- -- -  -  -   -
-  // BEGIN PARANOIA
-  //
-  if (child_update.get_byte_size() + this->tree_options.max_item_size() < byte_size_limit) {
-    BATT_CHECK_LE(trim_result.n_bytes_trimmed, this->tree_options.max_item_size() - 1)
-        << BATT_INSPECT(child_update.get_byte_size()) << BATT_INSPECT(orig_child_update_byte_size)
-        << BATT_INSPECT(byte_size_limit) << BATT_INSPECT(max_flush_size);
-  }
-  if (get_bit(this->pending_bytes_is_exact, pivot_i)) {
-    BATT_CHECK_LT(trim_result.n_bytes_trimmed, this->pending_bytes[pivot_i]);
-
-    BATT_CHECK_EQ(trim_result.n_bytes_trimmed + child_update.get_byte_size(),
-                  this->pending_bytes[pivot_i])
-        << BATT_INSPECT(child_update.get_byte_size()) << BATT_INSPECT(trim_result.n_bytes_trimmed)
-        << BATT_INSPECT(orig_child_update_byte_size);
-  }
-  //
-  // END PARANOIA
-  //----- --- -- -  -  -   -
-#endif
 
   this->pending_bytes[pivot_i] = trim_result.n_bytes_trimmed;
   this->pending_bytes_is_exact = set_bit(this->pending_bytes_is_exact, pivot_i, true);
