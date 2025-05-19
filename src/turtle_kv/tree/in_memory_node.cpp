@@ -599,17 +599,6 @@ Status InMemoryNode::make_child_viable(BatchUpdateContext& update_context, i32 p
         return batt::StatusCode::kUnimplemented;
       });
 
-#if 0
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-  // TODO [tastolfi 2025-05-04] REMOVE
-  for (i32 child_i = 0; child_i < (i32)this->pivot_count(); ++child_i) {
-    BATT_CHECK(!batt::is_case<NeedsSplit>(this->children[child_i].get_viability()))
-        << BATT_INSPECT(pivot_i) << BATT_INSPECT(child_i) << BATT_INSPECT(tried_split)
-        << BATT_INSPECT(tried_flush) << BATT_INSPECT(this->children[child_i].get_viability());
-  }
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-#endif
-
   return status;
 }
 
@@ -823,8 +812,6 @@ void InMemoryNode::squash_empty_levels()
 //
 MaxPendingBytes InMemoryNode::find_max_pending() const
 {
-  // TODO [tastolfi 2021-09-01] use parallel_accumulate here?
-  //
   const auto first_pending = this->pending_bytes.begin();
   const auto last_pending = this->pending_bytes.end();
   const auto max_pending = std::max_element(first_pending, last_pending);
@@ -1485,6 +1472,62 @@ StatusOr<SegmentedLevel> MergedLevel::finish_serialize(const InMemoryNode& node,
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+void InMemoryNode::UpdateBuffer::SegmentedLevel::drop_segment(usize i)
+{
+  this->segments.erase(this->segments.begin() + i);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void InMemoryNode::UpdateBuffer::SegmentedLevel::drop_pivot_range(const Interval<i32>& pivot_range)
+{
+  for (Segment& segment : this->segments) {
+    in_segment(segment).drop_pivot_range(pivot_range);
+    if (pivot_range.lower_bound == 0) {
+      segment.pop_front_pivots(pivot_range.upper_bound);
+    }
+  }
+
+  this->segments.erase(std::remove_if(this->segments.begin(),
+                                      this->segments.end(),
+                                      [](const Segment& segment) {
+                                        return segment.is_inactive();
+                                      }),
+                       this->segments.end());
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void InMemoryNode::UpdateBuffer::SegmentedLevel::drop_before_pivot(i32 pivot_i,
+                                                                   const KeyView& pivot_key
+                                                                   [[maybe_unused]])
+{
+  this->drop_pivot_range(Interval<i32>{0, pivot_i});
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void InMemoryNode::UpdateBuffer::SegmentedLevel::drop_after_pivot(i32 pivot_i,
+                                                                  const KeyView& pivot_key
+                                                                  [[maybe_unused]])
+{
+  this->drop_pivot_range(Interval<i32>{pivot_i, 64});
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+bool InMemoryNode::UpdateBuffer::SegmentedLevel::is_pivot_active(i32 pivot_i) const
+{
+  for (const Segment& segment : this->segments) {
+    if (segment.is_pivot_active(pivot_i)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 void InMemoryNode::UpdateBuffer::SegmentedLevel::check_items_sorted(
     const InMemoryNode& node,
     llfs::PageLoader& page_loader) const
@@ -1517,6 +1560,194 @@ void InMemoryNode::UpdateBuffer::SegmentedLevel::check_items_sorted(
       item_i += slice_impl.size();
     });
   }
+}
+
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void InMemoryNode::UpdateBuffer::Segment::check_invariants(const char* file, int line) const
+{
+  // Make sure the flushed pivots bit set and flushed_item_upper_bound (non-zero values) are in
+  // sync.
+  //
+  BATT_CHECK_EQ(this->flushed_item_upper_bound_.size(), bit_count(this->flushed_pivots))
+      << BATT_INSPECT(file) << BATT_INSPECT(line);
+
+  // There should be no inactive pivots with a flushed upper bound.
+  //
+  BATT_CHECK_EQ(((~this->active_pivots) & this->flushed_pivots), u64{0})
+      << BATT_INSPECT(file) << BATT_INSPECT(line);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+u32 InMemoryNode::UpdateBuffer::Segment::get_flushed_item_upper_bound(const SegmentedLevel&,
+                                                                      i32 pivot_i) const
+{
+  if (!get_bit(this->flushed_pivots, pivot_i)) {
+    return 0;
+  }
+
+  const i32 index = bit_rank(this->flushed_pivots, pivot_i);
+  BATT_ASSERT_GE(index, 0);
+  BATT_ASSERT_LT(index, this->flushed_item_upper_bound_.size());
+
+  return this->flushed_item_upper_bound_[index];
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void InMemoryNode::UpdateBuffer::Segment::set_flushed_item_upper_bound(i32 pivot_i, u32 upper_bound)
+{
+  this->check_invariants(__FILE__, __LINE__);
+  auto on_scope_exit = batt::finally([&] {
+    this->check_invariants(__FILE__, __LINE__);
+  });
+
+  if (!get_bit(this->flushed_pivots, pivot_i)) {
+    if (upper_bound == 0) {
+      return;
+    }
+    this->flushed_pivots = set_bit(this->flushed_pivots, pivot_i, true);
+
+    const i32 index = bit_rank(this->flushed_pivots, pivot_i);
+    BATT_ASSERT_GE(index, 0);
+
+    this->flushed_item_upper_bound_.insert(this->flushed_item_upper_bound_.begin() + index,
+                                           upper_bound);
+
+    BATT_ASSERT_LT(index, this->flushed_item_upper_bound_.size());
+
+  } else {
+    const i32 index = bit_rank(this->flushed_pivots, pivot_i);
+    BATT_ASSERT_GE(index, 0);
+    BATT_ASSERT_LT(index, this->flushed_item_upper_bound_.size());
+
+    if (upper_bound != 0) {
+      this->flushed_item_upper_bound_[index] = upper_bound;
+    } else {
+      this->flushed_item_upper_bound_.erase(this->flushed_item_upper_bound_.begin() + index);
+      this->flushed_pivots = set_bit(this->flushed_pivots, pivot_i, false);
+    }
+  }
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void InMemoryNode::UpdateBuffer::Segment::insert_pivot(i32 pivot_i, bool is_active)
+{
+  this->check_invariants(__FILE__, __LINE__);
+  auto on_scope_exit = batt::finally([&] {
+    this->check_invariants(__FILE__, __LINE__);
+  });
+
+  this->active_pivots = insert_bit(this->active_pivots, pivot_i, is_active);
+  this->flushed_pivots = insert_bit(this->flushed_pivots, pivot_i, false);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void InMemoryNode::UpdateBuffer::Segment::pop_front_pivots(i32 count)
+{
+  if (count < 1) {
+    return;
+  }
+
+  // Before we modify the bit sets, make sure we aren't losing any active/flushed pivots.
+  //
+  const u64 mask = (u64{1} << count) - 1;
+
+  BATT_CHECK_EQ(bit_count(mask), count);
+  BATT_CHECK_EQ((this->active_pivots & mask), u64{0});
+  BATT_CHECK_EQ((this->flushed_pivots & mask), u64{0});
+
+  // Shift both active and flushed pivot sets down by count.  We don't need to touch
+  // flushed_item_upper_bound_ since getting rid of low-order zero bits doesn't change any
+  // bit_rank calculations for flushed pivots.
+  //
+  this->active_pivots = (this->active_pivots >> count);
+  this->flushed_pivots = (this->flushed_pivots >> count);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+bool InMemoryNode::UpdateBuffer::Segment::is_inactive() const
+{
+  const bool inactive = (this->active_pivots == 0);
+  if (inactive) {
+    BATT_CHECK_EQ(this->flushed_pivots, 0);
+    BATT_CHECK(this->flushed_item_upper_bound_.empty());
+  }
+  return inactive;
+}
+
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+SmallFn<void(std::ostream&)> InMemoryNode::UpdateBuffer::dump() const
+{
+  return [this](std::ostream& out) {
+    out << "UpdateBuffer{.levels={\n";
+    for (const Level& level : levels) {
+      batt::case_of(level, [&out](const auto& level_case) {
+        out << "  " << level_case.dump() << ",\n";
+      });
+    }
+    out << "},}";
+  };
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+SmallFn<void(std::ostream&)> InMemoryNode::UpdateBuffer::EmptyLevel::dump() const
+{
+  return [](std::ostream& out) {
+    out << "EmptyLevel{}";
+  };
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+SmallFn<void(std::ostream&)> InMemoryNode::UpdateBuffer::MergedLevel::dump() const
+{
+  return [this](std::ostream& out) {
+    out << "MergedLevel{" << this->result_set.debug_dump("    ") << "\n}";
+  };
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+SmallFn<void(std::ostream&)> InMemoryNode::UpdateBuffer::SegmentedLevel::dump() const
+{
+  return [this](std::ostream& out) {
+    out << "SegmentedLevel{\n";
+    for (const Segment& segment : this->segments) {
+      out << "    " << segment.dump(/*multi_line=*/false) << ",\n";
+    }
+    out << "  }";
+  };
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+SmallFn<void(std::ostream&)> InMemoryNode::UpdateBuffer::Segment::dump(bool multi_line) const
+{
+  return [this, multi_line](std::ostream& out) {
+    auto active = std::bitset<64>{this->active_pivots};
+    auto flushed = std::bitset<64>{this->flushed_pivots};
+    auto flushed_bounds = batt::dump_range(this->flushed_item_upper_bound_);
+    if (multi_line) {
+      out << "Segment:" << std::endl
+          << "   active=" << active << std::endl
+          << "  flushed=" << flushed << std::endl
+          << "  flushed_upper_bounds=" << flushed_bounds;
+    } else {
+      out << "Segment{.active=" << active << ", .flushed=" << flushed
+          << ", .flushed_upper_bounds=" << flushed_bounds << ",}";
+    }
+  };
 }
 
 }  // namespace turtle_kv

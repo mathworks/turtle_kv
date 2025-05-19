@@ -31,6 +31,8 @@ namespace turtle_kv {
 struct InMemoryNode {
   using Self = InMemoryNode;
 
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
   struct Metrics {
     StatsMetric<u16> level_depth_stats;
   };
@@ -41,11 +43,21 @@ struct InMemoryNode {
     return metrics_;
   }
 
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+  //
+  /** \brief Mutable, in-memory representation of a node update buffer.
+   */
   struct UpdateBuffer {
     using Self = UpdateBuffer;
 
     struct SegmentedLevel;
 
+    //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+    //
+    /** \brief Mutable, in-memory representation of a serialized buffer segment (one leaf page).
+     */
     struct Segment {
       using Self = Segment;
 
@@ -68,102 +80,93 @@ struct InMemoryNode {
 
       //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-      void check_invariants(const char* file, int line) const;
-
-      auto dump(bool multi_line = true) const
-      {
-        return [this, multi_line](std::ostream& out) {
-          auto active = std::bitset<64>{this->active_pivots};
-          auto flushed = std::bitset<64>{this->flushed_pivots};
-          auto flushed_bounds = batt::dump_range(this->flushed_item_upper_bound_);
-          if (multi_line) {
-            out << "Segment:" << std::endl
-                << "   active=" << active << std::endl
-                << "  flushed=" << flushed << std::endl
-                << "  flushed_upper_bounds=" << flushed_bounds;
-          } else {
-            out << "Segment{.active=" << active << ", .flushed=" << flushed
-                << ", .flushed_upper_bounds=" << flushed_bounds << ",}";
-          }
-        };
-      }
-
+      /** \brief Returns a reference to the PageId of this segment's leaf page, plus weak reference
+       * to its cache slot (if known).
+       */
       const llfs::PageIdSlot& get_leaf_page_id() const
       {
         return this->page_id_slot;
       }
 
-      u32 get_flushed_item_upper_bound(const SegmentedLevel&, i32 pivot_i) const;
-
-      void set_flushed_item_upper_bound(i32 pivot_i, u32 upper_bound);
-
+      /** \brief Returns the active pivots bit set.
+       */
       u64 get_active_pivots() const
       {
         return this->active_pivots;
       }
 
+      /** \brief Returns the bit set of pivots with a non-zero flushed item upper bound in this
+       * segment.
+       */
       u64 get_flushed_pivots() const
       {
         return this->flushed_pivots;
       }
 
+      /** \brief Marks this segment as containing (or not) active keys addressed to `pivot_i`.
+       */
       void set_pivot_active(i32 pivot_i, bool active)
       {
         this->active_pivots = set_bit(this->active_pivots, pivot_i, active);
       }
 
+      /** \brief Returns true iff this segment has active keys addressed to `pivot_i`.
+       */
       bool is_pivot_active(i32 pivot_i) const
       {
         return get_bit(this->active_pivots, pivot_i);
       }
 
-      void insert_pivot(i32 pivot_i, bool is_active)
-      {
-        this->check_invariants(__FILE__, __LINE__);
-        auto on_scope_exit = batt::finally([&] {
-          this->check_invariants(__FILE__, __LINE__);
-        });
+      //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-        this->active_pivots = insert_bit(this->active_pivots, pivot_i, is_active);
-        this->flushed_pivots = insert_bit(this->flushed_pivots, pivot_i, false);
-      }
+      /** \brief Panic if the following invariants are not satisfied:
+       *
+       * 1. The size of this->flushed_item_upper_bound_ is equal to the number of 1 bits in
+       *    this->flushed_pivots
+       * 2. There are no pivots marked as flushed and inactive.
+       */
+      void check_invariants(const char* file, int line) const;
 
-      void pop_front_pivots(i32 count)
-      {
-        if (count < 1) {
-          return;
-        }
+      /** \brief Returns the item index within the segment leaf page of the first unflushed key
+       * addressed to `pivot_i`, or 0 if there are no flushed keys for the given pivot.
+       */
+      u32 get_flushed_item_upper_bound(const SegmentedLevel&, i32 pivot_i) const;
 
-        // Before we modify the bit sets, make sure we aren't losing any active/flushed pivots.
-        //
-        const u64 mask = (u64{1} << count) - 1;
+      /** \brief Marks all keys whose index within the segment leaf page is less than `upper_bound`
+       * as flushed for `pivot_i`.
+       *
+       * Should only be called by SegmentAlgorithms or SegmentedLevelAlgorithms.
+       */
+      void set_flushed_item_upper_bound(i32 pivot_i, u32 upper_bound);
 
-        BATT_CHECK_EQ(bit_count(mask), count);
-        BATT_CHECK_EQ((this->active_pivots & mask), u64{0});
-        BATT_CHECK_EQ((this->flushed_pivots & mask), u64{0});
+      /** \brief Inserts a new pivot bit in this->active_pivots and this->flushed_pivots at position
+       * `pivot_i`.  This is called when a child subtree needs to be split.
+       */
+      void insert_pivot(i32 pivot_i, bool is_active);
 
-        // Shift both active and flushed pivot sets down by count.  We don't need to touch
-        // flushed_item_upper_bound_ since getting rid of low-order zero bits doesn't change any
-        // bit_rank calculations for flushed pivots.
-        //
-        this->active_pivots = (this->active_pivots >> count);
-        this->flushed_pivots = (this->flushed_pivots >> count);
-      }
+      /** \brief Removes the specified number (`count`) pivots from the front of this segment.  This
+       * is used while splitting a node's update buffer.
+       */
+      void pop_front_pivots(i32 count);
 
-      bool is_inactive() const
-      {
-        const bool inactive = (this->active_pivots == 0);
-        if (inactive) {
-          BATT_CHECK_EQ(this->flushed_pivots, 0);
-          BATT_CHECK(this->flushed_item_upper_bound_.empty());
-        }
-        return inactive;
-      }
+      /** \brief Returns true iff this segment is not active for any pivots.
+       */
+      bool is_inactive() const;
 
+      /** \brief Loads the leaf page for this Segment, returning the resulting llfs::PinnedPage.
+       */
       StatusOr<llfs::PinnedPage> load_leaf_page(llfs::PageLoader& page_loader,
                                                 llfs::PinPageToJob pin_page_to_job) const;
+
+      /** \brief Prints a human-readable representation of this Segment.
+       */
+      SmallFn<void(std::ostream&)> dump(bool multi_line = true) const;
     };
 
+    //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+    //
+    /** \brief An empty update buffer level.
+     */
     struct EmptyLevel {
       using Self = EmptyLevel;
 
@@ -179,14 +182,13 @@ struct InMemoryNode {
         // Nothing to do!
       }
 
-      auto dump() const
-      {
-        return [](std::ostream& out) {
-          out << "EmptyLevel{}";
-        };
-      }
+      SmallFn<void(std::ostream&)> dump() const;
     };
 
+    //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+    //
+    /** \brief Mutable, in-memory representation of a non-empty serialized update buffer level.
+     */
     struct SegmentedLevel {
       using Self = SegmentedLevel;
       using Segment = InMemoryNode::UpdateBuffer::Segment;
@@ -222,62 +224,52 @@ struct InMemoryNode {
         return as_const_slice(this->segments);
       }
 
-      void drop_segment(usize i)
-      {
-        this->segments.erase(this->segments.begin() + i);
-      }
+      //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-      void drop_pivot_range(const Interval<i32>& pivot_range)
-      {
-        for (Segment& segment : this->segments) {
-          in_segment(segment).drop_pivot_range(pivot_range);
-          if (pivot_range.lower_bound == 0) {
-            segment.pop_front_pivots(pivot_range.upper_bound);
-          }
-        }
+      /** \brief Removes the specified segment from this level.
+       *
+       * Should only be called by SegmentedLevelAlgorithms::flush_pivot_up_to_key.
+       */
+      void drop_segment(usize i);
 
-        this->segments.erase(std::remove_if(this->segments.begin(),
-                                            this->segments.end(),
-                                            [](const Segment& segment) {
-                                              return segment.is_inactive();
-                                            }),
-                             this->segments.end());
-      }
+      /** \brief Removes the specified set of pivots from this level.
+       *
+       * Used to implement node splits.
+       */
+      void drop_pivot_range(const Interval<i32>& pivot_range);
 
-      void drop_before_pivot(i32 pivot_i, const KeyView& pivot_key [[maybe_unused]])
-      {
-        this->drop_pivot_range(Interval<i32>{0, pivot_i});
-      }
+      /** \brief Drops all pivots before (but not including) the specified pivot.
+       *
+       * The `pivot_key` parameter is ignored.
+       */
+      void drop_before_pivot(i32 pivot_i, const KeyView& pivot_key [[maybe_unused]]);
 
-      void drop_after_pivot(i32 pivot_i, const KeyView& pivot_key [[maybe_unused]])
-      {
-        this->drop_pivot_range(Interval<i32>{pivot_i, 64});
-      }
+      /** \brief Drops all pivots after (and including) the specified pivot.
+       *
+       * The `pivot_key` parameter is ignored.
+       */
+      void drop_after_pivot(i32 pivot_i, const KeyView& pivot_key [[maybe_unused]]);
 
-      bool is_pivot_active(i32 pivot_i) const
-      {
-        for (const Segment& segment : this->segments) {
-          if (segment.is_pivot_active(pivot_i)) {
-            return true;
-          }
-        }
-        return false;
-      }
+      /** \brief Returns true iff the specified pivot is active for any of the Segments in this
+       * level.
+       */
+      bool is_pivot_active(i32 pivot_i) const;
 
+      /** \brief Verifies that all items appear in this level in key-sorted order; panic if this is
+       * not the case.
+       *
+       * Warning: This is a very expensive operation!  Do not call it on a performance-critical code
+       * path.
+       */
       void check_items_sorted(const InMemoryNode& node, llfs::PageLoader& page_loader) const;
 
-      SmallFn<void(std::ostream&)> dump() const
-      {
-        return [this](std::ostream& out) {
-          out << "SegmentedLevel{\n";
-          for (const Segment& segment : this->segments) {
-            out << "    " << segment.dump(/*multi_line=*/false) << ",\n";
-          }
-          out << "  }";
-        };
-      }
+      /** \brief Prints a human-readable representation of the level.
+       */
+      SmallFn<void(std::ostream&)> dump() const;
     };
 
+    //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+    //
     struct MergedLevel {
       using Self = MergedLevel;
 
@@ -333,12 +325,7 @@ struct InMemoryNode {
       StatusOr<SegmentedLevel> finish_serialize(const InMemoryNode& node,
                                                 TreeSerializeContext& context);
 
-      auto dump() const
-      {
-        return [this](std::ostream& out) {
-          out << "MergedLevel{" << this->result_set.debug_dump("    ") << "\n}";
-        };
-      }
+      SmallFn<void(std::ostream&)> dump() const;
     };
 
     using Level = std::variant<EmptyLevel, MergedLevel, SegmentedLevel>;
@@ -349,25 +336,7 @@ struct InMemoryNode {
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-    SmallFn<void(std::ostream&)> dump() const
-    {
-      return [this](std::ostream& out) {
-        out << "UpdateBuffer{.levels={\n";
-        for (const Level& level : levels) {
-          batt::case_of(level, [&out](const auto& level_case) {
-            out << "  " << level_case.dump() << ",\n";
-          });
-        }
-        out << "},}";
-      };
-    }
-  };
-
-  struct PivotPendingBytes {
-    using Self = PivotPendingBytes;
-
-    usize pivot_index;
-    usize pending_bytes;
+    SmallFn<void(std::ostream&)> dump() const;
   };
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -573,91 +542,5 @@ struct InMemoryNode {
 };
 
 //=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-inline void InMemoryNode::UpdateBuffer::Segment::check_invariants(const char* file, int line) const
-{
-  // Make sure the flushed pivots bit set and flushed_item_upper_bound (non-zero values) are in
-  // sync.
-  //
-  BATT_CHECK_EQ(this->flushed_item_upper_bound_.size(), bit_count(this->flushed_pivots))
-      << BATT_INSPECT(file) << BATT_INSPECT(line);
-
-  // There should be no inactive pivots with a flushed upper bound.
-  //
-  BATT_CHECK_EQ(((~this->active_pivots) & this->flushed_pivots), u64{0})
-      << BATT_INSPECT(file) << BATT_INSPECT(line);
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-inline u32 InMemoryNode::UpdateBuffer::Segment::get_flushed_item_upper_bound(const SegmentedLevel&,
-                                                                             i32 pivot_i) const
-{
-  if (!get_bit(this->flushed_pivots, pivot_i)) {
-    return 0;
-  }
-
-  const i32 index = bit_rank(this->flushed_pivots, pivot_i);
-  //----- --- -- -  -  -   -
-  // TODO [tastolfi 2025-03-23] Remove these checks once we are convinced this is correct.
-  //
-  BATT_CHECK_GE(index, 0);
-  BATT_CHECK_LT(index, this->flushed_item_upper_bound_.size());
-  //----- --- -- -  -  -   -
-
-  return this->flushed_item_upper_bound_[index];
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-inline void InMemoryNode::UpdateBuffer::Segment::set_flushed_item_upper_bound(i32 pivot_i,
-                                                                              u32 upper_bound)
-{
-  this->check_invariants(__FILE__, __LINE__);
-  auto on_scope_exit = batt::finally([&] {
-    this->check_invariants(__FILE__, __LINE__);
-  });
-
-  if (!get_bit(this->flushed_pivots, pivot_i)) {
-    if (upper_bound == 0) {
-      return;
-    }
-    this->flushed_pivots = set_bit(this->flushed_pivots, pivot_i, true);
-
-    const i32 index = bit_rank(this->flushed_pivots, pivot_i);
-    //----- --- -- -  -  -   -
-    // TODO [tastolfi 2025-03-23] Remove these checks once we are convinced this is correct.
-    //
-    BATT_CHECK_GE(index, 0);
-    //----- --- -- -  -  -   -
-
-    this->flushed_item_upper_bound_.insert(this->flushed_item_upper_bound_.begin() + index,
-                                           upper_bound);
-
-    //----- --- -- -  -  -   -
-    // TODO [tastolfi 2025-03-23] Remove these checks once we are convinced this is correct.
-    //
-    BATT_CHECK_LT(index, this->flushed_item_upper_bound_.size());
-    //----- --- -- -  -  -   -
-
-  } else {
-    const i32 index = bit_rank(this->flushed_pivots, pivot_i);
-    //----- --- -- -  -  -   -
-    // TODO [tastolfi 2025-03-23] Remove these checks once we are convinced this is correct.
-    //
-    BATT_CHECK_GE(index, 0);
-    BATT_CHECK_LT(index, this->flushed_item_upper_bound_.size());
-    //----- --- -- -  -  -   -
-
-    if (upper_bound != 0) {
-      this->flushed_item_upper_bound_[index] = upper_bound;
-    } else {
-      this->flushed_item_upper_bound_.erase(this->flushed_item_upper_bound_.begin() + index);
-      this->flushed_pivots = set_bit(this->flushed_pivots, pivot_i, false);
-    }
-  }
-}
 
 }  // namespace turtle_kv

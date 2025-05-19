@@ -1,6 +1,8 @@
 #include <turtle_kv/change_log_block.hpp>
 //
 
+#include <llfs/page_cache_slot.hpp>
+
 #include <xxhash.h>
 
 #include <pcg_random.hpp>
@@ -46,6 +48,8 @@ namespace turtle_kv {
   this->slots_rbegin()->offset = sizeof(ChangeLogBlock);
 
   this->check_buffer_invariant();
+
+  llfs::PageCacheSlot::Pool::Metrics::instance().admit_byte_count.add(this->block_size_);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -54,6 +58,8 @@ ChangeLogBlock::~ChangeLogBlock() noexcept
 {
   this->magic_ = ChangeLogBlock::kExpired;
   this->ephemeral_state_ptr().~EphemeralStatePtr();
+
+  llfs::PageCacheSlot::Pool::Metrics::instance().evict_byte_count.add(this->block_size_);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
