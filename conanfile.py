@@ -52,13 +52,13 @@ class TurtleKvRecipe(ConanFile):
         OVERRIDE = self.cor.OVERRIDE
 
         self.requires("abseil/20250127.0", **VISIBLE, **OVERRIDE)
-        self.requires("batteries/0.58.1-devel", **VISIBLE, **OVERRIDE)
+        self.requires("batteries/[>=0.59.0 <1]", **VISIBLE, **OVERRIDE)
         self.requires("boost/1.85.0", **VISIBLE, **OVERRIDE)
         self.requires("glog/[>=0.7.0]", **VISIBLE)
         self.requires("gperftools/[>=2.16]", **VISIBLE)
-        self.requires("llfs/0.41.1-devel", **VISIBLE)
+        self.requires("llfs/[>=0.41.2 <1]", **VISIBLE)
         self.requires("pcg-cpp/[>=cci.20220409]", **VISIBLE)
-        self.requires("vqf/0.2.3-devel", **VISIBLE)
+        self.requires("vqf/[>=0.2.3 <1]", **VISIBLE)
         self.requires("zlib/[>=1.3]", **OVERRIDE)
 
         if platform.system() == "Linux":
