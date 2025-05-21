@@ -87,7 +87,7 @@ void MemTableOrderedIndex::insert(std::string_view key)
 
   usize prefix_length = 0;
   Hasher hasher{Self::kHashSeed};
-  u64 hash_val = hasher();
+  u64 hash_val = hasher.get();
   Bucket* bucket = &this->root_;
   u64 observed_state = bucket->state.load();
 
