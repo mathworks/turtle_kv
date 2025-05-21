@@ -5,7 +5,7 @@ import os, sys, platform
 class TurtleKvRecipe(ConanFile):
     name = "turtle_kv"
 
-    python_requires = "cor_recipe_utils/0.9.0"
+    python_requires = "cor_recipe_utils/0.10.0"
     python_requires_extend = "cor_recipe_utils.ConanFileBase"
 
     tool_requires = [
@@ -68,12 +68,12 @@ class TurtleKvRecipe(ConanFile):
 
         self.test_requires("gtest/[>=1.14.0 <2]")
 
-    #def configure(self):
-    #    self.options["gtest"].shared = False
-    #    self.options["boost"].shared = False
-    #    self.options["boost"].without_test = True
-    #    self.options["batteries"].with_glog = True
-    #    self.options["batteries"].header_only = False
+    def configure(self):
+        self.options["gtest"].shared = False
+        self.options["boost"].shared = False
+        self.options["boost"].without_test = True
+        self.options["batteries"].with_glog = True
+        self.options["batteries"].header_only = False
 
     #+++++++++++-+-+--+----- --- -- -  -  -   -
 
