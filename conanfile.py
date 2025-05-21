@@ -51,22 +51,22 @@ class TurtleKvRecipe(ConanFile):
         VISIBLE = self.cor.VISIBLE
         OVERRIDE = self.cor.OVERRIDE
 
-        self.requires("abseil/20250127.0", **VISIBLE, **OVERRIDE)
+        self.requires("abseil/[>=20250127.0]", **VISIBLE, **OVERRIDE)
         self.requires("batteries/[>=0.59.0 <1]", **VISIBLE, **OVERRIDE)
-        self.requires("boost/1.85.0", **VISIBLE, **OVERRIDE)
-        self.requires("glog/[>=0.7.0]", **VISIBLE)
-        self.requires("gperftools/[>=2.16]", **VISIBLE)
+        self.requires("boost/[>=1.85.0 <2]", **VISIBLE, **OVERRIDE)
+        self.requires("glog/[>=0.7.0 <1]", **VISIBLE)
+        self.requires("gperftools/[>=2.16 <3]", **VISIBLE)
         self.requires("llfs/[>=0.41.2 <1]", **VISIBLE)
         self.requires("pcg-cpp/[>=cci.20220409]", **VISIBLE)
         self.requires("vqf/[>=0.2.3 <1]", **VISIBLE)
-        self.requires("zlib/[>=1.3]", **OVERRIDE)
+        self.requires("zlib/[>=1.3 <2]", **OVERRIDE)
 
         if platform.system() == "Linux":
-            self.requires("libfuse/[>=3.16.2]", **VISIBLE)
-            self.requires("libunwind/[>=1.7.2]", **VISIBLE)
-            self.requires("liburing/[>=2.4]", **VISIBLE)
+            self.requires("libfuse/[>=3.16.2 <4]", **VISIBLE)
+            self.requires("libunwind/[>=1.7.2 <2]", **VISIBLE)
+            self.requires("liburing/[>=2.4 <3]", **VISIBLE)
 
-        self.test_requires("gtest/[>=1.14.0]")
+        self.test_requires("gtest/[>=1.14.0 <2]")
 
     #def configure(self):
     #    self.options["gtest"].shared = False
