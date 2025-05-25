@@ -20,7 +20,7 @@ namespace turtle_kv {
 
 inline u64 get_key_hash_val(const std::string_view& key)
 {
-  return absl::container_internal::hash_default_hash<std::string_view>{}(key);
+  return absl::container_internal::hash_default_hash<std::string_view>{}(key) | 1;
 }
 
 struct PackedValueUpdate {
@@ -162,9 +162,15 @@ inline u64 get_key_hash_val(const MemTableEntryInserter<StorageT>& i) noexcept
 class MemTableEntry
 {
  public:
+  using Self = MemTableEntry;
+
   MemTableEntry() = default;
+
   MemTableEntry(MemTableEntry&&) = default;
   MemTableEntry& operator=(MemTableEntry&&) = default;
+
+  MemTableEntry(const MemTableEntry&) = default;
+  MemTableEntry& operator=(const MemTableEntry&) = default;
 
   template <typename StorageT>
   explicit MemTableEntry(MemTableEntryInserter<StorageT>& i) noexcept
@@ -174,6 +180,18 @@ class MemTableEntry
       , base_locator_{this->locator_}
       , revision_{0}
   {
+  }
+
+  template <typename StorageT>
+  Self& assign(MemTableEntryInserter<StorageT>& i)
+  {
+    this->key_ = i.store_insert();
+    this->value_ = i.stored_value;
+    this->locator_ = i.stored_locator;
+    this->base_locator_ = this->locator_;
+    this->revision_ = 0;
+
+    return *this;
   }
 
   template <typename StorageT>
