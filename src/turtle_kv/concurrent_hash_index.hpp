@@ -77,7 +77,8 @@ class ConcurrentHashIndex
      * again.
      */
     template <typename StorageT>
-    [[nodiscard]] bool write(MemTableEntryInserter<StorageT>& inserter)
+    [[nodiscard]] bool write(MemTableEntryInserter<StorageT>& inserter,
+                             std::atomic<usize>& size_out)
     {
       // IMPORTANT!  We must hold the lock in order to modify this bucket.
       //
@@ -97,6 +98,7 @@ class ConcurrentHashIndex
       if (observed_hash_val == 0) {
         this->hash_val.store(inserter.hash_val);
         this->entry.assign(inserter);
+        size_out.fetch_add(1);
         return true;
       }
 
@@ -173,6 +175,10 @@ class ConcurrentHashIndex
    */
   std::vector<Slice<Bucket>> buckets_;
 
+  /** \brief The number of unique keys in this index.
+   */
+  std::atomic<usize> size_{0};
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   /** \brief Constructs a new hash index with the given number of buckets in the primary tier.
@@ -189,30 +195,27 @@ class ConcurrentHashIndex
     std::memset((void*)this->bucket_storage_.back().get(), 0, sizeof(Bucket) * n_buckets);
   }
 
-  template <typename StorageT>
-  Status insert(MemTableEntryInserter<StorageT>& inserter)
+  usize size() const
   {
-    Status status;
-
-    this->probe(inserter.hash_val, [&inserter, &status](Bucket& bucket) -> bool {
-      if (bucket.is_writable(inserter.hash_val)) {
-        if (bucket.write(inserter)) {
-          status = OkStatus();
-          return true;
-        }
-        //
-        // else - go to the next bucket and retry.
-
-        return false;
-      }
-    });
-
-    return status;
+    return this->size_.load();
   }
 
-  StatusOr<ValueView> find_key(const KeyView& key)
+  template <typename StorageT>
+  void insert(MemTableEntryInserter<StorageT>& inserter)
   {
-    StatusOr<ValueView> result;
+    this->probe(inserter.hash_val, [&inserter, this](Bucket& bucket) -> bool {
+      if (bucket.is_writable(inserter.hash_val)) {
+        if (bucket.write(inserter, this->size_)) {
+          return true;
+        }
+      }  // else - go to the next bucket and retry.
+      return false;
+    });
+  }
+
+  Optional<ValueView> find_key(const KeyView& key)
+  {
+    Optional<ValueView> result;
 
     const u64 key_hash_val = get_key_hash_val(key);
 
@@ -221,7 +224,7 @@ class ConcurrentHashIndex
       const u64 observed_hash_val = bucket.hash_val.load();
 
       if (observed_hash_val == 0) {
-        result = Status{batt::StatusCode::kNotFound};
+        result = None;
         return true;
       }
 
@@ -239,9 +242,20 @@ class ConcurrentHashIndex
     return result;
   }
 
+  template <typename EntryFn>
+  void for_each(EntryFn&& fn)
+  {
+    for (Bucket& bucket : this->buckets_.back()) {
+      if (bucket.hash_val != 0) {
+        fn(bucket.entry);
+      }
+    }
+  }
+
   template <typename BucketFn /* bool (Bucket&) */>
   void probe(u64 key_hash_val, BucketFn&& bucket_fn)
   {
+    usize depth = 0;
     usize bucket_i = this->bucket_from_hash_val_(key_hash_val);
     for (;;) {
       Bucket& bucket = this->buckets_.back()[bucket_i];
@@ -254,6 +268,9 @@ class ConcurrentHashIndex
       if (bucket_i == this->buckets_.back().size()) {
         bucket_i = 0;
       }
+
+      ++depth;
+      BATT_CHECK_LT(depth, 500);
     }
   }
 };
