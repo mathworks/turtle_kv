@@ -30,7 +30,7 @@ i32 get_n_shards_log2()
 /*explicit*/ MemTable::MemTable(usize max_byte_size, Optional<u64> id) noexcept
     : is_finalized_{false}
 #if TURTLE_KV_NEW_MEM_TABLE
-    , hash_index_{max_byte_size / 16}
+    , hash_index_{max_byte_size / 24}
 #else
     //+++++++++++-+-+--+----- --- -- -  -  -   -
     , n_shards_log2_{get_n_shards_log2()}

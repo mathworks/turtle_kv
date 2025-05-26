@@ -170,6 +170,23 @@ class KVStore : public Table
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
+  struct State : batt::RefCounted<State> {
+    mutable Optional<i64> last_epoch_;
+
+    boost::intrusive_ptr<MemTable> mem_table_;
+
+    std::vector<boost::intrusive_ptr<MemTable>> deltas_;
+
+    Checkpoint base_checkpoint_;
+
+    //----- --- -- -  -  -   -
+
+    ~State() noexcept
+    {
+      LOG(INFO) << "destroying State object: " << (void*)this;
+    }
+  };
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   explicit KVStore(batt::TaskScheduler& task_scheduler,
@@ -183,7 +200,7 @@ class KVStore : public Table
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  Status update_checkpoint(MemTable* observed_mem_table, u64 observed_mem_table_id) noexcept;
+  Status update_checkpoint(const State* observed_state);
 
   void info_task_main() noexcept;
 
@@ -199,6 +216,10 @@ class KVStore : public Table
   Status commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_job);
 
   void checkpoint_flush_thread_main();
+
+  void add_obsolete_state(const State* old_state);
+
+  void epoch_thread_main();
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -222,19 +243,15 @@ class KVStore : public Table
 
   std::unique_ptr<llfs::Volume> checkpoint_log_;
 
-  boost::intrusive_ptr<MemTable> mem_table_;  // ABSL_GUARDED_BY(base_checkpoint_mutex_);
-
   ObjectThreadStorage<KVStore::ThreadContext>::ScopedSlot per_thread_;
 
-  // Recent MemTables that have been compacted/finalized; newest=back, oldest=front.
-  //
-  std::vector<boost::intrusive_ptr<MemTable>> deltas_ ABSL_GUARDED_BY(base_checkpoint_mutex_);
+  std::atomic<i64> current_epoch_;
+
+  std::atomic<const State*> state_;
 
   batt::CpuCacheLineIsolated<batt::Watch<usize>> deltas_size_;
 
   std::shared_ptr<batt::Grant::Issuer> checkpoint_token_pool_;
-
-  Checkpoint base_checkpoint_ ABSL_GUARDED_BY(base_checkpoint_mutex_);
 
   KVStoreMetrics metrics_;
 
@@ -260,6 +277,14 @@ class KVStore : public Table
   usize checkpoint_batch_count_;
 
   //----- --- -- -  -  -   -
+  // Obsolete states.
+  //----- --- -- -  -  -   -
+
+  absl::Mutex obsolete_states_mutex_;
+
+  std::vector<boost::intrusive_ptr<const State>> obsolete_states_;
+
+  //----- --- -- -  -  -   -
   // Checkpoint Flush State.
   //----- --- -- -  -  -   -
 
@@ -270,6 +295,8 @@ class KVStore : public Table
   Optional<std::thread> checkpoint_update_thread_;
 
   Optional<std::thread> checkpoint_flush_thread_;
+
+  Optional<std::thread> epoch_thread_;
 };
 
 }  // namespace turtle_kv

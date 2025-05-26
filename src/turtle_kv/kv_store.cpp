@@ -330,19 +330,27 @@ u64 query_page_loader_reset_every_n()
     , checkpoint_distance_{this->runtime_options_.initial_checkpoint_distance}
     , checkpoint_log_{std::move(checkpoint_log)}
 
-    , mem_table_{new MemTable{
+    , current_epoch_{0}
+
+    , state_{[&] {
+      State* state = new State{};
+      state->mem_table_.reset(new MemTable{
           /*max_byte_size=*/this->tree_options_.leaf_data_size(),
           DeltaBatchId{1}.to_mem_table_id(),
-      }}
+      });
+      state->base_checkpoint_ = Checkpoint::empty_at_batch(DeltaBatchId::from_u64(0));
 
-    , deltas_{}
+      BATT_CHECK_EQ(state->use_count(), 0);
+      intrusive_ptr_add_ref(state);
+      BATT_CHECK_EQ(state->use_count(), 1);
+
+      return state;
+    }()}
 
     , deltas_size_{0}
 
     , checkpoint_token_pool_{std::make_shared<batt::Grant::Issuer>(
           /*max_concurrent_checkpoint_jobs=*/1)}
-
-    , base_checkpoint_{Checkpoint::empty_at_batch(DeltaBatchId::from_u64(0))}
 
     , info_task_{this->task_scheduler_.schedule_task(),
                  [this] {
@@ -353,11 +361,13 @@ u64 query_page_loader_reset_every_n()
     , checkpoint_generator_{this->worker_pool_,
                             this->tree_options_,
                             this->page_cache(),
-                            batt::make_copy(this->base_checkpoint_),
+                            batt::make_copy(this->state_.load()->base_checkpoint_),
                             *this->checkpoint_log_}
 
     , checkpoint_batch_count_{0}
 {
+  BATT_CHECK_EQ(this->state_.load()->use_count(), 1);
+
   this->tree_options_.set_trie_index_reserve_size(this->tree_options_.trie_index_reserve_size());
 
   BATT_CHECK_OK(KVStore::global_init());
@@ -389,6 +399,9 @@ u64 query_page_loader_reset_every_n()
       this->checkpoint_flush_thread_main();
     });
   }
+  this->epoch_thread_.emplace([this] {
+    this->epoch_thread_main();
+  });
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -397,6 +410,12 @@ KVStore::~KVStore() noexcept
 {
   this->halt();
   this->join();
+
+  const State* final_state = this->state_.exchange(nullptr);
+  if (final_state) {
+    BATT_CHECK_GT(final_state->use_count(), 0);
+    intrusive_ptr_release(final_state);
+  }
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -417,12 +436,19 @@ void KVStore::join()
   this->log_writer_->join();
   if (this->memtable_compact_thread_) {
     this->memtable_compact_thread_->join();
+    this->memtable_compact_thread_ = None;
   }
   if (this->checkpoint_update_thread_) {
     this->checkpoint_update_thread_->join();
+    this->checkpoint_update_thread_ = None;
   }
   if (this->checkpoint_flush_thread_) {
     this->checkpoint_flush_thread_->join();
+    this->checkpoint_flush_thread_ = None;
+  }
+  if (this->epoch_thread_) {
+    this->epoch_thread_->join();
+    this->epoch_thread_ = None;
   }
   this->info_task_.join();
 }
@@ -431,12 +457,13 @@ void KVStore::join()
 //
 Status KVStore::put(const KeyView& key, const ValueView& value) noexcept /*override*/
 {
-  boost::intrusive_ptr<MemTable> observed_mem_table = nullptr;
-  {
-    absl::ReaderMutexLock checkpoint_lock{&this->base_checkpoint_mutex_};
-    observed_mem_table = this->mem_table_;
-  }
+  const State* const observed_state = this->state_.load();
+  BATT_CHECK_GT(observed_state->use_count(), 0);
 
+  boost::intrusive_ptr<const State> pinned_state{observed_state};
+  BATT_CHECK_GT(observed_state->use_count(), 1);
+
+  MemTable* const observed_mem_table = observed_state->mem_table_.get();
   const u64 observed_mem_table_id = observed_mem_table->id();
 
   ChangeLogWriter::Context& log_writer_context =
@@ -445,7 +472,7 @@ Status KVStore::put(const KeyView& key, const ValueView& value) noexcept /*overr
   Status status = observed_mem_table->put(log_writer_context, key, value);
 
   if (status == batt::StatusCode::kResourceExhausted) {
-    BATT_REQUIRE_OK(this->update_checkpoint(observed_mem_table.get(), observed_mem_table_id));
+    BATT_REQUIRE_OK(this->update_checkpoint(observed_state));
 
     // Limit the number of deltas that can build up.
     //
@@ -469,14 +496,12 @@ Status KVStore::force_checkpoint()
     this->checkpoint_distance_.compare_exchange_strong(expected, saved_checkpoint_distance);
   });
 
-  boost::intrusive_ptr<MemTable> observed_mem_table = nullptr;
-  {
-    absl::ReaderMutexLock checkpoint_lock{&this->base_checkpoint_mutex_};
-    observed_mem_table = this->mem_table_;
-  }
+  const State* const observed_state = this->state_.load();
+  boost::intrusive_ptr<const State> pinned_state{observed_state};
+  boost::intrusive_ptr<MemTable> pinned_mem_table = observed_state->mem_table_;
+  BATT_CHECK_GT(pinned_state->use_count(), 1);
 
-  const u64 observed_mem_table_id = observed_mem_table->id();
-  BATT_REQUIRE_OK(this->update_checkpoint(observed_mem_table.get(), observed_mem_table_id));
+  BATT_REQUIRE_OK(this->update_checkpoint(observed_state));
 
   BATT_REQUIRE_OK(this->deltas_size_->await_true([this](usize n) {
     return n < 2;
@@ -513,13 +538,13 @@ void KVStore::reset_thread_context() noexcept
 //
 StatusOr<ValueView> KVStore::get(const KeyView& key) noexcept /*override*/
 {
-  absl::ReaderMutexLock checkpoint_lock{&this->base_checkpoint_mutex_};
+  const State* const observed_state = this->state_.load();
 
   // First check the current active MemTable.
   //
   Optional<ValueView> value = BATT_COLLECT_LATENCY_SAMPLE(batt::Every2ToTheConst<14>{},
                                                           this->metrics_.mem_table_get_latency,
-                                                          this->mem_table_->get(key));
+                                                          observed_state->mem_table_->get(key));
 
   if (value) {
     if (!value->needs_combine()) {
@@ -530,9 +555,10 @@ StatusOr<ValueView> KVStore::get(const KeyView& key) noexcept /*override*/
 
   // Second, check recently finalized MemTables (the deltas_ stack).
   //
-  for (usize i = this->deltas_.size(); i != 0;) {
+  const usize observed_deltas_size = observed_state->deltas_.size();
+  for (usize i = observed_deltas_size; i != 0;) {
     --i;
-    const boost::intrusive_ptr<MemTable>& delta = this->deltas_[i];
+    const boost::intrusive_ptr<MemTable>& delta = observed_state->deltas_[i];
 
     Optional<ValueView> delta_value = BATT_COLLECT_LATENCY_SAMPLE(batt::Every2ToTheConst<18>{},
                                                                   this->metrics_.delta_get_latency,
@@ -542,12 +568,12 @@ StatusOr<ValueView> KVStore::get(const KeyView& key) noexcept /*override*/
       if (value) {
         *value = combine(*value, *delta_value);
         if (!value->needs_combine()) {
-          this->metrics_.delta_log2_get_count[batt::log2_ceil(this->deltas_.size() - i)].add(1);
+          this->metrics_.delta_log2_get_count[batt::log2_ceil(observed_deltas_size - i)].add(1);
           return *value;
         }
       } else {
         if (!delta_value->needs_combine()) {
-          this->metrics_.delta_log2_get_count[batt::log2_ceil(this->deltas_.size() - i)].add(1);
+          this->metrics_.delta_log2_get_count[batt::log2_ceil(observed_deltas_size - i)].add(1);
           return *delta_value;
         }
         value = delta_value;
@@ -557,6 +583,7 @@ StatusOr<ValueView> KVStore::get(const KeyView& key) noexcept /*override*/
 
   // If we haven't resolved the query by this point, we must search the current checkpoint tree.
   //
+  boost::intrusive_ptr<const State> pinned_state{observed_state};
   ThreadContext& thread_context = this->per_thread_.get(this);
 
   ++thread_context.query_count;
@@ -585,7 +612,7 @@ StatusOr<ValueView> KVStore::get(const KeyView& key) noexcept /*override*/
   StatusOr<ValueView> value_from_checkpoint =
       BATT_COLLECT_LATENCY_SAMPLE(batt::Every2ToTheConst<12>{},
                                   this->metrics_.checkpoint_get_latency,
-                                  this->base_checkpoint_.find_key(query));
+                                  pinned_state->base_checkpoint_.find_key(query));
 
   if (value_from_checkpoint.ok()) {
     this->metrics_.checkpoint_get_count.add(1);
@@ -627,65 +654,86 @@ Status KVStore::remove(const KeyView& key) noexcept /*override*/
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status KVStore::update_checkpoint(MemTable* observed_mem_table, u64 observed_mem_table_id) noexcept
+Status KVStore::update_checkpoint(const State* observed_state)
 {
-  boost::intrusive_ptr<MemTable> old_mem_table = nullptr;
-  {
-    absl::WriterMutexLock checkpoint_lock{&this->base_checkpoint_mutex_};
+  // Gather some information from the current MemTable before we send it off.
+  //
+  boost::intrusive_ptr<MemTable> old_mem_table = observed_state->mem_table_;
+  const DeltaBatchId batch_id = DeltaBatchId::from_mem_table_id(old_mem_table->id());
+  const DeltaBatchId next_batch_id = batch_id.next();
 
-    if (observed_mem_table == this->mem_table_.get() &&
-        observed_mem_table_id == this->mem_table_->id()) {
-      // The current MemTable is done accepting new updates!
-      //
-      if (!this->mem_table_->finalize()) {
-        return OkStatus();
-      }
+  // Create a new state to replace the old.
+  //
+  State* new_state = new State{};
 
-      // Gather some information from the current MemTable before we send it off.
-      //
-      const DeltaBatchId batch_id = DeltaBatchId::from_mem_table_id(this->mem_table_->id());
-      const DeltaBatchId next_batch_id = batch_id.next();
+  BATT_CHECK_EQ(new_state->use_count(), 0);
+  intrusive_ptr_add_ref(new_state);
+  BATT_CHECK_EQ(new_state->use_count(), 1);
 
-      // Create a new MemTable to accept more updates.
-      //
-      old_mem_table = std::move(this->mem_table_);
+  new_state->mem_table_.reset(new MemTable{
+      /*max_byte_size=*/this->tree_options_.flush_size(),
+      next_batch_id.to_mem_table_id(),
+  });
 
-      this->mem_table_.reset(new MemTable{
-          /*max_byte_size=*/this->tree_options_.flush_size(),
-          next_batch_id.to_mem_table_id(),
-      });
+  for (;;) {
+    if (observed_state->mem_table_ != old_mem_table) {
+      BATT_CHECK_EQ(new_state->use_count(), 1);
+      intrusive_ptr_release(new_state);
+      return OkStatus();
+    }
 
-      // Add to deltas stack, for queries on recent data.
-      //
-      this->deltas_.emplace_back(old_mem_table);
-      this->deltas_size_->fetch_add(1);
+    new_state->deltas_ = observed_state->deltas_;
+    new_state->deltas_.emplace_back(observed_state->mem_table_);
+    new_state->base_checkpoint_ = observed_state->base_checkpoint_;
+
+    // Try to swap our new state object for the current one.
+    //
+    if (this->state_.compare_exchange_weak(observed_state, new_state)) {
+      break;
     }
   }
+  this->deltas_size_->fetch_add(1);
 
-  if (old_mem_table) {
-    const u64 this_mem_table_id = old_mem_table->id();
-    const u64 next_mem_table_id = MemTable::next_id_for(this_mem_table_id);
+  // Since we successfully exchanged the successor to `observed_state`, when this scope exits we
+  // must release the ref count once after adding the old state to the obsolete states list.
+  // Eventually it will be cleaned up by the epoch thread.
+  //
+  auto on_scope_exit = batt::finally([&] {
+    this->add_obsolete_state(observed_state);
+  });
 
-    while (this->next_mem_table_id_to_push_.load() != this_mem_table_id) {
-      batt::spin_yield();
-    }
+  // Finalize the old mem table and hand it off to be compacted, applied to checkpoint, etc.
+  //
+  const bool finalize_ok = old_mem_table->finalize();
+  BATT_CHECK(finalize_ok);
 
-    if (this->runtime_options_.use_threaded_checkpoint_pipeline) {
-      BATT_REQUIRE_OK(this->memtable_compact_channel_.write(std::move(old_mem_table)));
-
-    } else {
-      std::unique_ptr<DeltaBatch> delta_batch = this->compact_memtable(std::move(old_mem_table));
-
-      BATT_ASSIGN_OK_RESULT(std::unique_ptr<CheckpointJob> checkpoint_job,
-                            this->apply_batch_to_checkpoint(std::move(delta_batch)));
-
-      if (checkpoint_job) {
-        BATT_REQUIRE_OK(this->commit_checkpoint(std::move(checkpoint_job)));
-      }
-    }
-
-    this->next_mem_table_id_to_push_.store(next_mem_table_id);
+  // Wait for any previous MemTables to be consumed by the compactor task.
+  //
+  const u64 this_mem_table_id = old_mem_table->id();
+  const u64 next_mem_table_id = MemTable::next_id_for(this_mem_table_id);
+  while (this->next_mem_table_id_to_push_.load() != this_mem_table_id) {
+    batt::spin_yield();
   }
+
+  //----- --- -- -  -  -   -
+  if (this->runtime_options_.use_threaded_checkpoint_pipeline) {
+    BATT_REQUIRE_OK(this->memtable_compact_channel_.write(std::move(old_mem_table)));
+
+  } else {
+    std::unique_ptr<DeltaBatch> delta_batch = this->compact_memtable(std::move(old_mem_table));
+
+    BATT_ASSIGN_OK_RESULT(std::unique_ptr<CheckpointJob> checkpoint_job,
+                          this->apply_batch_to_checkpoint(std::move(delta_batch)));
+
+    if (checkpoint_job) {
+      BATT_REQUIRE_OK(this->commit_checkpoint(std::move(checkpoint_job)));
+    }
+  }
+  //----- --- -- -  -  -   -
+
+  // Signal to the next mem table, it is ok to push.
+  //
+  this->next_mem_table_id_to_push_.store(next_mem_table_id);
 
   return OkStatus();
 }
@@ -862,24 +910,47 @@ Status KVStore::commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_jo
   //
   Optional<llfs::slot_offset_type> prev_checkpoint_slot;
   {
-    absl::WriterMutexLock checkpoint_lock{&this->base_checkpoint_mutex_};
+    State* const new_state = new State{};
+
+    BATT_CHECK_EQ(new_state->use_count(), 0);
+    intrusive_ptr_add_ref(new_state);
+    BATT_CHECK_EQ(new_state->use_count(), 1);
+
+    new_state->base_checkpoint_ = std::move(*checkpoint_job->checkpoint);
+    new_state->base_checkpoint_.notify_durable(std::move(*slot_read_lock));
+
+    BATT_CHECK(new_state->base_checkpoint_.tree()->is_serialized());
+
+    const State* old_state = this->state_.load();
 
     // Save the old checkpoint's slot lower bound so we can trim to it later.
     //
-    Optional<llfs::SlotRange> prev_slot_range = this->base_checkpoint_.slot_range();
+    Optional<llfs::SlotRange> prev_slot_range = old_state->base_checkpoint_.slot_range();
     if (prev_slot_range) {
       prev_checkpoint_slot = prev_slot_range->lower_bound;
     }
 
-    this->base_checkpoint_ = std::move(*checkpoint_job->checkpoint);
-    this->base_checkpoint_.notify_durable(std::move(*slot_read_lock));
-
-    // Remove the deltas covered by the new base checkpoint.
+    // CAS-loop to update the state object.
     //
-    this->deltas_.erase(this->deltas_.begin(), this->deltas_.begin() + checkpoint_job->batch_count);
-    this->deltas_size_->fetch_sub(checkpoint_job->batch_count);
+    for (;;) {
+      if (old_state == new_state) {
+        break;
+      }
 
-    BATT_CHECK(this->base_checkpoint_.tree()->is_serialized());
+      new_state->mem_table_ = old_state->mem_table_;
+
+      // Remove the deltas covered by the new base checkpoint.
+      //
+      BATT_CHECK_LE(checkpoint_job->batch_count, old_state->deltas_.size());
+      new_state->deltas_.assign(old_state->deltas_.begin() + checkpoint_job->batch_count,
+                                old_state->deltas_.end());
+
+      if (this->state_.compare_exchange_weak(old_state, new_state)) {
+        break;
+      }
+    }
+    this->add_obsolete_state(old_state);
+    this->deltas_size_->fetch_sub(checkpoint_job->batch_count);
   }
 
   // Trim the checkpoint volume to free old pages.
@@ -889,6 +960,62 @@ Status KVStore::commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_jo
   }
 
   return OkStatus();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void KVStore::add_obsolete_state(const State* old_state)
+{
+  const i64 expires_at_epoch = this->current_epoch_.load() + 3;
+
+  BATT_CHECK(!old_state->last_epoch_);
+  //----- --- -- -  -  -   -
+  old_state->last_epoch_ = expires_at_epoch;
+  //----- --- -- -  -  -   -
+  BATT_CHECK(old_state->last_epoch_);
+  BATT_CHECK_EQ(*old_state->last_epoch_, expires_at_epoch);
+  {
+    absl::MutexLock lock{&this->obsolete_states_mutex_};
+    this->obsolete_states_.emplace_back(old_state);
+    BATT_CHECK_GT(old_state->use_count(), 1);
+  }
+  intrusive_ptr_release(old_state);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void KVStore::epoch_thread_main()
+{
+  constexpr i64 kMinEpochUsec = 12500;
+  constexpr i64 kMaxEpochUsec = 15000;
+
+  std::default_random_engine rng{std::random_device{}()};
+  std::uniform_int_distribution<i64> pick_delay_usec{kMinEpochUsec, kMaxEpochUsec};
+
+  while (!this->halt_.get_value()) {
+    std::this_thread::sleep_for(std::chrono::microseconds{pick_delay_usec(rng)});
+    this->current_epoch_.fetch_add(1);
+
+    std::vector<boost::intrusive_ptr<const State>> to_delete;
+    {
+      absl::MutexLock lock{&this->obsolete_states_mutex_};
+
+      for (usize i = 0; i < this->obsolete_states_.size();) {
+        BATT_CHECK(this->obsolete_states_[i]->last_epoch_);
+        if (*this->obsolete_states_[i]->last_epoch_ - this->current_epoch_ < 0) {
+          to_delete.emplace_back(std::move(this->obsolete_states_[i]));
+          this->obsolete_states_[i] = std::move(this->obsolete_states_.back());
+          this->obsolete_states_.pop_back();
+        } else {
+          ++i;
+        }
+      }
+    }
+
+    // (done explicitly for emphasis)
+    //
+    to_delete.clear();
+  }
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
