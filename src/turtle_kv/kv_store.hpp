@@ -53,6 +53,7 @@ class KVStore : public Table
     usize initial_checkpoint_distance;
     bool use_threaded_checkpoint_pipeline;
     usize cache_size_bytes;
+    usize memtable_compact_threads;
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -196,7 +197,7 @@ class KVStore : public Table
 
   std::unique_ptr<DeltaBatch> compact_memtable(boost::intrusive_ptr<MemTable>&& mem_table);
 
-  void memtable_compact_thread_main();
+  void memtable_compact_thread_main(usize thread_i);
 
   StatusOr<std::unique_ptr<CheckpointJob>> apply_batch_to_checkpoint(
       std::unique_ptr<DeltaBatch>&& delta_batch);
@@ -254,7 +255,12 @@ class KVStore : public Table
   //
   std::atomic<u64> next_mem_table_id_to_push_{MemTable::first_id()};
 
-  PipelineChannel<boost::intrusive_ptr<MemTable>> memtable_compact_channel_;
+  std::unique_ptr<PipelineChannel<boost::intrusive_ptr<MemTable>>[]>
+      memtable_compact_channels_storage_;
+
+  Slice<PipelineChannel<boost::intrusive_ptr<MemTable>>> memtable_compact_channels_;
+
+  std::atomic<u64> next_delta_batch_to_push_{MemTable::first_id()};
 
   //----- --- -- -  -  -   -
   // Checkpoint Update State.
@@ -280,7 +286,7 @@ class KVStore : public Table
 
   PipelineChannel<std::unique_ptr<CheckpointJob>> checkpoint_flush_channel_;
 
-  Optional<std::thread> memtable_compact_thread_;
+  std::vector<std::thread> memtable_compact_threads_;
 
   Optional<std::thread> checkpoint_update_thread_;
 

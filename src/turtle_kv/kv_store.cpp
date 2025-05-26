@@ -87,6 +87,7 @@ u64 query_page_loader_reset_every_n()
       .initial_checkpoint_distance = 1,
       .use_threaded_checkpoint_pipeline = true,
       .cache_size_bytes = 4 * kGiB,
+      .memtable_compact_threads = 4,
   };
 }
 
@@ -358,6 +359,12 @@ u64 query_page_loader_reset_every_n()
                  },
                  "KVStore::info_task"}
 
+    , memtable_compact_channels_storage_{new PipelineChannel<
+          boost::intrusive_ptr<MemTable>>[this->runtime_options_.memtable_compact_threads]}
+
+    , memtable_compact_channels_{as_slice(this->memtable_compact_channels_storage_.get(),
+                                          this->runtime_options_.memtable_compact_threads)}
+
     , checkpoint_generator_{this->worker_pool_,
                             this->tree_options_,
                             this->page_cache(),
@@ -389,9 +396,11 @@ u64 query_page_loader_reset_every_n()
   }
 
   if (this->runtime_options_.use_threaded_checkpoint_pipeline) {
-    this->memtable_compact_thread_.emplace([this] {
-      this->memtable_compact_thread_main();
-    });
+    for (usize i = 0; i < this->runtime_options_.memtable_compact_threads; ++i) {
+      this->memtable_compact_threads_.emplace_back([this, i] {
+        this->memtable_compact_thread_main(i);
+      });
+    }
     this->checkpoint_update_thread_.emplace([this] {
       this->checkpoint_update_thread_main();
     });
@@ -424,7 +433,10 @@ void KVStore::halt()
 {
   this->halt_.set_value(true);
   this->log_writer_->halt();
-  this->memtable_compact_channel_.close();
+  for (PipelineChannel<boost::intrusive_ptr<MemTable>>& channel :
+       this->memtable_compact_channels_) {
+    channel.close();
+  }
   this->checkpoint_update_channel_.close();
   this->checkpoint_flush_channel_.close();
 }
@@ -434,10 +446,10 @@ void KVStore::halt()
 void KVStore::join()
 {
   this->log_writer_->join();
-  if (this->memtable_compact_thread_) {
-    this->memtable_compact_thread_->join();
-    this->memtable_compact_thread_ = None;
+  for (std::thread& t : this->memtable_compact_threads_) {
+    t.join();
   }
+  this->memtable_compact_threads_.clear();
   if (this->checkpoint_update_thread_) {
     this->checkpoint_update_thread_->join();
     this->checkpoint_update_thread_ = None;
@@ -717,7 +729,8 @@ Status KVStore::update_checkpoint(const State* observed_state)
 
   //----- --- -- -  -  -   -
   if (this->runtime_options_.use_threaded_checkpoint_pipeline) {
-    BATT_REQUIRE_OK(this->memtable_compact_channel_.write(std::move(old_mem_table)));
+    const usize i = this_mem_table_id % this->memtable_compact_channels_.size();
+    BATT_REQUIRE_OK(this->memtable_compact_channels_[i].write(std::move(old_mem_table)));
 
   } else {
     std::unique_ptr<DeltaBatch> delta_batch = this->compact_memtable(std::move(old_mem_table));
@@ -749,17 +762,28 @@ void KVStore::info_task_main() noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-void KVStore::memtable_compact_thread_main()
+void KVStore::memtable_compact_thread_main(usize thread_i)
 {
-  Status status = [this]() -> Status {
+  Status status = [this, thread_i]() -> Status {
     for (;;) {
-      StatusOr<boost::intrusive_ptr<MemTable>> mem_table = this->memtable_compact_channel_.read();
+      StatusOr<boost::intrusive_ptr<MemTable>> mem_table =
+          this->memtable_compact_channels_[thread_i].read();
+
       BATT_REQUIRE_OK(mem_table);
       BATT_CHECK_NOT_NULLPTR(*mem_table);
 
+      const u64 this_delta_batch_id = (**mem_table).id();
+      const u64 next_delta_batch_id = MemTable::next_id_for(this_delta_batch_id);
+
       std::unique_ptr<DeltaBatch> delta_batch = this->compact_memtable(std::move(*mem_table));
 
+      while (this->next_delta_batch_to_push_.load() != this_delta_batch_id) {
+        batt::spin_yield();
+      }
+
       BATT_REQUIRE_OK(this->checkpoint_update_channel_.write(std::move(delta_batch)));
+
+      this->next_delta_batch_to_push_.store(next_delta_batch_id);
     }
   }();
 
