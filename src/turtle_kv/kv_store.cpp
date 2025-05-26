@@ -1189,6 +1189,7 @@ std::function<void(std::ostream&)> KVStore::debug_info() noexcept
         << BATT_INSPECT(cache_slot_pool.evict_byte_count) << "\n"                      //
         << BATT_INSPECT(cache_slot_pool.evict_lru_count) << "\n"                       //
         << BATT_INSPECT(cache_slot_pool.background_evict_count) << "\n"                //
+        << BATT_INSPECT(cache_slot_pool.background_evict_fail_count) << "\n"           //
         << BATT_INSPECT(cache_slot_pool.background_evict_byte_count) << "\n"           //
         << BATT_INSPECT(cache_slot_pool.background_evict_latency) << "\n"              //
         << BATT_INSPECT(cache_slot_pool.background_evict_byte_latency) << "\n"         //
