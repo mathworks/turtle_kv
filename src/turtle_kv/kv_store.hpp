@@ -172,19 +172,9 @@ class KVStore : public Table
  private:
   struct State : batt::RefCounted<State> {
     mutable Optional<i64> last_epoch_;
-
     boost::intrusive_ptr<MemTable> mem_table_;
-
     std::vector<boost::intrusive_ptr<MemTable>> deltas_;
-
     Checkpoint base_checkpoint_;
-
-    //----- --- -- -  -  -   -
-
-    ~State() noexcept
-    {
-      LOG(INFO) << "destroying State object: " << (void*)this;
-    }
   };
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
