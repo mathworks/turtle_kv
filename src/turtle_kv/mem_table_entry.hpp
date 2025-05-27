@@ -7,6 +7,7 @@
 
 #include <turtle_kv/import/buffer.hpp>
 #include <turtle_kv/import/int_types.hpp>
+#include <turtle_kv/import/status.hpp>
 
 #include <absl/base/config.h>
 #include <absl/container/internal/hash_function_defaults.h>
@@ -59,11 +60,17 @@ struct MemTableEntryInserter {
   /** \brief Constructs a new inserter for the given key/value pair.
    */
   template <typename K, typename V>
-  explicit MemTableEntryInserter(StorageT& storage_arg,
+  explicit MemTableEntryInserter(std::atomic<i64>& current_mem_table_byte_size,
+                                 i64 mem_table_size_limit,
+                                 bool replace_old_value_size,
+                                 StorageT& storage_arg,
                                  K&& key_arg,
                                  V&& value_arg,
                                  u32 version_arg) noexcept
-      : storage{storage_arg}
+      : current_mem_table_byte_size_{current_mem_table_byte_size}
+      , mem_table_size_limit_{mem_table_size_limit}
+      , replace_old_value_size_{replace_old_value_size}
+      , storage{storage_arg}
       , key{BATT_FORWARD(key_arg)}
       , value{BATT_FORWARD(value_arg)}
       , version{version_arg}
@@ -74,6 +81,9 @@ struct MemTableEntryInserter {
   //+++++++++++-+-+--+----- --- -- -  -  -   -
   // Inputs (set at construction-time)
 
+  std::atomic<i64>& current_mem_table_byte_size_;
+  const i64 mem_table_size_limit_;
+  const bool replace_old_value_size_;
   StorageT& storage;
   const std::string_view key;
   const ValueView value;
@@ -88,7 +98,20 @@ struct MemTableEntryInserter {
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  std::string_view store_insert() noexcept
+  Status update_table_size(i64 table_size_delta)
+  {
+    const i64 old_table_size = this->current_mem_table_byte_size_.fetch_add(table_size_delta);
+    const i64 new_table_size = old_table_size + table_size_delta;
+
+    if (new_table_size > this->mem_table_size_limit_) {
+      this->current_mem_table_byte_size_.fetch_sub(table_size_delta);
+      return {batt::StatusCode::kResourceExhausted};
+    }
+
+    return OkStatus();
+  }
+
+  StatusOr<std::string_view> store_insert() noexcept
   {
     char* key_dst;
     const usize key_len = this->key.size();
@@ -96,8 +119,9 @@ struct MemTableEntryInserter {
     const usize insert_size = sizeof(little_u16)  // header
                               + key_len           // key
                               + sizeof(big_u32)   // version-suffix
-                              + value_len         // value
-        ;
+                              + value_len;        // value
+
+    BATT_REQUIRE_OK(this->update_table_size(insert_size));
 
     this->storage.store_data(insert_size, [&](u32 locator, const MutableBuffer& buffer) {
       this->stored_locator = locator;
@@ -119,12 +143,23 @@ struct MemTableEntryInserter {
     return std::string_view{key_dst, key_len};
   }
 
-  void store_update(u32 revision, u32 base_locator, u32 prev_locator) noexcept
+  Status store_update(const ValueView& prev_value,
+                      u32 revision,
+                      u32 base_locator,
+                      u32 prev_locator) noexcept
   {
     const usize value_len = this->value.size();
     const usize update_size = sizeof(PackedValueUpdate)  // header
-                              + value_len                // value
-        ;
+                              + value_len;               // value
+
+    const i64 table_size_delta = (this->replace_old_value_size_)
+                                     ? ((i64)value_len - (i64)prev_value.size())
+                                     : (i64)value_len;
+    // ^^^^
+    // TODO [tastolfi 2025-05-27] we need to make sure that we eventually do fill up a MemTable,
+    // even if we just overwrite a single key over and over again.
+
+    BATT_REQUIRE_OK(this->update_table_size(table_size_delta));
 
     this->storage.store_data(update_size, [&](u32 locator, const MutableBuffer& buffer) {
       this->stored_locator = locator;
@@ -141,6 +176,8 @@ struct MemTableEntryInserter {
       std::memcpy(value_dst, this->value.data(), value_len);
       this->stored_value = ValueView::from_str(std::string_view{value_dst, value_len});
     });
+
+    return OkStatus();
   }
 };
 
@@ -183,24 +220,31 @@ class MemTableEntry
   }
 
   template <typename StorageT>
-  Self& assign(MemTableEntryInserter<StorageT>& i)
+  Status assign(MemTableEntryInserter<StorageT>& i)
   {
-    this->key_ = i.store_insert();
+    StatusOr<std::string_view> stored_key = i.store_insert();
+    BATT_REQUIRE_OK(stored_key);
+
+    this->key_ = *stored_key;
     this->value_ = i.stored_value;
     this->locator_ = i.stored_locator;
     this->base_locator_ = this->locator_;
     this->revision_ = 0;
 
-    return *this;
+    return OkStatus();
   }
 
   template <typename StorageT>
-  void update(MemTableEntryInserter<StorageT>& i) const noexcept
+  Status update(MemTableEntryInserter<StorageT>& i) const noexcept
   {
-    ++this->revision_;
-    i.store_update(this->revision_, this->base_locator_, this->locator_);
+    BATT_REQUIRE_OK(
+        i.store_update(this->value_, this->revision_ + 1, this->base_locator_, this->locator_));
+
+    this->revision_ += 1;
     this->value_ = i.stored_value;
     this->locator_ = i.stored_locator;
+
+    return OkStatus();
   }
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -

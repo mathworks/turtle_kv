@@ -4,42 +4,26 @@
 #include <turtle_kv/import/env.hpp>
 
 #include <batteries/async/task.hpp>
+#include <batteries/checked_cast.hpp>
 
 namespace turtle_kv {
 
-#if !TURTLE_KV_NEW_MEM_TABLE
-//+++++++++++-+-+--+----- --- -- -  -  -   -
-namespace {
-
-i32 get_n_shards_log2()
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+/*static*/ MemTable::RuntimeOptions MemTable::RuntimeOptions::with_default_values() noexcept
 {
-  static const i32 n_shards = getenv_as<i32>("turtlekv_memtable_hash_shards")
-                                  .value_or((std::thread::hardware_concurrency() + 1) / 2);
-  static const i32 n_shards_log2 =
-      std::min<i32>(MemTable::kMaxShardsLog2, batt::log2_ceil(n_shards));
-
-  return n_shards_log2;
+  return RuntimeOptions{
+      .limit_size_by_latest_updates_only =
+          getenv_as<bool>("turtlekv_memtable_count_latest_update_only").value_or(true),
+  };
 }
-
-}  // namespace
-   //+++++++++++-+-+--+----- --- -- -  -  -   -
-#endif  // TURTLE_KV_NEW_MEM_TABLE
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 /*explicit*/ MemTable::MemTable(usize max_byte_size, Optional<u64> id) noexcept
     : is_finalized_{false}
-#if TURTLE_KV_NEW_MEM_TABLE
     , hash_index_{max_byte_size / 24}
-#else
-    //+++++++++++-+-+--+----- --- -- -  -  -   -
-    , n_shards_log2_{get_n_shards_log2()}
-    , n_shards_{usize{1} << this->n_shards_log2_}
-    , shard_mask_{this->n_shards_ - 1}
-    , hash_mutex_storage_(this->n_shards_)
-//+++++++++++-+-+--+----- --- -- -  -  -   -
-#endif  // TURTLE_KV_NEW_MEM_TABLE
-    , max_byte_size_{max_byte_size}
+    , max_byte_size_{BATT_CHECKED_CAST(i64, max_byte_size)}
     , current_byte_size_{0}
     , self_id_{id.or_else([&] {
       return MemTable::next_id();
@@ -48,23 +32,7 @@ i32 get_n_shards_log2()
     , version_{0}
     , block_list_mutex_{}
     , blocks_{}
-#if !TURTLE_KV_NEW_MEM_TABLE
-    //+++++++++++-+-+--+----- --- -- -  -  -   -
-    , hashed_(this->n_shards_)
-    , ordered_{}
-//+++++++++++-+-+--+----- --- -- -  -  -   -
-#endif  // TURTLE_KV_NEW_MEM_TABLE
 {
-#if !TURTLE_KV_NEW_MEM_TABLE
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-  for (MutexStorage& storage : this->hash_mutex_storage_) {
-    new (std::addressof(storage)) batt::CpuCacheLineIsolated<absl::Mutex>{};
-  }
-  this->hash_mutex_ = as_slice(
-      reinterpret_cast<batt::CpuCacheLineIsolated<absl::Mutex>*>(this->hash_mutex_storage_.data()),
-      this->n_shards_);
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-#endif  // TURTLE_KV_NEW_MEM_TABLE
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -84,47 +52,19 @@ Status MemTable::put(ChangeLogWriter::Context& context,
                      const KeyView& key,
                      const ValueView& value) noexcept
 {
-  const usize size_estimate = std::max<usize>(2 + key.size() + 4, 32)  //
-                              + value.size() + 2 + sizeof(PackedValueUpdate);
-  const usize prior_byte_size = this->current_byte_size_.fetch_add(size_estimate);
-  const usize new_byte_size = prior_byte_size + size_estimate;
-
-  if (new_byte_size > this->max_byte_size_) {
-    this->current_byte_size_.fetch_sub(size_estimate);
-    return batt::StatusCode::kResourceExhausted;
-  }
-
   StorageImpl storage{*this, context, OkStatus()};
-  MemTableEntryInserter<StorageImpl> inserter{storage, key, value, this->version_.fetch_add(1)};
 
-#if TURTLE_KV_NEW_MEM_TABLE
+  MemTableEntryInserter<StorageImpl> inserter{
+      this->current_byte_size_,
+      this->max_byte_size_,
+      this->runtime_options_.limit_size_by_latest_updates_only,
+      storage,
+      key,
+      value,
+      this->version_.fetch_add(1),
+  };
 
-  this->hash_index_.insert(inserter);
-
-#else
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-  Optional<std::string_view> new_key;
-
-  {
-    const u64 shard_i = this->shard_for_hash_val(inserter.hash_val);
-    absl::WriterMutexLock lock{this->hashed_mutex_for_shard(shard_i)};
-
-    if (this->is_finalized_) {
-      return batt::StatusCode::kResourceExhausted;
-    }
-
-    auto [iter, inserted] = this->hashed_[shard_i].emplace(inserter);
-    if (!inserted) {
-      iter->update(inserter);
-#if 0
-    } else {
-      absl::WriterMutexLock lock{this->ordered_mutex()};
-      this->ordered_.emplace(get_key(*iter));
-#endif
-    }
-  }
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-#endif  // TURTLE_KV_NEW_MEM_TABLE
+  BATT_REQUIRE_OK(this->hash_index_.insert(inserter));
 
   return storage.status;
 }
@@ -133,21 +73,7 @@ Status MemTable::put(ChangeLogWriter::Context& context,
 //
 Optional<ValueView> MemTable::get(const KeyView& key) noexcept
 {
-#if TURTLE_KV_NEW_MEM_TABLE
-
   return this->hash_index_.find_key(key);
-
-#else
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-  MemTableQuery query{key};
-
-  const u64 shard_i = this->shard_for_hash_val(query.hash_val);
-
-  absl::ReaderMutexLock lock{this->hashed_mutex_for_shard(shard_i)};
-
-  return this->get_impl(query, shard_i);
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-#endif  // TURTLE_KV_NEW_MEM_TABLE
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -157,41 +83,13 @@ usize MemTable::scan(const KeyView& min_key,
 {
   BATT_PANIC() << "Fix scanning!";
   return 0;
-
-#if !TURTLE_KV_NEW_MEM_TABLE
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-  usize k = 0;
-  {
-    absl::ReaderMutexLock lock{this->ordered_mutex()};
-    k = this->scan_keys_impl(min_key, items_out);
-  }
-
-  for (usize i = 0; i < k; ++i) {
-    items_out[i].second = this->get(items_out[i].first).value_or_panic();
-  }
-
-  return k;
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-#endif  // TURTLE_KV_NEW_MEM_TABLE
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 Optional<ValueView> MemTable::finalized_get(const KeyView& key) noexcept
 {
-#if TURTLE_KV_NEW_MEM_TABLE
-
-  return this->get(key);
-
-#else
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-  BATT_CHECK(this->is_finalized_);
-
-  MemTableQuery query{key};
-
-  return this->get_impl(query, this->shard_for_hash_val(query.hash_val));
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-#endif  // TURTLE_KV_NEW_MEM_TABLE
+  return this->hash_index_.unsynchronized_find_key(key);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -210,22 +108,6 @@ usize MemTable::finalized_scan(const KeyView& min_key,
   return k;
 }
 
-#if !TURTLE_KV_NEW_MEM_TABLE
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-Optional<ValueView> MemTable::get_impl(const MemTableQuery& query, u64 shard_i) noexcept
-{
-  auto iter = this->hashed_[shard_i].find(query);
-  if (iter == this->hashed_[shard_i].end()) {
-    return None;
-  }
-
-  // TODO [tastolfi 2025-02-25] compact this value if necessary (see MemTable::compact for example).
-  //
-  return iter->value_;
-}
-#endif  // TURTLE_KV_NEW_MEM_TABLE
-
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 usize MemTable::scan_keys_impl(const KeyView& min_key,
@@ -233,42 +115,12 @@ usize MemTable::scan_keys_impl(const KeyView& min_key,
 {
   BATT_PANIC() << "Fix scanning!";
   return 0;
-
-#if !TURTLE_KV_NEW_MEM_TABLE
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-  auto first = this->ordered_.lower_bound(min_key);
-  auto ordered_end = this->ordered_.end();
-
-  usize k = 0;
-  while (first != ordered_end && k != items_out.size()) {
-    items_out[k].first = *first;
-    ++first;
-    ++k;
-  }
-
-  return k;
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-#endif  // TURTLE_KV_NEW_MEM_TABLE
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 bool MemTable::finalize() noexcept
 {
-#if !TURTLE_KV_NEW_MEM_TABLE
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-  usize n_shards_locked = 0;
-  auto on_scope_exit = batt::finally([&] {
-    for (usize i = 0; i < n_shards_locked; ++i) {
-      this->hashed_mutex_for_shard(i)->Unlock();
-    }
-  });
-  for (; n_shards_locked < this->n_shards_; ++n_shards_locked) {
-    this->hashed_mutex_for_shard(n_shards_locked)->Lock();
-  }
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-#endif  // TURTLE_KV_NEW_MEM_TABLE
-
   const bool prior_value = this->is_finalized_;
   this->is_finalized_ = true;
   return prior_value == false;
@@ -281,28 +133,12 @@ MergeCompactor::ResultSet</*decay_to_items=*/false> MemTable::compact() noexcept
   BATT_CHECK(this->is_finalized_);
 
   usize total_keys = 0;
-#if TURTLE_KV_NEW_MEM_TABLE
   total_keys = this->hash_index_.size();
-#else
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-  using HashedIndex = absl::flat_hash_set<MemTableEntry, DefaultStrHash, DefaultStrEq>;
-  for (const HashedIndex& shard : this->hashed_) {
-    total_keys += shard.size();
-  }
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-#endif  // TURTLE_KV_NEW_MEM_TABLE
 
   std::vector<EditView> edits_out;
   edits_out.reserve(total_keys);
 
-#if TURTLE_KV_NEW_MEM_TABLE
   this->hash_index_.for_each([&](const MemTableEntry& entry) {
-#else
-  for (const HashedIndex& shard : this->hashed_) {
-    const auto last = shard.end();
-    for (auto iter = shard.begin(); iter != last; ++iter) {
-      const MemTableEntry& entry = *iter;
-#endif
     KeyView key = get_key(entry);
     ValueView value = entry.value_;
     if (value.needs_combine()) {
@@ -331,13 +167,7 @@ MergeCompactor::ResultSet</*decay_to_items=*/false> MemTable::compact() noexcept
       // else (key_len == 0) - the current revision is also the first; nothing else can be done.
     }
     edits_out.emplace_back(key, value);
-
-#if TURTLE_KV_NEW_MEM_TABLE
   });
-#else
-    }
-  }
-#endif
 
   std::sort(edits_out.begin(), edits_out.end(), KeyOrder{});
 

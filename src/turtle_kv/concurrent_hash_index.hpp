@@ -77,8 +77,8 @@ class ConcurrentHashIndex
      * again.
      */
     template <typename StorageT>
-    [[nodiscard]] bool write(MemTableEntryInserter<StorageT>& inserter,
-                             std::atomic<usize>& size_out)
+    [[nodiscard]] StatusOr<bool> write(MemTableEntryInserter<StorageT>& inserter,
+                                       std::atomic<usize>& size_out)
     {
       // IMPORTANT!  We must hold the lock in order to modify this bucket.
       //
@@ -96,10 +96,10 @@ class ConcurrentHashIndex
       // If the bucket is empty, we do an assignment on entry.
       //
       if (observed_hash_val == 0) {
+        BATT_REQUIRE_OK(this->entry.assign(inserter));
         this->hash_val.store(inserter.hash_val);
-        this->entry.assign(inserter);
         size_out.fetch_add(1);
-        return true;
+        return {true};
       }
 
       const DefaultStrEq key_eq;
@@ -107,13 +107,13 @@ class ConcurrentHashIndex
       // If the bucket currently holds the given key, we just update the value.
       //
       if (observed_hash_val == inserter.hash_val && key_eq(inserter, entry)) {
-        this->entry.update(inserter);
-        return true;
+        BATT_REQUIRE_OK(this->entry.update(inserter));
+        return {true};
       }
 
       // Key does not match!  Indicate failure.
       //
-      return false;
+      return {false};
     }
 
     /** \brief Attempts to read the given key.  NOTE: readers may be starved under heavy contention!
@@ -201,16 +201,22 @@ class ConcurrentHashIndex
   }
 
   template <typename StorageT>
-  void insert(MemTableEntryInserter<StorageT>& inserter)
+  Status insert(MemTableEntryInserter<StorageT>& inserter)
   {
-    this->probe(inserter.hash_val, [&inserter, this](Bucket& bucket) -> bool {
+    Status status;
+
+    this->probe(inserter.hash_val, [&inserter, &status, this](Bucket& bucket) -> bool {
       if (bucket.is_writable(inserter.hash_val)) {
-        if (bucket.write(inserter, this->size_)) {
+        StatusOr<bool> written = bucket.write(inserter, this->size_);
+        if (!written.ok() || *written) {
+          status = written.status();
           return true;
         }
       }  // else - go to the next bucket and retry.
       return false;
     });
+
+    return status;
   }
 
   Optional<ValueView> find_key(const KeyView& key)
@@ -230,6 +236,35 @@ class ConcurrentHashIndex
 
       if (observed_hash_val == key_hash_val) {
         MemTableEntry entry = bucket.read();
+        if (str_eq(key, entry)) {
+          result = entry.value_;
+          return true;
+        }
+      }
+
+      return false;
+    });
+
+    return result;
+  }
+
+  Optional<ValueView> unsynchronized_find_key(const KeyView& key)
+  {
+    Optional<ValueView> result;
+
+    const u64 key_hash_val = get_key_hash_val(key);
+
+    this->probe(key_hash_val, [&result, &key, key_hash_val](Bucket& bucket) -> bool {
+      const DefaultStrEq str_eq;
+      const u64 observed_hash_val = bucket.hash_val.load();
+
+      if (observed_hash_val == 0) {
+        result = None;
+        return true;
+      }
+
+      if (observed_hash_val == key_hash_val) {
+        const MemTableEntry& entry = bucket.entry;
         if (str_eq(key, entry)) {
           result = entry.value_;
           return true;

@@ -29,8 +29,6 @@
 
 namespace turtle_kv {
 
-#define TURTLE_KV_NEW_MEM_TABLE 1
-
 namespace {
 BATT_STATIC_ASSERT_TYPE_EQ(KeyView, std::string_view);
 }
@@ -38,6 +36,19 @@ BATT_STATIC_ASSERT_TYPE_EQ(KeyView, std::string_view);
 class MemTable : public batt::RefCounted<MemTable>
 {
  public:
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  struct RuntimeOptions {
+    /** \brief If true, then only count the latest version of each key update towards the size limit
+     * of the MemTable; otherwise, count all edits (including key overwrites).
+     */
+    bool limit_size_by_latest_updates_only;
+
+    //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+    static RuntimeOptions with_default_values() noexcept;
+  };
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   /** \brief The base-2 log of the maximum number of hash index lock shards.
@@ -133,13 +144,6 @@ class MemTable : public batt::RefCounted<MemTable>
     void store_data(usize n_bytes, SerializeFn&& serialize_fn) noexcept;
   };
 
-#if !TURTLE_KV_NEW_MEM_TABLE
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-  using MutexStorage = std::aligned_storage_t<sizeof(batt::CpuCacheLineIsolated<absl::Mutex>),
-                                              alignof(batt::CpuCacheLineIsolated<absl::Mutex>)>;
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-#endif  // TURTLE_KV_NEW_MEM_TABLE
-
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   Optional<ValueView> get_impl(const MemTableQuery& query, u64 shard_i) noexcept;
@@ -154,52 +158,17 @@ class MemTable : public batt::RefCounted<MemTable>
 
   ConstBuffer fetch_slot(u32 locator) const noexcept;
 
-#if !TURTLE_KV_NEW_MEM_TABLE
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-  u64 shard_for_hash_val(u64 hash_val) const
-  {
-    return hash_val & this->shard_mask_;
-  }
-
-  absl::Mutex* hashed_mutex_for_shard(u64 shard_i)
-  {
-    return std::addressof(*this->hash_mutex_[shard_i]);
-  }
-
-  absl::Mutex* ordered_mutex()
-  {
-    return std::addressof(*this->ordered_mutex_);
-  }
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-#endif  // TURTLE_KV_NEW_MEM_TABLE
-
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   bool is_finalized_;
 
-#if TURTLE_KV_NEW_MEM_TABLE
+  RuntimeOptions runtime_options_ = RuntimeOptions::with_default_values();
 
   ConcurrentHashIndex hash_index_;
 
-#else
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-  const i32 n_shards_log2_;
+  const i64 max_byte_size_;
 
-  const usize n_shards_;
-
-  const u64 shard_mask_;
-
-  batt::SmallVec<MutexStorage, MemTable::kMaxShards> hash_mutex_storage_;
-
-  Slice<batt::CpuCacheLineIsolated<absl::Mutex>> hash_mutex_;
-
-  batt::CpuCacheLineIsolated<absl::Mutex> ordered_mutex_;
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-#endif  // TURTLE_KV_NEW_MEM_TABLE
-
-  const usize max_byte_size_;
-
-  std::atomic<usize> current_byte_size_;
+  std::atomic<i64> current_byte_size_;
 
   u64 self_id_;
 
@@ -210,17 +179,6 @@ class MemTable : public batt::RefCounted<MemTable>
   absl::Mutex block_list_mutex_;
 
   batt::SmallVec<ChangeLogBlock*, MemTable::kBlockListPreAllocSize> blocks_;
-
-#if TURTLE_KV_NEW_MEM_TABLE
-#else
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-  batt::SmallVec<absl::flat_hash_set<MemTableEntry, DefaultStrHash, DefaultStrEq>,
-                 MemTable::kMaxShards>
-      hashed_;
-
-  absl::btree_set<KeyView> ordered_;
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-#endif  // TURTLE_KV_NEW_MEM_TABLE
 };
 
 // #=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
