@@ -512,6 +512,8 @@ struct AddLeafItemsSummary {
   LeafItemsSummary operator()(const LeafItemsSummary& prior, const EditView& edit) const noexcept
   {
     if (!decays_to_item(edit.value)) {
+      LOG(ERROR) << "TODO [tastolfi 2025-05-27] support deletes:" << BATT_INSPECT(edit);
+
       return LeafItemsSummary{
           .drop_count = prior.drop_count + 1,
           .key_count = prior.key_count,

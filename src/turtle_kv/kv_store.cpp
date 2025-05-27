@@ -951,7 +951,7 @@ Status KVStore::commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_jo
     //
     Optional<llfs::SlotRange> prev_slot_range = old_state->base_checkpoint_.slot_range();
     if (prev_slot_range) {
-      prev_checkpoint_slot = prev_slot_range->lower_bound;
+      prev_checkpoint_slot = prev_slot_range->upper_bound;
     }
 
     // CAS-loop to update the state object.
@@ -973,7 +973,9 @@ Status KVStore::commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_jo
         break;
       }
     }
-    this->add_obsolete_state(old_state);
+    if (old_state != new_state) {
+      this->add_obsolete_state(old_state);
+    }
     this->deltas_size_->fetch_sub(checkpoint_job->batch_count);
   }
 
