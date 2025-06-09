@@ -22,7 +22,8 @@ namespace turtle_kv {
 //
 /*explicit*/ MemTable::MemTable(usize max_byte_size, Optional<u64> id) noexcept
     : is_finalized_{false}
-    , hash_index_{max_byte_size / 24}
+    , hash_index_{max_byte_size /
+                  getenv_as<usize>("turtlekv_memtable_hash_bucket_div").value_or(32)}
     , max_byte_size_{BATT_CHECKED_CAST(i64, max_byte_size)}
     , current_byte_size_{0}
     , self_id_{id.or_else([&] {

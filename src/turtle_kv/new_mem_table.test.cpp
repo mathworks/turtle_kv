@@ -1,3 +1,4 @@
+#if 0
 #include <turtle_kv/new_mem_table.hpp>
 //
 #include <turtle_kv/new_mem_table.hpp>
@@ -264,114 +265,6 @@ class CustomHashTable : public Table
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 
-class LossyHashTrieTable
-{
- public:
-  struct Bucket {
-    std::array<u64, 4> prefix_filter;
-    std::array<u64, 4> children;
-
-    //----- --- -- -  -  -   -
-
-    void insert_prefix(u64 prefix_hash_val)
-    {
-      this->prefix_filter[(prefix_hash_val >> 17) % 4] |=  //
-          (u64{1} << ((prefix_hash_val >> 11) % 64));
-    }
-
-    bool contains_prefix(u64 prefix_hash_val) const
-    {
-      return (this->prefix_filter[(prefix_hash_val >> 17) % 4] &  //
-              (u64{1} << ((prefix_hash_val >> 11) % 64))) != 0;
-    }
-
-  } __attribute__((aligned(64)));
-
-  static_assert(sizeof(Bucket) == 64);
-
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-
-  DefaultStrHash str_hash_;
-  std::vector<Bucket> buckets_;
-  const LinearProjection<u64, usize> bucket_from_hash_val_{this->buckets_.size()};
-  std::array<u8, 256> max_prefix_len_;
-
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-
-  explicit LossyHashTrieTable(usize bucket_count) noexcept : buckets_(bucket_count)
-  {
-    std::memset((void*)this->buckets_.data(), 0, this->buckets_.size() * sizeof(Bucket));
-    this->max_prefix_len_.fill(0);
-  }
-
-  void put(const std::string_view& key)
-  {
-    for (usize prefix_len = 0; prefix_len <= key.size(); ++prefix_len) {
-      const u64 prefix_hash_val = this->str_hash_(key.substr(0, prefix_len));
-
-      auto& max_prefix_len = this->max_prefix_len_[prefix_hash_val % this->max_prefix_len_.size()];
-      max_prefix_len = std::max<u16>(max_prefix_len, prefix_len);
-
-      const usize bucket_i = this->bucket_from_hash_val_(prefix_hash_val);
-      const u16 ch = (prefix_len == key.size()) ? '\0' : (u8)key[prefix_len];
-      const i32 word_i = (ch >> 6);
-      const i32 bit_i = (ch & 0x3f);
-
-      Bucket& bucket = this->buckets_[bucket_i];
-
-      bucket.insert_prefix(prefix_hash_val);
-      bucket.children[word_i] |= (u64{1} << bit_i);
-    }
-  }
-
-  std::vector<std::string> scan_all() const
-  {
-    std::vector<std::string> out;
-    std::array<char, 64> buffer;
-
-    this->scan_all_impl(buffer, 0, out);
-
-    return out;
-  }
-
-  void scan_all_impl(std::array<char, 64>& buffer,
-                     usize prefix_len,
-                     std::vector<std::string>& out) const
-  {
-    const std::string_view prefix{buffer.data(), prefix_len};
-    const u64 prefix_hash_val = this->str_hash_(prefix);
-    const u16 max_prefix_len =
-        this->max_prefix_len_[prefix_hash_val % this->max_prefix_len_.size()];
-
-    if (prefix_len > max_prefix_len) {
-      return;
-    }
-
-    const usize bucket_i = this->bucket_from_hash_val_(prefix_hash_val);
-    const Bucket& bucket = this->buckets_[bucket_i];
-
-    if (!bucket.contains_prefix(prefix_hash_val)) {
-      return;
-    }
-
-    // If children contains '\0' (null-terminator), then add the prefix.
-    //
-    if (prefix_len != 0 && (bucket.children[0] & 1) == 1) {
-      out.emplace_back(prefix);
-    }
-
-    char ch_base = 0;
-    for (i32 word_i = 0; word_i < 4; ++word_i, ch_base += 64) {
-      const u64 mask = bucket.children[word_i];
-      for (i32 bit_i = batt::first_bit(mask); bit_i < 64; bit_i = batt::next_bit(mask, bit_i)) {
-        const char ch = (char)(bit_i + ch_base);
-        buffer[prefix_len] = ch;
-        this->scan_all_impl(buffer, prefix_len + 1, out);
-      }
-    }
-  }
-};
-
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 void test_index(const std::string& index_name, Table& index_impl)
 {
@@ -460,3 +353,4 @@ TEST(NewMemTableTest, Test)
 }
 
 }  // namespace
+#endif

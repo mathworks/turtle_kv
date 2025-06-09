@@ -420,6 +420,8 @@ KVStore::~KVStore() noexcept
   this->halt();
   this->join();
 
+  this->reset_thread_context();
+
   const State* final_state = this->state_.exchange(nullptr);
   if (final_state) {
     BATT_CHECK_GT(final_state->use_count(), 0);

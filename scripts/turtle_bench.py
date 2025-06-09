@@ -216,6 +216,7 @@ class BenchmarkResult:
     def _new_plot(self):
         plt.close()
         self.fig, self.ax = plt.subplots()
+        self.fig.set_size_inches(4.7, 3.7)
         self.series = []
 
     def _plot_tp_and_wa_vs_chi(self):
@@ -227,11 +228,15 @@ class BenchmarkResult:
         mem_release_rate = self.mem_release_rate[0] if len(self.mem_release_rate) > 0 else None
         leaf_size_mb = self.leaf_size[0]/(2**20) if len(self.leaf_size) > 0 else None
 
-        self.ax.set_title(f"χ-scaling for N={n_m}M Unique={n_unique_m}M"
-                          f" (k:v={self.key_size[0]}:{self.value_size[0]}, L={leaf_size_mb})"
-                          f"\n(cache={leaf_cache_mb}mb "
-                          f"tcmalloc={mem_cache_mb}mb,{mem_release_rate} "
-                          f"pipeline={cp_pipeline})")
+        if False:
+            self.ax.set_title(f"χ-scaling for N={n_m}M Unique={n_unique_m}M"
+                              f" (k:v={self.key_size[0]}:{self.value_size[0]}, L={leaf_size_mb})"
+                              f"\n(cache={leaf_cache_mb}mb "
+                              f"tcmalloc={mem_cache_mb}mb,{mem_release_rate} "
+                              f"pipeline={cp_pipeline})")
+        else:
+            self.ax.set_title(f"χ-scaling for N={n_m}M"
+                              f" (k:v={self.key_size[0]}:{self.value_size[0]}, L={leaf_size_mb})\n")
 
         self.series += self.ax.plot(self.chi, [100-self.thruput_k_load[0]*100/y for y in self.thruput_k_load],
                                     label='PUT latency')
@@ -240,7 +245,7 @@ class BenchmarkResult:
                                     label='Write Amplification')
 
         self.ax.set_xlabel('Checkpoint Distance (χ)')
-        self.ax.set_ylabel('Improvement (%)')
+        self.ax.set_ylabel('Reduction (%)')
         self.ax.set_xscale('log')
         self.ax.set_ylim(0, 100)
         self.ax.grid()
@@ -250,13 +255,14 @@ class BenchmarkResult:
         self.ax.legend(self.series, [s.get_label() for s in self.series], loc='upper left')    
         image_name = self._image_name(suffix)
         print(f"  Writing {image_name}...")
+        plt.tight_layout()
         plt.savefig(image_name)
 
     def _image_name(self, suffix):
         name = self.log
         if name.endswith('.log'):
             name = name[:-4]
-        name += "." + suffix + ".png"
+        name += "." + suffix + ".pdf"
         return name
 
     def plot_page_faults(self):
@@ -274,12 +280,13 @@ class BenchmarkResult:
         self._plot_tp_and_wa_vs_chi()
 
         percent_faster = [100-self.thruput_k_load[0]*100/y for y in self.thruput_k_load]
-        mb_used = [bytes_used / 2**20 for bytes_used in self.mem_used]
+        gb_used = [bytes_used / 2**30 for bytes_used in self.mem_used]
 
         self.ax2 = self.ax.twinx()
+        self.ax2.set_ylabel("Memory (GB)")
 
-        self.series += self.ax2.plot(self.chi, mb_used,
-                                     color='green', label='Memory Used (mb)')
+        self.series += self.ax2.plot(self.chi, gb_used,
+                                     color='green', label='Memory Used (gb)')
         
         if KB_PER_SPEEDUP_PCT:
             speedup_per = [10*(used1 - used0) / (faster1 - faster0)
@@ -293,7 +300,7 @@ class BenchmarkResult:
             self.series += self.ax2.plot(self.chi, speedup_per,
                                          color='red', label="100KB per % Speedup")
 
-        self.ax2.set_ylim(0, 1e5)
+        self.ax2.set_ylim(0, 128) #131072)
 
         self._write_image('mem-used')
 

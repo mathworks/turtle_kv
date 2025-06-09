@@ -55,7 +55,7 @@ for log in logs:
         print("c", result.thruput_k_c)
         print("d", result.thruput_k_d)
         print("f", result.thruput_k_f)
-        
+
         combined = list(zip_longest(
             result.chi_load,
             result.chi_a,
@@ -76,25 +76,29 @@ for log in logs:
             tuple(vals[0:6]): vals[6:]
             for vals in combined
         }
-        
+
+        print("combined=")
         for c in combined.items():
             print(c)
 
+        plt.rcParams['font.family'] = 'sans-serif'
+        plt.rcParams['font.sans-serif'] = 'Helvetica'
+
         fig, ax = plt.subplots()
-        
+
+        fig.set_size_inches(5, 3.5)
+
         dynamic = combined[(384, 2, 1, 1, 4, 1)]
-        print(dynamic)
+        print("dynamic=\n",dynamic)
 
         w = 0.1
         p = 0.02
         i = 0
 
-        
-        
         cm1 = [
             "#a6cee3",
             "#1f78b4",
-            "#b2df8a",            
+            "#b2df8a",
             "#33a02c",
             "#fb9a99",
             "#e31a1c",
@@ -125,30 +129,34 @@ for log in logs:
 
         cm = cm1
         cm_edge = list(map(scale_rgb(0.7), cm))
-        
+
         rects = ax.bar([i*(w+p) + x for x in range(6)], dynamic, width=w,
-                       label="χ=Dynamic",
+                       label="χ=384,2,1,1,4,1",
                        color=cm[i],
                        edgecolor=cm_edge[i],
                        linewidth=0.3)
         i += 1
         ax.bar_label(rects, padding=3)
 
-        chi1 = combined[(1, 1, 1, 1, 1, 1)]
-        rects = ax.bar([i*(w+p) + x for x in range(6)], chi1, width=w,
-                       label="χ=1",
-                       color=cm[i],
-                       edgecolor=cm_edge[i],
-                       linewidth=0.3)
+        try:
+            chi1 = combined[(1, 1, 1, 1, 1, 1)]
+            rects = ax.bar([i*(w+p) + x for x in range(6)], chi1, width=w,
+                           label="χ=1",
+                           color=cm[i],
+                           edgecolor=cm_edge[i],
+                           linewidth=0.3)
+        except:
+            print("chi=1 not found")
+
         i += 1
-        
+
         chi2 = combined[(2, 2, 2, 2, 2, 2)]
         rects = ax.bar([i*(w+p) + x for x in range(6)], chi2, width=w,
                        label="χ=2",
                        color=cm[i],
                        edgecolor=cm_edge[i],
                        linewidth=0.3)
-                       
+
         i += 1
 
         chi16 = combined[(16, 16, 16, 16, 16, 16)]
@@ -157,9 +165,14 @@ for log in logs:
                        color=cm[i],
                        edgecolor=cm_edge[i],
                        linewidth=0.3,
-                       tick_label=['Load', 'A', 'B', 'C', 'D', 'F'])
+                       tick_label=['Load\nrandom',
+                                   'A (50/50)\nzipf',
+                                   'B (95/5)\nzipf',
+                                   'C (100/0)\nzipf',
+                                   'D (95/5)\nlatest',
+                                   'F (50/50)\nr/m/w'])
         i += 1
-        
+
         chi32 = combined[(32, 32, 32, 32, 32, 32)]
         rects = ax.bar([i*(w+p) + x for x in range(6)], chi32, width=w,
                        label="χ=32",
@@ -168,34 +181,46 @@ for log in logs:
                        linewidth=0.3)
         i += 1
 
-        chi256 = combined[(256, 256, 256, 256, 256, 256)]
-        rects = ax.bar([i*(w+p) + x for x in range(6)], chi256, width=w,
-                       label="χ=256",
-                       color=cm[i],
-                       edgecolor=cm_edge[i],
-                       linewidth=0.3)
+        try:
+            chi256 = combined[(256, 256, 256, 256, 256, 256)]
+            rects = ax.bar([i*(w+p) + x for x in range(6)], chi256, width=w,
+                           label="χ=256",
+                           color=cm[i],
+                           edgecolor=cm_edge[i],
+                           linewidth=0.3)
+        except:
+            print("chi=256 not found")
+
         i += 1
 
-        chi512 = combined[(512, 512, 512, 512, 512, 512)]
-        rects = ax.bar([i*(w+p) + x for x in range(6)], chi512, width=w,
-                       label="χ=512",
-                       color=cm[i],
-                       edgecolor=cm_edge[i],
-                       linewidth=0.3)
+        try:
+            chi512 = combined[(512, 512, 512, 512, 512, 512)]
+            rects = ax.bar([i*(w+p) + x for x in range(6)], chi512, width=w,
+                           label="χ=512",
+                           color=cm[i],
+                           edgecolor=cm_edge[i],
+                           linewidth=0.3)
+        except:
+            print("chi=512 not found")
+
         i += 1
-        
+
         #ax.bar_label(rects, padding=3)
 
-        ax.set_ylim(0, 8000)
-        ax.set_xlabel("Workloads")
+        ax.set_ylim(0, 9999)
+        ax.set_xlabel("Workload")
         ax.set_ylabel("KOps/Second")
-        ax.set_title("Throughput for YCSB Workloads, Dynamic vs Static χ-tuning\n"
-                     "(n=700M, k:v=24:100, 32 threads)")
-        ax.legend()
+        ax.set_title("YCSB Dynamic vs Static χ-tuning\n"
+                     "(N=700M, 32 threads, k:v=24:100)")
+        ax.legend(fontsize="smaller")
+        ax.set_axisbelow(True)
+        ax.set_yticks([y*1000 for y in range(10)])
+        ax.yaxis.grid(which="major", linewidth=0.5, alpha=0.5)
+        ax.yaxis.grid(which="minor", linewidth=0.3, alpha=0.3)
+
         plt.tight_layout()
         plt.savefig(log + ".pdf")
-            
+
     except:
         raise
         print(f"...incomplete/bad result; skipping")
-
