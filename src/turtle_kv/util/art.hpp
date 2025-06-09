@@ -1,11 +1,12 @@
 #pragma once
 
-#include <turtle_kv/static_sort/static_sort.h>
 #include <turtle_kv/import/int_types.hpp>
 
 #include <batteries/case_of.hpp>
 
 #include <absl/synchronization/mutex.h>
+
+#include <static_sort/static_sort.h>
 
 #include <array>
 #include <memory>

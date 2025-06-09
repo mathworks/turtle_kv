@@ -18,7 +18,9 @@ class TurtleKvRecipe(ConanFile):
     exports_sources = [
         "CMakeLists.txt",
         "**/CMakeLists.txt",
+        "src/*.h",
         "src/*.hpp",
+        "src/**/*.h",
         "src/**/*.hpp",
         "src/*.ipp",
         "src/**/*.ipp",
