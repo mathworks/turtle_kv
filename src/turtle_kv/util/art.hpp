@@ -193,9 +193,20 @@ class ART
   //----- --- -- -  -  -   -
 
   static_assert(sizeof(Node4) == 48);
+  static_assert(sizeof(Node4) % 8 == 0);
+  static_assert(alignof(Node4) >= 8);
+
   static_assert(sizeof(Node16) == 152);
+  static_assert(sizeof(Node16) % 8 == 0);
+  static_assert(alignof(Node16) >= 8);
+
   static_assert(sizeof(Node48) == 648);
+  static_assert(sizeof(Node48) % 8 == 0);
+  static_assert(alignof(Node48) >= 8);
+
   static_assert(sizeof(Node256) == 2056);
+  static_assert(sizeof(Node256) % 8 == 0);
+  static_assert(alignof(Node256) >= 8);
 
   using ExtentStorageT = std::aligned_storage_t<sizeof(Node256) * 4096, 64>;
 
@@ -205,13 +216,13 @@ class ART
 
   void put(std::string_view key)
   {
-    VLOG(1) << "[put]" << BATT_INSPECT_STR(key);
+    DVLOG(1) << "[put]" << BATT_INSPECT_STR(key);
 
     NodeBase* root = &this->root_;
     NodeBase** node = &root;
 
     for (char key_char : key) {
-      VLOG(1) << BATT_INSPECT(key_char) << BATT_INSPECT(node);
+      DVLOG(1) << BATT_INSPECT(key_char) << BATT_INSPECT(node);
       //----- --- -- -  -  -   -
       const u8 key_byte = key_char;
 
@@ -232,13 +243,13 @@ class ART
 
   bool contains(std::string_view key)
   {
-    VLOG(1) << "[contains]" << BATT_INSPECT_STR(key);
+    DVLOG(1) << "[contains]" << BATT_INSPECT_STR(key);
 
     NodeBase* root = &this->root_;
     NodeBase** node = &root;
 
     for (char key_char : key) {
-      VLOG(1) << BATT_INSPECT(key_char) << BATT_INSPECT(node);
+      DVLOG(1) << BATT_INSPECT(key_char) << BATT_INSPECT(node);
       //----- --- -- -  -  -   -
       const u8 key_byte = key_char;
 
@@ -280,23 +291,23 @@ class ART
 
     switch (node->node_type) {
       case NodeType::kLeaf:
-        VLOG(1) << " visiting Leaf";
+        DVLOG(1) << " visiting Leaf";
         visitor(static_cast<Leaf*>(node));
         break;
       case NodeType::kNode4:
-        VLOG(1) << " visiting Node4";
+        DVLOG(1) << " visiting Node4";
         visitor(static_cast<Node4*>(node));
         break;
       case NodeType::kNode16:
-        VLOG(1) << " visiting Node16";
+        DVLOG(1) << " visiting Node16";
         visitor(static_cast<Node16*>(node));
         break;
       case NodeType::kNode48:
-        VLOG(1) << " visiting Node48";
+        DVLOG(1) << " visiting Node48";
         visitor(static_cast<Node48*>(node));
         break;
       case NodeType::kNode256:
-        VLOG(1) << " visiting Node256";
+        DVLOG(1) << " visiting Node256";
         visitor(static_cast<Node256*>(node));
         break;
       default:
@@ -309,30 +320,30 @@ class ART
   {
     usize n = (n_arg + 7) & ~usize{7};
 
-    VLOG(1) << "alloc(" << n_arg << " -> " << n << ")";
+    DVLOG(1) << "alloc(" << n_arg << " -> " << n << ")";
     usize seq_i = this->extent_seq_.load();
 
     for (;;) {
       ExtentState& state = this->extent_state_[seq_i % 256];
       void* ptr = state.alloc(n);
-      VLOG(1) << BATT_INSPECT(ptr) << BATT_INSPECT(seq_i);
+      DVLOG(1) << BATT_INSPECT(ptr) << BATT_INSPECT(seq_i);
       if (ptr) {
         return ptr;
       }
 
-      LOG(INFO) << " no space in current extent;" << BATT_INSPECT(seq_i);
+      VLOG(1) << " no space in current extent;" << BATT_INSPECT(seq_i);
       {
         absl::MutexLock lock{&this->mutex_};
         seq_i = this->extent_seq_.load();
         ptr = this->extent_state_[seq_i % 256].alloc(n);
-        LOG(INFO) << " retry with lock;" << BATT_INSPECT(ptr) << BATT_INSPECT(seq_i);
+        VLOG(1) << " retry with lock;" << BATT_INSPECT(ptr) << BATT_INSPECT(seq_i);
         if (ptr) {
           return ptr;
         }
 
         this->extents_.emplace_back(std::make_unique<ExtentStorageT>());
         ++seq_i;
-        LOG(INFO) << " new extent added;" << BATT_INSPECT(seq_i);
+        VLOG(1) << " new extent added;" << BATT_INSPECT(seq_i);
 
         ExtentState& new_state = this->extent_state_[seq_i % 256];
         new_state.data_ = reinterpret_cast<u8*>(this->extents_.back().get());

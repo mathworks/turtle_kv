@@ -76,7 +76,7 @@ void run_bonsai_filter_test(const usize num_buckets, const usize num_keys)
     index.put(key);
     trie.insert(key, trie_node_count);
 
-    if (percent(rng) < 1000 || i == num_keys - 1) {
+    if (percent(rng) < 0 || i == num_keys - 1) {
       std::set<std::string> found_keys;
 
       double false_positives = 0;
