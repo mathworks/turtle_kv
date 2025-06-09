@@ -1,8 +1,7 @@
 #pragma once
 
+#include <turtle_kv/static_sort/static_sort.h>
 #include <turtle_kv/import/int_types.hpp>
-
-#include <static_sort/static_sort.h>
 
 #include <batteries/case_of.hpp>
 
