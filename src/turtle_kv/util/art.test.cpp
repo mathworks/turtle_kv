@@ -132,10 +132,9 @@ TEST(ArtTest, SimdSearch)
 //
 TEST(ArtTest, MultiThreadTest)
 {
-  const int n_rounds = 10;
+  const int n_rounds = 3;
 
-  for (usize n_threads = 1; n_threads < std::min<usize>(4, std::thread::hardware_concurrency());
-       ++n_threads) {
+  for (usize n_threads = 1; n_threads < std::thread::hardware_concurrency(); ++n_threads) {
     std::atomic<int> round{-1};
     std::atomic<int> pending{0};
     std::atomic<ART*> p_index{nullptr};
