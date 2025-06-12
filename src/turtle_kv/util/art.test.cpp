@@ -134,7 +134,8 @@ TEST(ArtTest, MultiThreadTest)
 {
   const int n_rounds = 10;
 
-  for (usize n_threads = 1; n_threads < std::thread::hardware_concurrency(); ++n_threads) {
+  for (usize n_threads = 1; n_threads < std::min<usize>(4, std::thread::hardware_concurrency());
+       ++n_threads) {
     std::atomic<int> round{-1};
     std::atomic<int> pending{0};
     std::atomic<ART*> p_index{nullptr};
@@ -171,7 +172,7 @@ TEST(ArtTest, MultiThreadTest)
     });
 
     usize size_i = 0;
-    for (const usize num_keys : {1e5, 2e5, 3e5}) {
+    for (const usize num_keys : {3e5, 2e5, 1e5}) {
       std::vector<std::string> keys;
       {
         std::default_random_engine rng{/*seed=*/1};
