@@ -55,56 +55,6 @@ inline usize index_of(u8 key_byte, const std::array<u8, 16>& keys)
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 //
-class AtomicBranchCount
-{
- public:
-  using Self = AtomicBranchCount;
-
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-
-  AtomicBranchCount() noexcept : committed_{0}, reserved_{0}
-  {
-  }
-
-  explicit AtomicBranchCount(u16 init_val) noexcept : committed_{init_val}, reserved_{init_val}
-  {
-  }
-
-  usize try_reserve(usize max_branches)
-  {
-    const usize branch_i = this->reserved_.fetch_add(1);
-    if (branch_i < max_branches) {
-      return branch_i;
-    }
-    this->reserved_.fetch_sub(1);
-    return max_branches;
-  }
-
-  void wait_for(u16 n)
-  {
-    while (this->committed_.load() != n) {
-      continue;
-    }
-  }
-
-  void commit(usize branch_i)
-  {
-    const usize old_count = this->committed_.exchange(branch_i + 1);
-    BATT_CHECK_EQ(old_count, branch_i);
-  }
-
-  usize get() const
-  {
-    return this->committed_.load();
-  }
-
- private:
-  std::atomic<u16> committed_;
-  std::atomic<u16> reserved_;
-};
-
-//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
-//
 template <typename IntT>
 class SeqLock
 {
