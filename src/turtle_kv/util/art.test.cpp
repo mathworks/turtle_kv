@@ -39,11 +39,12 @@ TEST(ArtTest, Test)
 
     LatencyMetric insert_latency;
     for (usize trial = 0; trial < 10; ++trial) {
-      LatencyTimer timer{insert_latency, num_keys};
       ART index;
-
-      for (std::string_view s : keys) {
-        index.put(s);
+      {
+        LatencyTimer timer{insert_latency, num_keys};
+        for (std::string_view s : keys) {
+          index.put(s);
+        }
       }
     }
     std::cerr << BATT_INSPECT(insert_latency) << std::endl;

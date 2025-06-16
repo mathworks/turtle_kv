@@ -6,6 +6,7 @@
 #include <turtle_kv/import/small_vec.hpp>
 
 #include <batteries/case_of.hpp>
+#include <batteries/checked_cast.hpp>
 
 #include <absl/synchronization/mutex.h>
 
@@ -15,10 +16,13 @@
 #include <variant>
 #include <vector>
 
-#include <emmintrin.h>
-#include <immintrin.h>
-#include <mmintrin.h>
-#include <pmmintrin.h>
+#include <emmintrin.h>  // SSE2
+#include <mmintrin.h>   // MMX
+#include <pmmintrin.h>  // SSE3
+
+#ifdef __AVX512F__
+#include <immintrin.h>  // AVX512 (AVX, AVX2, FMA)
+#endif
 
 namespace turtle_kv {
 
@@ -42,15 +46,13 @@ inline usize index_of(u8 key_byte, const std::array<u8, 16>& keys)
   __m128i pattern = _mm_set1_epi8((char)key_byte);
   __m128i values = _mm_lddqu_si128((const __m128i*)keys.data());
 
-#if 0
-  // TODO [tastolfi 2025-06-11] if AVX-512 isn't available:
-  __m128i _mm_cmpeq_epi8 (__m128i a, __m128i b);
-  int _mm_movemask_epi8 (__m128i a);
+#ifndef __AVX512F__
+  int result = _mm_movemask_epi8(_mm_cmpeq_epi8(pattern, values));
 #else
   __mmask16 result = _mm_cmpeq_epi8_mask(pattern, values);
+#endif
 
   return (__builtin_ffs(result) - 1) & 31;
-#endif
 }
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
@@ -93,12 +95,14 @@ class ART
   template <usize kBranchCount>
   struct SmallNode;
 
+  struct Node1;
   struct Node4;
   struct Node16;
   struct Node48;
   struct Node256;
 
   enum struct NodeType : u8 {
+    // kNode1,
     kNode4,
     kNode16,
     kNode48,
@@ -106,9 +110,17 @@ class ART
   };
 
   struct NodeBase {
+    static constexpr u8 kFlagTerminal = 0x80;
+    static constexpr u8 kFlagObsolete = 0x40;
+
+    //+++++++++++-+-+--+----- --- -- -  -  -   -
+
     const NodeType node_type;
-    u8 size_;
-    std::atomic<u16> state_{0};
+    u8 flags_;
+    u8 prefix_len_;
+    u8 branch_count_;
+    std::atomic<u32> state_{0};
+    const u8* prefix_;
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -116,13 +128,68 @@ class ART
     {
     }
 
+    NodeBase(const NodeBase&) = delete;
+    NodeBase& operator=(const NodeBase&) = delete;
+
     template <typename... CaseFns>
     bool visit(CaseFns&&... case_fns);
+
+    bool is_finalized() const
+    {
+      return (this->size_d_ & 0x80) != 0;
+    }
+
+    void finalize()
+    {
+      this->size_d_ |= 0x80;
+    }
+
+    bool is_terminal() const
+    {
+      return (this->size_d_ & 0x40) != 0;
+    }
+
+    void set_terminal()
+    {
+      this->size_d_ |= 0x40;
+    }
+
+    u8 get_size() const
+    {
+      return this->size_d_ & 0x3f;
+    }
+
+    void set_size(u8 n)
+    {
+      BATT_CHECK(!this->is_finalized());
+      this->size_d_ = (this->size_d_ & 0xc0) | (n & 0x3f);
+    }
   };
+
+  static_assert(sizeof(NodeBase) == 16);
 
   using BranchIndex = u8;
 
   static constexpr BranchIndex kInvalidBranchIndex = u8{255};
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+  //
+  struct Node1 : NodeBase {
+    const char* data_;
+    NodeBase* child = nullptr;
+
+    //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+    explicit Node1(const char* data, usize len) noexcept : NodeBase{NodeType::kNode1}, data_{data}
+    {
+      this->size_ = BATT_CHECKED_CAST(u8, len);
+    }
+
+    Node1(const Node1&) = delete;
+    Node1& operator=(const Node1&) = delete;
+
+    auto insert(bool& path_conflict, const char*& key_data, usize& key_len, ART* art) -> NodeBase**;
+  };
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
   //
@@ -136,7 +203,7 @@ class ART
     explicit SmallNode() noexcept
         : NodeBase{(kBranchCount == 4) ? NodeType::kNode4 : NodeType::kNode16}
     {
-      this->size_ = 0;
+      this->set_size(0);
     }
 
     SmallNode(const SmallNode&) = delete;
@@ -144,13 +211,32 @@ class ART
 
     explicit SmallNode(const SmallNode<4>* old) noexcept : SmallNode{}
     {
-      this->size_ = old->size_;
       static_assert(kBranchCount == 16);
+      //----- --- -- -  -  -   -
+      this->set_size(old->get_size());
       std::copy(old->branches.begin(), old->branches.end(), this->branches.begin());
       std::copy(old->key.begin(), old->key.end(), this->key.begin());
     }
 
-    auto insert(const char* key_data, usize key_len, ART* art) -> bool;
+    explicit SmallNode(const Node1* old, ART* art) noexcept : SmallNode{}
+    {
+      static_assert(kBranchCount == 4);
+      //----- --- -- -  -  -   -
+      usize key_len = old->get_size();
+      if (key_len != 0) {
+        bool path_conflict = false;
+        const char* key_data = old->data_;
+        NodeBase** branch = this->insert(path_conflict, key_data, key_len, art);
+        BATT_CHECK_NOT_NULLPTR(branch);
+        BATT_CHECK_NOT_NULLPTR(*branch);
+        BATT_CHECK_EQ(key_len, 0);
+        BATT_CHECK(!path_conflict);
+      }
+    }
+
+    //----- --- -- -  -  -   -
+
+    auto insert(bool& path_conflict, const char*& key_data, usize& key_len, ART* art) -> NodeBase**;
   };
 
   struct Node4 : SmallNode<4> {
@@ -173,7 +259,7 @@ class ART
     {
       this->branch_for_key.fill(kInvalidBranchIndex);
 
-      for (usize i = 0; i < old->size_; ++i) {
+      for (usize i = 0; i < old->get_size(); ++i) {
         this->branch_for_key[old->key[i]] = i;
         this->branches[i] = old->branches[i];
       }
@@ -182,7 +268,7 @@ class ART
     Node48(const Node48&) = delete;
     Node48& operator=(const Node48&) = delete;
 
-    auto insert(const char* key_data, usize key_len, ART* art) -> bool;
+    auto insert(bool& path_conflict, const char*& key_data, usize& key_len, ART* art) -> NodeBase**;
   };
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -213,7 +299,7 @@ class ART
     Node256(const Node256&) = delete;
     Node256& operator=(const Node256&) = delete;
 
-    auto insert(const char* key_data, usize key_len, ART* art) -> bool;
+    auto insert(bool& path_conflict, const char*& key_data, usize& key_len, ART* art) -> NodeBase**;
   };
 
   //----- --- -- -  -  -   -
@@ -244,49 +330,48 @@ class ART
   {
     DVLOG(1) << "[put]" << BATT_INSPECT_STR(key);
 
-    if (key.empty()) {
-      return;
-    }
+    for (;;) {
+      const char* key_data = key.data();
+      usize key_len = key.size();
 
-    const bool success = this->root_.insert(key.data(), key.size(), this);
-    BATT_CHECK(success);
+      NodeBase* root = &this->root_;
+      NodeBase** node = &root;
+      NodeBase* parent = nullptr;
 
-#if 0
-    NodeBase* root = &this->root_;
-    NodeBase** node = &root;
-    NodeBase** parent = nullptr;
+      bool path_conflict = false;
 
-    for (char key_char : key) {
-      //----- --- -- -  -  -   -
-      for (bool retry = true; retry;) {
-        const u16 before_state = parent ? (**parent).state_.load() : 0;
-        if ((before_state & 3) != 0) {
-          continue;
-        }
-
-        const u8 key_byte = key_char;
-
-        retry = false;
-        if (!(**node).visit([&](auto* node_case) {
-              NodeBase** child = node_case->insert(key_byte, this);
-              const u16 after_state = parent ? (**parent).state_.load() : 0;
-              if (before_state != after_state) {
-                retry = true;
-              } else if (!child) {
-                  SeqLock<u16> lock0{(*parent)->NodeBase::state_};
+      while (key_len != 0) {
+        for (;;) {
+          bool retry = false;
+          if (!(**node).visit([&](auto* node_case) {
+                NodeBase** child = node_case->insert(path_conflict, key_data, key_len, this);
+                if (!child) {
+                  SeqLock<u16> lock0{parent->NodeBase::state_};
                   SeqLock<u16> lock1{node_case->NodeBase::state_};
-                *node = this->grow_node(*node_case);
-                retry = true;
-              } else {
-                parent = node;
-                node = child;
-              }
-            })) {
-          retry = true;
+                  if (parent->NodeBase::is_finalized()) {
+                    path_conflict = true;
+                  } else {
+                    node_case->NodeBase::finalize();
+                    *node = this->grow_node(*node_case);
+                    retry = true;
+                  }
+                } else {
+                  parent = node_case;
+                  node = child;
+                }
+              })) {
+            retry = true;
+          }
+          if (path_conflict || !retry) {
+            break;
+          }
         }
       }
+
+      if (!path_conflict) {
+        break;
+      }
     }
-#endif
   }
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -334,9 +419,27 @@ class ART
     return this->per_thread_memory_context_.get().alloc(n, this);
   }
 
-  Node4* new_node()
+  Node1* new_node1(const char* data, usize len)
+  {
+    return new (this->alloc_storage(sizeof(Node1))) Node1{data, len};
+  }
+
+  Node4* new_node4()
   {
     return new (this->alloc_storage(sizeof(Node4))) Node4{};
+  }
+
+  NodeBase* new_node(const char* data, usize len)
+  {
+    if (len == 0) {
+      return this->new_node4();
+    }
+    return this->new_node1(data, len);
+  }
+
+  Node4* grow_node(const Node1& old)
+  {
+    return new (this->alloc_storage(sizeof(Node4))) Node4{&old, this};
   }
 
   Node16* grow_node(const Node4& old)
@@ -360,31 +463,6 @@ class ART
     BATT_UNREACHABLE();
   }
 
-  template <typename ParentNodeT>
-  bool insert_suffix_impl(const char* key_data,
-                          usize key_len,
-                          ParentNodeT* parent,
-                          NodeBase** found)
-  {
-    if (key_len != 0) {
-      for (;;) {
-        bool retry = false;
-        (*found)->visit([&](auto* child) {
-          if (!child->insert(key_data, key_len, this)) {
-            retry = true;
-            SeqLock<u16> lock0{parent->state_};
-            SeqLock<u16> lock1{child->state_};
-            *found = this->grow_node(*child);
-          }
-        });
-        if (!retry) {
-          break;
-        }
-      }
-    }
-    return true;
-  }
-
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   Node256 root_;
@@ -403,6 +481,9 @@ inline bool ART::NodeBase::visit(CaseFns&&... case_fns)
   auto visitor = batt::make_case_of_visitor(BATT_FORWARD(case_fns)...);
 
   switch (this->node_type) {
+    case NodeType::kNode1:
+      visitor(static_cast<Node1*>(this));
+      break;
     case NodeType::kNode4:
       visitor(static_cast<Node4*>(this));
       break;
@@ -423,9 +504,113 @@ inline bool ART::NodeBase::visit(CaseFns&&... case_fns)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+auto ART::Node1::insert(bool& path_conflict, const char*& key_data, usize& key_len, ART* art)
+    -> NodeBase**
+{
+  for (;;) {
+    const u16 before_state = this->NodeBase::state_.load();
+    if ((before_state & 3) != 0) {
+      continue;
+    }
+
+    const char* const observed_data = this->data_;
+    usize const observed_len = this->get_size();
+
+    const u16 after_state = this->NodeBase::state_.load();
+    if (before_state != after_state) {
+      continue;
+    }
+
+    const char* suffix_data = observed_data;
+    usize suffix_len = observed_len;
+
+    const char* insert_data = key_data;
+    usize insert_len = key_len;
+
+    while (suffix_len && insert_len && *suffix_data == *insert_data) {
+      ++suffix_data;
+      --suffix_len;
+
+      ++insert_data;
+      --insert_len;
+    }
+
+    const usize common_len = (observed_len - suffix_len);
+
+    // If no common prefix was matched, fail; this node must grow.
+    //
+    if (common_len == 0) {
+      return nullptr;
+    }
+
+    // The node must be modified.  Lock it first.
+    //
+    SeqLock<u16> lock{this->NodeBase::state_};
+
+    if (observed_data != this->data_ || observed_len != this->size_) {
+      // Conflict detected; retry.
+      //
+      continue;
+    }
+
+    // If the entire input key matched, *and* no conflict detected, then consume the input and
+    // return success.
+    //
+    if (suffix_len == 0 && insert_len == 0) {
+      key_data += key_len;
+      key_len = 0;
+      this->set_terminal();
+      return &this->child;
+    }
+
+    if (suffix_len == 0 || insert_len == 0) {
+      key_data += common_len;
+      key_len -= common_len;
+
+      this->set_size(common_len);
+
+      Node1* new_child = nullptr;
+
+      if (suffix_len > insert_len) {
+        new_child = art->new_node1(this->data_ + common_len, suffix_len);
+      } else {
+        new_child = art->new_node(key_data, key_len);
+      }
+
+      new_child->child = this->child;
+      this->child = new_child;
+
+    } else {
+      Node4* new_child = art->new_node4();
+
+      bool path_conflict = false;
+      const char* suffix_data = this->data_ + common_len;
+
+      NodeBase** new_child_branch = new_child->insert(path_conflict, suffix_data, suffix_len, art);
+
+      BATT_CHECK(!path_conflict);
+      BATT_CHECK_NOT_NULLPTR(new_child_branch);
+      BATT_CHECK_NOT_NULLPTR(*new_child_branch);
+      BATT_CHECK_EQ((*new_child_branch)->node_type, NodeType::kNode1);
+
+      Node1* split_node1 = static_cast<Node1*>(*new_child_branch);
+      split_node1->child = this->child;
+      this->child = new_child;
+    }
+
+    return &this->child;
+  }
+  BATT_UNREACHABLE();
+}
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 template <usize kBranchCount>
-inline auto ART::SmallNode<kBranchCount>::insert(const char* key_data, usize key_len, ART* art)
-    -> bool
+inline auto ART::SmallNode<kBranchCount>::insert(bool& path_conflict,
+                                                 const char*& key_data,
+                                                 usize& key_len,
+                                                 ART* art) -> NodeBase**
 {
   const u8 key_byte = key_data[0];
 
@@ -462,26 +647,30 @@ inline auto ART::SmallNode<kBranchCount>::insert(const char* key_data, usize key
         const usize i = this->size_;
         //----- --- -- -  -  -   -
         this->key[i] = key_byte;
-        this->branches[i] = art->new_node();
+        this->branches[i] = art->new_node1(key_data + 1, key_len - 1);
+        key_data += key_len;
+        key_len = 0;
         //----- --- -- -  -  -   -
         ++this->size_;
 
         found = &this->branches[i];
       }
+    } else {
+      ++key_data;
+      --key_len;
     }
 
-    if (!found) {
-      return false;
-    }
-
-    return art->insert_suffix_impl(key_data + 1, key_len - 1, this, found);
+    return found;
   }
   BATT_UNREACHABLE();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-inline auto ART::Node48::insert(const char* key_data, usize key_len, ART* art) -> bool
+inline auto ART::Node48::insert(bool& path_conflict,
+                                const char*& key_data,
+                                usize& key_len,
+                                ART* art) -> NodeBase**
 {
   const u8 key_byte = key_data[0];
 
@@ -505,7 +694,7 @@ inline auto ART::Node48::insert(const char* key_data, usize key_len, ART* art) -
       // If there is no more room, fail.
       //
       if (this->size_ == 48) {
-        return false;
+        return nullptr;
       }
 
       // We have exclusive access, a branch for the search key is still not found, and we have
@@ -513,8 +702,10 @@ inline auto ART::Node48::insert(const char* key_data, usize key_len, ART* art) -
       //
       i = this->size_;
       //----- --- -- -  -  -   -
-      this->branches[i] = art->new_node();
+      this->branches[i] = art->new_node1(key_data + 1, key_len - 1);
       this->branch_for_key[key_byte] = i;
+      key_data += key_len;
+      key_len = 0;
       //----- --- -- -  -  -   -
       ++this->size_;
       //
@@ -530,14 +721,20 @@ inline auto ART::Node48::insert(const char* key_data, usize key_len, ART* art) -
       continue;
     }
 
-    return art->insert_suffix_impl(key_data + 1, key_len - 1, this, found);
+    ++key_data;
+    --key_len;
+
+    return found;
   }
   BATT_UNREACHABLE();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-inline auto ART::Node256::insert(const char* key_data, usize key_len, ART* art) -> bool
+inline auto ART::Node256::insert(bool& path_conflict,
+                                 const char*& key_data,
+                                 usize& key_len,
+                                 ART* art) -> NodeBase**
 {
   const u8 key_byte = key_data[0];
 
@@ -547,21 +744,35 @@ inline auto ART::Node256::insert(const char* key_data, usize key_len, ART* art) 
       continue;
     }
 
+    const bool finalized = this->NodeBase::is_finalized();
     NodeBase** found = &this->branches[key_byte];
-
-    if (*found == nullptr) {
-      SeqLock<u16> lock{this->NodeBase::state_};
-      if (*found == nullptr) {
-        *found = art->new_node();
-      }
-    }
 
     const u16 after_state = this->NodeBase::state_.load();
     if (before_state != after_state) {
       continue;
     }
 
-    return art->insert_suffix_impl(key_data + 1, key_len - 1, this, found);
+    if (finalized) {
+      path_conflict = true;
+      return nullptr;
+    }
+
+    if (*found == nullptr) {
+      SeqLock<u16> lock{this->NodeBase::state_};
+      if (*found == nullptr) {
+        *found = art->new_node1(key_data + 1, key_len - 1);
+        key_data += key_len;
+        key_len = 0;
+      } else {
+        ++key_data;
+        --key_len;
+      }
+    } else {
+      ++key_data;
+      --key_len;
+    }
+
+    return found;
   }
   BATT_UNREACHABLE();
 }
