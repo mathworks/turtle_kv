@@ -98,11 +98,18 @@ void ART::put(std::string_view key)
           find_common_prefix_len(node_prefix, node_prefix_len, key_data, key_len);
 
       if (common_len != node_prefix_len) {
+        //----- --- -- -  -  -   -
         SeqMutex<u32>::WriteLock parent_write_lock{parent->mutex_};
+        if (parent->is_obsolete()) {
+          reset = true;
+          return;
+        }
+
+        //----- --- -- -  -  -   -
         SeqMutex<u32>::WriteLock node_write_lock{node->mutex_};
 
         if (node != branch.reload() || node_prefix != node->prefix_ ||
-            node_prefix_len != node->prefix_len_) {
+            node_prefix_len != node->prefix_len_ || node->is_obsolete()) {
           reset = true;
           return;
         }
@@ -126,6 +133,7 @@ void ART::put(std::string_view key)
           new_parent->set_terminal();
         }
 
+        node->set_obsolete();
         branch.store(new_parent);
         done = true;
         return;
@@ -133,9 +141,11 @@ void ART::put(std::string_view key)
 
       if (key_len == common_len) {
         if (!node_is_terminal) {
+          //----- --- -- -  -  -   -
           SeqMutex<u32>::WriteLock node_write_lock{node->mutex_};
 
-          if (node_prefix != node->prefix_ || node_prefix_len != node->prefix_len_) {
+          if (node->is_obsolete() || node_prefix != node->prefix_ ||
+              node_prefix_len != node->prefix_len_) {
             reset = true;
             return;
           }
@@ -176,18 +186,35 @@ void ART::put(std::string_view key)
       Optional<SeqMutex<u32>::WriteLock> node_write_lock;
 
       if (next.p_ptr == nullptr && observed_branch_count == node->max_branch_count()) {
+        //----- --- -- -  -  -   -
         parent_write_lock.emplace(parent->mutex_);
+        if (parent->is_obsolete()) {
+          reset = true;
+          return;
+        }
+
+        //----- --- -- -  -  -   -
         node_write_lock.emplace(node->mutex_);
+        if (node->is_obsolete()) {
+          reset = true;
+          return;
+        }
 
         BATT_CHECK_EQ(observed_branch_count, node->branch_count());
 
         auto* new_node = this->grow_node(node);
         this->add_child(new_node, key_byte, new_key_data, new_key_len)->set_terminal();
 
+        node->set_obsolete();
         branch.store(new_node);
 
       } else {
+        //----- --- -- -  -  -   -
         node_write_lock.emplace(node->mutex_);
+        if (node->is_obsolete()) {
+          reset = true;
+          return;
+        }
 
         if (next.p_ptr == nullptr) {
           if (observed_branch_count != node->branch_count()) {

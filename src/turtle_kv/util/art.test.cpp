@@ -9,6 +9,8 @@
 
 #include <turtle_kv/import/metrics.hpp>
 
+#include <batteries/stream_util.hpp>
+
 #include <string>
 #include <string_view>
 #include <vector>
@@ -26,7 +28,7 @@ using turtle_kv::testing::RandomStringGenerator;
 //
 TEST(ArtTest, PutContainsTest)
 {
-  const usize num_keys = 1000;
+  const usize num_keys = 1e7;
 
   std::vector<std::string> keys;
   std::unordered_set<std::string_view> inserted;
@@ -86,6 +88,9 @@ TEST(ArtTest, SingleThreadTest)
         for (std::string_view s : keys) {
           index.put(s);
         }
+      }
+      for (const std::string& key : keys) {
+        ASSERT_TRUE(index.contains(key));
       }
     }
     std::cerr << BATT_INSPECT(insert_latency) << std::endl;
@@ -174,7 +179,7 @@ TEST(ArtTest, SimdSearch)
 //
 TEST(ArtTest, MultiThreadTest)
 {
-  const int n_rounds = 3;
+  const int n_rounds = 50;
 
   for (usize n_threads = 1; n_threads < std::thread::hardware_concurrency(); ++n_threads) {
     std::atomic<int> round{-1};
@@ -250,6 +255,12 @@ TEST(ArtTest, MultiThreadTest)
           while (pending.load() > 0) {
             std::this_thread::yield();
           }
+        }
+
+        usize found_count = 0;
+        for (const std::string& key : keys) {
+          ASSERT_TRUE(index.contains(key)) << BATT_INSPECT_STR(key) << BATT_INSPECT(found_count);
+          ++found_count;
         }
       }
       std::cerr << BATT_INSPECT(n_threads) << BATT_INSPECT(insert_latency) << std::endl;

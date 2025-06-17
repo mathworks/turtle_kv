@@ -85,6 +85,7 @@ class ART
 
   struct NodeBase {
     static constexpr u8 kFlagTerminal = 0x80;
+    static constexpr u8 kFlagObsolete = 0x40;
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -115,6 +116,16 @@ class ART
     void set_terminal()
     {
       this->flags_ |= kFlagTerminal;
+    }
+
+    bool is_obsolete() const
+    {
+      return (this->flags_ & kFlagObsolete) != 0;
+    }
+
+    void set_obsolete()
+    {
+      this->flags_ |= kFlagObsolete;
     }
 
     void assign_base_from(const NodeBase& that)
@@ -334,7 +345,7 @@ class ART
   static_assert(sizeof(Node256) % 8 == 0);
   static_assert(alignof(Node256) >= 8);
 
-  using ExtentStorageT = std::aligned_storage_t<sizeof(Node256) * 512, 64>;
+  using ExtentStorageT = std::aligned_storage_t<(128 * 1024), 64>;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
