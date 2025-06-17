@@ -1,6 +1,7 @@
 #pragma once
 
 #include <turtle_kv/util/object_thread_storage.hpp>
+#include <turtle_kv/util/seq_mutex.hpp>
 
 #include <turtle_kv/import/int_types.hpp>
 #include <turtle_kv/import/small_vec.hpp>
@@ -57,32 +58,6 @@ inline usize index_of(u8 key_byte, const std::array<u8, 16>& keys)
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 //
-template <typename IntT>
-class SeqLock
-{
- public:
-  explicit SeqLock(std::atomic<IntT>& state) noexcept : state_{state}
-  {
-    for (;;) {
-      const u16 old_state = state.fetch_or(1);
-      if ((old_state & 1) == 0) {
-        state.fetch_add(2);
-        return;
-      }
-    }
-  }
-
-  ~SeqLock() noexcept
-  {
-    this->state_.fetch_add(1);
-  }
-
- private:
-  std::atomic<IntT>& state_;
-};
-
-//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
-//
 class ART
 {
  public:
@@ -95,14 +70,13 @@ class ART
   template <usize kBranchCount>
   struct SmallNode;
 
-  struct Node1;
   struct Node4;
   struct Node16;
   struct Node48;
   struct Node256;
 
   enum struct NodeType : u8 {
-    // kNode1,
+    kNodeBase,
     kNode4,
     kNode16,
     kNode48,
@@ -111,16 +85,15 @@ class ART
 
   struct NodeBase {
     static constexpr u8 kFlagTerminal = 0x80;
-    static constexpr u8 kFlagObsolete = 0x40;
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
 
     const NodeType node_type;
-    u8 flags_;
-    u8 prefix_len_;
-    u8 branch_count_;
-    std::atomic<u32> state_{0};
-    const u8* prefix_;
+    u8 flags_ = 0;
+    u8 prefix_len_ = 0;
+    u8 branch_count_ = 0;
+    SeqMutex<u32> mutex_;
+    const char* prefix_ = nullptr;
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -132,39 +105,73 @@ class ART
     NodeBase& operator=(const NodeBase&) = delete;
 
     template <typename... CaseFns>
-    bool visit(CaseFns&&... case_fns);
-
-    bool is_finalized() const
-    {
-      return (this->size_d_ & 0x80) != 0;
-    }
-
-    void finalize()
-    {
-      this->size_d_ |= 0x80;
-    }
+    void visit(CaseFns&&... case_fns);
 
     bool is_terminal() const
     {
-      return (this->size_d_ & 0x40) != 0;
+      return (this->flags_ & kFlagTerminal) != 0;
     }
 
     void set_terminal()
     {
-      this->size_d_ |= 0x40;
+      this->flags_ |= kFlagTerminal;
     }
 
-    u8 get_size() const
+    void assign_base_from(const NodeBase& that)
     {
-      return this->size_d_ & 0x3f;
-    }
-
-    void set_size(u8 n)
-    {
-      BATT_CHECK(!this->is_finalized());
-      this->size_d_ = (this->size_d_ & 0xc0) | (n & 0x3f);
+      this->flags_ = that.flags_;
+      this->prefix_len_ = that.prefix_len_;
+      this->branch_count_ = that.branch_count_;
+      this->prefix_ = that.prefix_;
     }
   };
+
+  struct BranchView {
+    NodeBase** p_ptr;
+    NodeBase* ptr;
+
+    //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+    BranchView() noexcept : p_ptr{nullptr}, ptr{nullptr}
+    {
+    }
+
+    explicit BranchView(NodeBase*& branch) noexcept : p_ptr{&branch}, ptr{branch}
+    {
+    }
+
+    void load(NodeBase*& branch)
+    {
+      this->p_ptr = &branch;
+      this->ptr = branch;
+    }
+
+    NodeBase* store(NodeBase* new_ptr)
+    {
+      *this->p_ptr = new_ptr;
+      this->ptr = new_ptr;
+      return new_ptr;
+    }
+
+    NodeBase* reload()
+    {
+      this->ptr = *this->p_ptr;
+      return this->ptr;
+    }
+  };
+
+  static constexpr NodeType node_type_from_branch_count(usize branch_count)
+  {
+    if (branch_count == 4) {
+      return NodeType::kNode4;
+    } else if (branch_count == 16) {
+      return NodeType::kNode16;
+    } else if (branch_count == 48) {
+      return NodeType::kNode48;
+    } else {
+      return NodeType::kNode256;
+    }
+  }
 
   static_assert(sizeof(NodeBase) == 16);
 
@@ -172,103 +179,98 @@ class ART
 
   static constexpr BranchIndex kInvalidBranchIndex = u8{255};
 
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
+  //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
   //
-  struct Node1 : NodeBase {
-    const char* data_;
-    NodeBase* child = nullptr;
+  template <usize kBranchCount, typename Derived>
+  struct GrowableNode : NodeBase {
+    std::array<NodeBase*, kBranchCount> branches;
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-    explicit Node1(const char* data, usize len) noexcept : NodeBase{NodeType::kNode1}, data_{data}
+    explicit GrowableNode() noexcept : NodeBase{node_type_from_branch_count(kBranchCount)}
     {
-      this->size_ = BATT_CHECKED_CAST(u8, len);
     }
 
-    Node1(const Node1&) = delete;
-    Node1& operator=(const Node1&) = delete;
+    //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-    auto insert(bool& path_conflict, const char*& key_data, usize& key_len, ART* art) -> NodeBase**;
+    Derived* derived()
+    {
+      return (Derived*)this;
+    }
+
+    //----- --- -- -  -  -   -
+
+    usize branch_count() const
+    {
+      return this->branch_count_;
+    }
+
+    usize add_branch()
+    {
+      const usize i = this->branch_count_;
+      ++this->branch_count_;
+      return i;
+    }
+
+    static constexpr usize max_branch_count()
+    {
+      return kBranchCount;
+    }
   };
 
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
+  //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
   //
   template <usize kBranchCount>
-  struct SmallNode : NodeBase {
-    std::array<NodeBase*, kBranchCount> branches;
+  struct IndirectIndexedNode : GrowableNode<kBranchCount, IndirectIndexedNode<kBranchCount>> {
     std::array<u8, kBranchCount> key;
 
-    //----- --- -- -  -  -   -
+    //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-    explicit SmallNode() noexcept
-        : NodeBase{(kBranchCount == 4) ? NodeType::kNode4 : NodeType::kNode16}
+    usize index_of_branch(u8 key_byte)
     {
-      this->set_size(0);
+      return index_of(key_byte, this->key);
     }
 
-    SmallNode(const SmallNode&) = delete;
-    SmallNode& operator=(const SmallNode&) = delete;
-
-    explicit SmallNode(const SmallNode<4>* old) noexcept : SmallNode{}
+    void set_branch_index(u8 key_byte, usize i)
     {
-      static_assert(kBranchCount == 16);
-      //----- --- -- -  -  -   -
-      this->set_size(old->get_size());
-      std::copy(old->branches.begin(), old->branches.end(), this->branches.begin());
-      std::copy(old->key.begin(), old->key.end(), this->key.begin());
+      this->key[i] = key_byte;
     }
-
-    explicit SmallNode(const Node1* old, ART* art) noexcept : SmallNode{}
-    {
-      static_assert(kBranchCount == 4);
-      //----- --- -- -  -  -   -
-      usize key_len = old->get_size();
-      if (key_len != 0) {
-        bool path_conflict = false;
-        const char* key_data = old->data_;
-        NodeBase** branch = this->insert(path_conflict, key_data, key_len, art);
-        BATT_CHECK_NOT_NULLPTR(branch);
-        BATT_CHECK_NOT_NULLPTR(*branch);
-        BATT_CHECK_EQ(key_len, 0);
-        BATT_CHECK(!path_conflict);
-      }
-    }
-
-    //----- --- -- -  -  -   -
-
-    auto insert(bool& path_conflict, const char*& key_data, usize& key_len, ART* art) -> NodeBase**;
   };
 
-  struct Node4 : SmallNode<4> {
-    using SmallNode<4>::SmallNode;
-  };
-
-  struct Node16 : SmallNode<16> {
-    using SmallNode<16>::SmallNode;
-  };
-
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
+  //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
   //
-  struct Node48 : NodeBase {
-    std::array<NodeBase*, 48> branches;
+  template <usize kBranchCount>
+  struct DirectIndexedNode : GrowableNode<kBranchCount, DirectIndexedNode<kBranchCount>> {
     std::array<BranchIndex, 256> branch_for_key;
 
-    //----- --- -- -  -  -   -
-
-    explicit Node48(const Node16* old) noexcept : NodeBase{NodeType::kNode48}
+    explicit DirectIndexedNode() noexcept
     {
       this->branch_for_key.fill(kInvalidBranchIndex);
-
-      for (usize i = 0; i < old->get_size(); ++i) {
-        this->branch_for_key[old->key[i]] = i;
-        this->branches[i] = old->branches[i];
-      }
     }
 
-    Node48(const Node48&) = delete;
-    Node48& operator=(const Node48&) = delete;
+    //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-    auto insert(bool& path_conflict, const char*& key_data, usize& key_len, ART* art) -> NodeBase**;
+    usize index_of_branch(u8 key_byte)
+    {
+      return this->branch_for_key[key_byte];
+    }
+
+    void set_branch_index(u8 key_byte, usize i)
+    {
+      this->branch_for_key[key_byte] = i;
+    }
+  };
+
+  struct Node4 : IndirectIndexedNode<4> {
+    using IndirectIndexedNode<4>::IndirectIndexedNode;
+  };
+
+  struct Node16 : IndirectIndexedNode<16> {
+    using IndirectIndexedNode<16>::IndirectIndexedNode;
+  };
+
+  struct Node48 : DirectIndexedNode<48> {
+    using DirectIndexedNode<48>::DirectIndexedNode;
   };
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -283,40 +285,52 @@ class ART
       this->branches.fill(nullptr);
     }
 
-    explicit Node256(const Node48* old) noexcept : Node256{}
-    {
-      for (usize key_byte = 0; key_byte < 256; ++key_byte) {
-        const BranchIndex branch_i = old->branch_for_key[key_byte];
-        if (branch_i == kInvalidBranchIndex) {
-          this->branches[key_byte] = nullptr;
-        } else {
-          BATT_CHECK(old->branches[branch_i]);
-          this->branches[key_byte] = old->branches[branch_i];
-        }
-      }
-    }
-
     Node256(const Node256&) = delete;
     Node256& operator=(const Node256&) = delete;
 
-    auto insert(bool& path_conflict, const char*& key_data, usize& key_len, ART* art) -> NodeBase**;
+    //----- --- -- -  -  -   -
+
+    static constexpr usize branch_count()
+    {
+      return 256;
+    }
+
+    usize add_branch()
+    {
+      BATT_PANIC() << "Node256::add_branch is illegal!";
+      BATT_UNREACHABLE();
+    }
+
+    static constexpr usize max_branch_count()
+    {
+      return 256;
+    }
+
+    usize index_of_branch(u8 key_byte) const
+    {
+      return key_byte;
+    }
+
+    void set_branch_index(u8, usize)
+    {
+    }
   };
 
   //----- --- -- -  -  -   -
 
-  static_assert(sizeof(Node4) == 48);
+  static_assert(sizeof(Node4) == 56);
   static_assert(sizeof(Node4) % 8 == 0);
   static_assert(alignof(Node4) >= 8);
 
-  static_assert(sizeof(Node16) == 152);
+  static_assert(sizeof(Node16) == 160);
   static_assert(sizeof(Node16) % 8 == 0);
   static_assert(alignof(Node16) >= 8);
 
-  static_assert(sizeof(Node48) == 648);
+  static_assert(sizeof(Node48) == 656);
   static_assert(sizeof(Node48) % 8 == 0);
   static_assert(alignof(Node48) >= 8);
 
-  static_assert(sizeof(Node256) == 2056);
+  static_assert(sizeof(Node256) == 2064);
   static_assert(sizeof(Node256) % 8 == 0);
   static_assert(alignof(Node256) >= 8);
 
@@ -326,53 +340,9 @@ class ART
 
   ART() = default;
 
-  void put(std::string_view key)
-  {
-    DVLOG(1) << "[put]" << BATT_INSPECT_STR(key);
+  void put(std::string_view key);
 
-    for (;;) {
-      const char* key_data = key.data();
-      usize key_len = key.size();
-
-      NodeBase* root = &this->root_;
-      NodeBase** node = &root;
-      NodeBase* parent = nullptr;
-
-      bool path_conflict = false;
-
-      while (key_len != 0) {
-        for (;;) {
-          bool retry = false;
-          if (!(**node).visit([&](auto* node_case) {
-                NodeBase** child = node_case->insert(path_conflict, key_data, key_len, this);
-                if (!child) {
-                  SeqLock<u16> lock0{parent->NodeBase::state_};
-                  SeqLock<u16> lock1{node_case->NodeBase::state_};
-                  if (parent->NodeBase::is_finalized()) {
-                    path_conflict = true;
-                  } else {
-                    node_case->NodeBase::finalize();
-                    *node = this->grow_node(*node_case);
-                    retry = true;
-                  }
-                } else {
-                  parent = node_case;
-                  node = child;
-                }
-              })) {
-            retry = true;
-          }
-          if (path_conflict || !retry) {
-            break;
-          }
-        }
-      }
-
-      if (!path_conflict) {
-        break;
-      }
-    }
-  }
+  bool contains(std::string_view key);
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
@@ -419,49 +389,29 @@ class ART
     return this->per_thread_memory_context_.get().alloc(n, this);
   }
 
-  Node1* new_node1(const char* data, usize len)
-  {
-    return new (this->alloc_storage(sizeof(Node1))) Node1{data, len};
-  }
+  template <typename NodeT>
+  NodeBase* add_child(NodeT* node, u8 key_byte, NodeBase* child);
 
-  Node4* new_node4()
-  {
-    return new (this->alloc_storage(sizeof(Node4))) Node4{};
-  }
+  template <typename NodeT>
+  NodeBase* add_child(NodeT* node, u8 key_byte, const char* new_key_data, usize new_key_len);
 
-  NodeBase* new_node(const char* data, usize len)
-  {
-    if (len == 0) {
-      return this->new_node4();
-    }
-    return this->new_node1(data, len);
-  }
+  Node4* make_node4(const char* prefix, usize prefix_len);
 
-  Node4* grow_node(const Node1& old)
-  {
-    return new (this->alloc_storage(sizeof(Node4))) Node4{&old, this};
-  }
+  Node16* grow_node(Node4* old_node);
 
-  Node16* grow_node(const Node4& old)
-  {
-    return new (this->alloc_storage(sizeof(Node16))) Node16{&old};
-  }
+  Node48* grow_node(Node16* old_node);
 
-  Node48* grow_node(const Node16& old)
-  {
-    return new (this->alloc_storage(sizeof(Node48))) Node48{&old};
-  }
+  Node256* grow_node(Node48* old_node);
 
-  Node256* grow_node(const Node48& old)
-  {
-    return new (this->alloc_storage(sizeof(Node256))) Node256{&old};
-  }
+  Node256* grow_node(Node256*);
 
-  Node256* grow_node(const Node256&)
-  {
-    BATT_PANIC() << "Node256 is the largest node type!";
-    BATT_UNREACHABLE();
-  }
+  Node4* clone_node(Node4* orig_node);
+
+  Node16* clone_node(Node16* orig_node);
+
+  Node48* clone_node(Node48* orig_node);
+
+  Node256* clone_node(Node256* orig_node);
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -472,309 +422,5 @@ class ART
 };
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-template <typename... CaseFns>
-inline bool ART::NodeBase::visit(CaseFns&&... case_fns)
-{
-  auto visitor = batt::make_case_of_visitor(BATT_FORWARD(case_fns)...);
-
-  switch (this->node_type) {
-    case NodeType::kNode1:
-      visitor(static_cast<Node1*>(this));
-      break;
-    case NodeType::kNode4:
-      visitor(static_cast<Node4*>(this));
-      break;
-    case NodeType::kNode16:
-      visitor(static_cast<Node16*>(this));
-      break;
-    case NodeType::kNode48:
-      visitor(static_cast<Node48*>(this));
-      break;
-    case NodeType::kNode256:
-      visitor(static_cast<Node256*>(this));
-      break;
-    default:
-      return false;
-  }
-  return true;
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-auto ART::Node1::insert(bool& path_conflict, const char*& key_data, usize& key_len, ART* art)
-    -> NodeBase**
-{
-  for (;;) {
-    const u16 before_state = this->NodeBase::state_.load();
-    if ((before_state & 3) != 0) {
-      continue;
-    }
-
-    const char* const observed_data = this->data_;
-    usize const observed_len = this->get_size();
-
-    const u16 after_state = this->NodeBase::state_.load();
-    if (before_state != after_state) {
-      continue;
-    }
-
-    const char* suffix_data = observed_data;
-    usize suffix_len = observed_len;
-
-    const char* insert_data = key_data;
-    usize insert_len = key_len;
-
-    while (suffix_len && insert_len && *suffix_data == *insert_data) {
-      ++suffix_data;
-      --suffix_len;
-
-      ++insert_data;
-      --insert_len;
-    }
-
-    const usize common_len = (observed_len - suffix_len);
-
-    // If no common prefix was matched, fail; this node must grow.
-    //
-    if (common_len == 0) {
-      return nullptr;
-    }
-
-    // The node must be modified.  Lock it first.
-    //
-    SeqLock<u16> lock{this->NodeBase::state_};
-
-    if (observed_data != this->data_ || observed_len != this->size_) {
-      // Conflict detected; retry.
-      //
-      continue;
-    }
-
-    // If the entire input key matched, *and* no conflict detected, then consume the input and
-    // return success.
-    //
-    if (suffix_len == 0 && insert_len == 0) {
-      key_data += key_len;
-      key_len = 0;
-      this->set_terminal();
-      return &this->child;
-    }
-
-    if (suffix_len == 0 || insert_len == 0) {
-      key_data += common_len;
-      key_len -= common_len;
-
-      this->set_size(common_len);
-
-      Node1* new_child = nullptr;
-
-      if (suffix_len > insert_len) {
-        new_child = art->new_node1(this->data_ + common_len, suffix_len);
-      } else {
-        new_child = art->new_node(key_data, key_len);
-      }
-
-      new_child->child = this->child;
-      this->child = new_child;
-
-    } else {
-      Node4* new_child = art->new_node4();
-
-      bool path_conflict = false;
-      const char* suffix_data = this->data_ + common_len;
-
-      NodeBase** new_child_branch = new_child->insert(path_conflict, suffix_data, suffix_len, art);
-
-      BATT_CHECK(!path_conflict);
-      BATT_CHECK_NOT_NULLPTR(new_child_branch);
-      BATT_CHECK_NOT_NULLPTR(*new_child_branch);
-      BATT_CHECK_EQ((*new_child_branch)->node_type, NodeType::kNode1);
-
-      Node1* split_node1 = static_cast<Node1*>(*new_child_branch);
-      split_node1->child = this->child;
-      this->child = new_child;
-    }
-
-    return &this->child;
-  }
-  BATT_UNREACHABLE();
-}
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-template <usize kBranchCount>
-inline auto ART::SmallNode<kBranchCount>::insert(bool& path_conflict,
-                                                 const char*& key_data,
-                                                 usize& key_len,
-                                                 ART* art) -> NodeBase**
-{
-  const u8 key_byte = key_data[0];
-
-  for (;;) {
-    const u16 before_state = this->NodeBase::state_.load();
-    if ((before_state & 3) != 0) {
-      continue;
-    }
-
-    const usize observed_size = std::min<usize>(kBranchCount, this->size_);
-    NodeBase** found = nullptr;
-    {
-      const usize i = index_of(key_byte, this->key);
-      if (i < observed_size) {
-        found = &this->branches[i];
-      }
-    }
-
-    const u16 after_state = this->NodeBase::state_.load();
-    if (before_state != after_state) {
-      continue;
-    }
-
-    if (!found) {
-      if (observed_size < kBranchCount) {
-        SeqLock<u16> lock{this->NodeBase::state_};
-
-        // If the size changes, we must re-check the keys array.
-        //
-        if (this->size_ != observed_size) {
-          continue;
-        }
-
-        const usize i = this->size_;
-        //----- --- -- -  -  -   -
-        this->key[i] = key_byte;
-        this->branches[i] = art->new_node1(key_data + 1, key_len - 1);
-        key_data += key_len;
-        key_len = 0;
-        //----- --- -- -  -  -   -
-        ++this->size_;
-
-        found = &this->branches[i];
-      }
-    } else {
-      ++key_data;
-      --key_len;
-    }
-
-    return found;
-  }
-  BATT_UNREACHABLE();
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-inline auto ART::Node48::insert(bool& path_conflict,
-                                const char*& key_data,
-                                usize& key_len,
-                                ART* art) -> NodeBase**
-{
-  const u8 key_byte = key_data[0];
-
-  for (;;) {
-    const u16 before_state = this->NodeBase::state_.load();
-    if ((before_state & 3) != 0) {
-      continue;
-    }
-
-    usize i = this->branch_for_key[key_byte];
-    if (i == kInvalidBranchIndex) {
-      SeqLock<u16> lock{this->NodeBase::state_};
-
-      // We must re-check the branch index for the given byte, to make sure some other thread
-      // didn't insert it.
-      //
-      if (this->branch_for_key[key_byte] != kInvalidBranchIndex) {
-        continue;
-      }
-
-      // If there is no more room, fail.
-      //
-      if (this->size_ == 48) {
-        return nullptr;
-      }
-
-      // We have exclusive access, a branch for the search key is still not found, and we have
-      // room in this node; add a new branch.
-      //
-      i = this->size_;
-      //----- --- -- -  -  -   -
-      this->branches[i] = art->new_node1(key_data + 1, key_len - 1);
-      this->branch_for_key[key_byte] = i;
-      key_data += key_len;
-      key_len = 0;
-      //----- --- -- -  -  -   -
-      ++this->size_;
-      //
-      // fall-through...
-    }
-
-    NodeBase** found = &this->branches[i];
-
-    // Done reading; re-load the SeqLock state to see if we must retry.
-    //
-    const u16 after_state = this->NodeBase::state_.load();
-    if (before_state != after_state) {
-      continue;
-    }
-
-    ++key_data;
-    --key_len;
-
-    return found;
-  }
-  BATT_UNREACHABLE();
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-inline auto ART::Node256::insert(bool& path_conflict,
-                                 const char*& key_data,
-                                 usize& key_len,
-                                 ART* art) -> NodeBase**
-{
-  const u8 key_byte = key_data[0];
-
-  for (;;) {
-    const u16 before_state = this->NodeBase::state_.load();
-    if ((before_state & 3) != 0) {
-      continue;
-    }
-
-    const bool finalized = this->NodeBase::is_finalized();
-    NodeBase** found = &this->branches[key_byte];
-
-    const u16 after_state = this->NodeBase::state_.load();
-    if (before_state != after_state) {
-      continue;
-    }
-
-    if (finalized) {
-      path_conflict = true;
-      return nullptr;
-    }
-
-    if (*found == nullptr) {
-      SeqLock<u16> lock{this->NodeBase::state_};
-      if (*found == nullptr) {
-        *found = art->new_node1(key_data + 1, key_len - 1);
-        key_data += key_len;
-        key_len = 0;
-      } else {
-        ++key_data;
-        --key_len;
-      }
-    } else {
-      ++key_data;
-      --key_len;
-    }
-
-    return found;
-  }
-  BATT_UNREACHABLE();
-}
 
 }  // namespace turtle_kv

@@ -24,7 +24,48 @@ using turtle_kv::testing::RandomStringGenerator;
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-TEST(ArtTest, Test)
+TEST(ArtTest, PutContainsTest)
+{
+  const usize num_keys = 1000;
+
+  std::vector<std::string> keys;
+  std::unordered_set<std::string_view> inserted;
+  {
+    std::default_random_engine rng{/*seed=*/1};
+    RandomStringGenerator generate_key;
+
+    for (usize i = 0; i < num_keys; ++i) {
+      keys.emplace_back(generate_key(rng));
+    }
+  }
+
+  ART index;
+
+  usize i = 0;
+  for (const std::string& key : keys) {
+    if (inserted.count(key)) {
+      continue;
+    }
+
+    inserted.emplace(key);
+
+    EXPECT_FALSE(index.contains(key));
+
+    index.put(key);
+
+    EXPECT_TRUE(index.contains(key)) << BATT_INSPECT(i) << BATT_INSPECT_STR(key);
+
+    ++i;
+  }
+
+  for (const std::string& key : keys) {
+    EXPECT_TRUE(index.contains(key));
+  }
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+TEST(ArtTest, SingleThreadTest)
 {
   for (const usize num_keys : {1e5, 1e6, 1e7}) {
     std::vector<std::string> keys;
@@ -38,7 +79,7 @@ TEST(ArtTest, Test)
     }
 
     LatencyMetric insert_latency;
-    for (usize trial = 0; trial < 10; ++trial) {
+    for (usize trial = 0; trial < 3; ++trial) {
       ART index;
       {
         LatencyTimer timer{insert_latency, num_keys};
