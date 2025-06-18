@@ -53,6 +53,12 @@ Status MemTable::put(ChangeLogWriter::Context& context,
                      const KeyView& key,
                      const ValueView& value) noexcept
 {
+  static const bool use_ordered_index = [] {
+    const bool b = getenv_as<bool>("turtlekv_memtable_ordered_index").value_or(true);
+    LOG(INFO) << "turtlekv_memtable_ordered_index=" << b;
+    return b;
+  }();
+
   StorageImpl storage{*this, context, OkStatus()};
 
   MemTableEntryInserter<StorageImpl> inserter{
@@ -67,6 +73,12 @@ Status MemTable::put(ChangeLogWriter::Context& context,
 
   BATT_REQUIRE_OK(this->hash_index_.insert(inserter));
 
+  // If this is a key we haven't seen before, add it to the ordered index.
+  //
+  if (use_ordered_index && inserter.inserted) {
+    this->ordered_index_.insert(get_key(*inserter.entry));
+  }
+
   return storage.status;
 }
 
@@ -74,7 +86,11 @@ Status MemTable::put(ChangeLogWriter::Context& context,
 //
 Optional<ValueView> MemTable::get(const KeyView& key) noexcept
 {
-  return this->hash_index_.find_key(key);
+  MemTableEntry entry;
+  if (!this->hash_index_.find_key(key, entry)) {
+    return None;
+  }
+  return entry.value_;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -82,15 +98,34 @@ Optional<ValueView> MemTable::get(const KeyView& key) noexcept
 usize MemTable::scan(const KeyView& min_key,
                      const Slice<std::pair<KeyView, ValueView>>& items_out) noexcept
 {
-  BATT_PANIC() << "Fix scanning!";
-  return 0;
+  usize n_found = 0;
+
+  // const u32 read_version = this->version_.load();
+  this->ordered_index_.scan(min_key, [&](const std::string_view& tmp_key) {
+    if (n_found >= items_out.size()) {
+      return false;
+    }
+    MemTableEntry entry;
+    if (this->hash_index_.find_key(tmp_key, entry)) {
+      items_out[n_found].first = entry.key_;
+      items_out[n_found].second = entry.value_;
+      ++n_found;
+    }
+    return true;
+  });
+
+  return n_found;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 Optional<ValueView> MemTable::finalized_get(const KeyView& key) noexcept
 {
-  return this->hash_index_.unsynchronized_find_key(key);
+  const MemTableEntry* entry = this->hash_index_.unsynchronized_find_key(key);
+  if (!entry) {
+    return None;
+  }
+  return entry->value_;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

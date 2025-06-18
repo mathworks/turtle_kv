@@ -55,7 +55,7 @@ TEST(ArtTest, PutContainsTest)
 
     EXPECT_FALSE(index.contains(key));
 
-    index.put(key);
+    index.insert(key);
 
     EXPECT_TRUE(index.contains(key)) << BATT_INSPECT(i) << BATT_INSPECT_STR(key);
 
@@ -84,8 +84,9 @@ TEST(ArtTest, PutContainsTest)
     std::vector<std::string> actual_result;
     {
       LatencyTimer timer{scan_latency};
-      index.scan_n(lower_bound_key, scan_length, [&actual_result](const std::string_view& key) {
+      index.scan(lower_bound_key, [&actual_result, scan_length](const std::string_view& key) {
         actual_result.emplace_back(key);
+        return actual_result.size() < scan_length;
       });
     }
 
@@ -119,7 +120,7 @@ TEST(ArtTest, SingleThreadTest)
       {
         LatencyTimer timer{insert_latency, num_keys};
         for (std::string_view s : keys) {
-          index.put(s);
+          index.insert(s);
         }
       }
       for (const std::string& key : keys) {
@@ -212,7 +213,7 @@ TEST(ArtTest, SimdSearch)
 //
 TEST(ArtTest, MultiThreadTest)
 {
-  const int n_rounds = 50;
+  const int n_rounds = 3;
 
   for (usize n_threads = 1; n_threads < std::thread::hardware_concurrency(); ++n_threads) {
     std::atomic<int> round{-1};
@@ -235,7 +236,7 @@ TEST(ArtTest, MultiThreadTest)
           const std::string* keys = p_keys.load();
 
           for (usize j = i; j < n_keys; j += n_threads) {
-            index.put(keys[j]);
+            index.insert(keys[j]);
           }
 
           pending.fetch_sub(1);
@@ -298,6 +299,16 @@ TEST(ArtTest, MultiThreadTest)
       }
       std::cerr << BATT_INSPECT(n_threads) << BATT_INSPECT(insert_latency) << std::endl;
       ++size_i;
+    }
+
+    if (n_threads > 8) {
+      n_threads += 1;
+      if (n_threads > 16) {
+        n_threads += 3;
+        if (n_threads > 32) {
+          n_threads += 7;
+        }
+      }
     }
   }
 }

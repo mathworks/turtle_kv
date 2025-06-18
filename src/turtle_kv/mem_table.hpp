@@ -9,15 +9,13 @@
 #include <turtle_kv/core/merge_compactor.hpp>
 #include <turtle_kv/core/value_view.hpp>
 
-#include <turtle_kv/util/locks.hpp>
+#include <turtle_kv/util/art.hpp>
 
 #include <turtle_kv/import/int_types.hpp>
 #include <turtle_kv/import/optional.hpp>
 #include <turtle_kv/import/slice.hpp>
 #include <turtle_kv/import/status.hpp>
 
-#include <absl/container/btree_set.h>
-#include <absl/container/flat_hash_set.h>
 #include <absl/synchronization/mutex.h>
 
 #include <batteries/async/worker_pool.hpp>
@@ -165,6 +163,8 @@ class MemTable : public batt::RefCounted<MemTable>
   RuntimeOptions runtime_options_ = RuntimeOptions::with_default_values();
 
   ConcurrentHashIndex hash_index_;
+
+  ART ordered_index_;
 
   const i64 max_byte_size_;
 

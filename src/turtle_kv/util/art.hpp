@@ -510,20 +510,16 @@ class ART
 
   ART() = default;
 
-  void put(std::string_view key);
+  void insert(std::string_view key);
 
   bool contains(std::string_view key);
 
-#if 0
   template <typename Fn>
-  void scan_key_range(std::string_view lower_bound, std::string_view upper_bound, const Fn& fn);
-#endif
-
-  template <typename Fn>
-  void scan_n(std::string_view lower_bound_key, usize n, const Fn& fn)
+  void scan(std::string_view lower_bound_key, const Fn& fn)
   {
     std::array<char, kMaxKeyLen> buffer;
-    this->scan_impl(&this->root_, buffer.data(), 0, lower_bound_key, n, fn);
+    bool done = false;
+    this->scan_impl(&this->root_, buffer.data(), 0, lower_bound_key, done, fn);
   }
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -600,7 +596,7 @@ class ART
                  char* prefix_buffer,
                  usize prefix_len,
                  std::string_view lower_bound_key,
-                 usize& limit_n,
+                 bool& done,
                  const Fn& fn) const;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -653,7 +649,7 @@ inline void ART::scan_impl(NodeT* node,
                            char* prefix_buffer,
                            usize prefix_len,
                            std::string_view lower_bound_key,
-                           usize& limit_n,
+                           bool& done,
                            const Fn& fn) const
 {
   // We will need to create a copy of the node data to protect against data races.
@@ -713,9 +709,8 @@ inline void ART::scan_impl(NodeT* node,
   // If the current node is a key-terminal, emit the contents of the buffer.
   //
   if (node_view.is_terminal()) {
-    --limit_n;
-    fn(std::string_view{prefix_buffer, prefix_len});
-    if (limit_n == 0) {
+    if (!fn(std::string_view{prefix_buffer, prefix_len})) {
+      done = true;
       return;
     }
   }
@@ -726,23 +721,18 @@ inline void ART::scan_impl(NodeT* node,
       min_key_byte,
       max_key_byte,
       [&](i32 key_byte, NodeBase* child) -> batt::seq::LoopControl {
-        if (limit_n == 0) {
+        if (done) {
           return batt::seq::LoopControl::kBreak;
         }
         prefix_buffer[prefix_len] = (char)key_byte;
 
         if (key_byte == min_key_byte) {
           child->visit([&](auto* child_node) {
-            this->scan_impl(child_node,
-                            prefix_buffer,
-                            prefix_len + 1,
-                            lower_bound_key,
-                            limit_n,
-                            fn);
+            this->scan_impl(child_node, prefix_buffer, prefix_len + 1, lower_bound_key, done, fn);
           });
         } else {
           child->visit([&](auto* child_node) {
-            this->scan_impl(child_node, prefix_buffer, prefix_len + 1, {}, limit_n, fn);
+            this->scan_impl(child_node, prefix_buffer, prefix_len + 1, {}, done, fn);
           });
         }
 

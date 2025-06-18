@@ -119,7 +119,7 @@ class ConcurrentHashIndex
     /** \brief Attempts to read the given key.  NOTE: readers may be starved under heavy contention!
      * (We believe this is unlikely to occur since each bucket gets its own lock).
      */
-    MemTableEntry read() const
+    void read(MemTableEntry& view) const
     {
       for (;;) {
         const u32 before_state = this->state.load();
@@ -131,7 +131,7 @@ class ConcurrentHashIndex
           continue;
         }
         //----- --- -- -  -  -   -
-        MemTableEntry view = this->entry;
+        view = this->entry;
         //----- --- -- -  -  -   -
         const u32 after_state = this->state.load();
 
@@ -139,7 +139,7 @@ class ConcurrentHashIndex
         // `this->entry` wasn't modified in the critical section above.
         //
         if (before_state == after_state) {
-          return view;
+          return;
         }
       }
       BATT_UNREACHABLE();
@@ -219,25 +219,25 @@ class ConcurrentHashIndex
     return status;
   }
 
-  Optional<ValueView> find_key(const KeyView& key)
+  bool find_key(const KeyView& key, MemTableEntry& entry_out)
   {
-    Optional<ValueView> result;
+    bool result = false;
 
     const u64 key_hash_val = get_key_hash_val(key);
 
-    this->probe(key_hash_val, [&result, &key, key_hash_val](Bucket& bucket) -> bool {
+    this->probe(key_hash_val, [&result, &key, &entry_out, key_hash_val](Bucket& bucket) -> bool {
       const DefaultStrEq str_eq;
       const u64 observed_hash_val = bucket.hash_val.load();
 
       if (observed_hash_val == 0) {
-        result = None;
+        result = false;
         return true;
       }
 
       if (observed_hash_val == key_hash_val) {
-        MemTableEntry entry = bucket.read();
-        if (str_eq(key, entry)) {
-          result = entry.value_;
+        bucket.read(entry_out);
+        if (str_eq(key, entry_out)) {
+          result = true;
           return true;
         }
       }
@@ -248,25 +248,23 @@ class ConcurrentHashIndex
     return result;
   }
 
-  Optional<ValueView> unsynchronized_find_key(const KeyView& key)
+  const MemTableEntry* unsynchronized_find_key(const KeyView& key)
   {
-    Optional<ValueView> result;
+    const MemTableEntry* entry = nullptr;
 
     const u64 key_hash_val = get_key_hash_val(key);
 
-    this->probe(key_hash_val, [&result, &key, key_hash_val](Bucket& bucket) -> bool {
+    this->probe(key_hash_val, [&entry, &key, key_hash_val](Bucket& bucket) -> bool {
       const DefaultStrEq str_eq;
       const u64 observed_hash_val = bucket.hash_val.load();
 
       if (observed_hash_val == 0) {
-        result = None;
         return true;
       }
 
       if (observed_hash_val == key_hash_val) {
-        const MemTableEntry& entry = bucket.entry;
-        if (str_eq(key, entry)) {
-          result = entry.value_;
+        if (str_eq(key, bucket.entry)) {
+          entry = &bucket.entry;
           return true;
         }
       }
@@ -274,7 +272,7 @@ class ConcurrentHashIndex
       return false;
     });
 
-    return result;
+    return entry;
   }
 
   template <typename EntryFn>

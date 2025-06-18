@@ -43,10 +43,12 @@ struct PackedValueUpdate {
 
   /** \brief The (reader) version for this update.
    */
-  little_u32 version;
+  big_u32 version;
 };
 
 BATT_STATIC_ASSERT_EQ(sizeof(PackedValueUpdate), 16);
+
+class MemTableEntry;
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 //
@@ -95,6 +97,8 @@ struct MemTableEntryInserter {
 
   ValueView stored_value;
   u32 stored_locator;
+  bool inserted = false;
+  const MemTableEntry* entry = nullptr;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -139,6 +143,8 @@ struct MemTableEntryInserter {
       std::memcpy(value_dst, this->value.data(), value_len);
       this->stored_value = ValueView::from_str(std::string_view{value_dst, value_len});
     });
+
+    this->inserted = true;
 
     return std::string_view{key_dst, key_len};
   }
@@ -231,6 +237,8 @@ class MemTableEntry
     this->base_locator_ = this->locator_;
     this->revision_ = 0;
 
+    i.entry = this;
+
     return OkStatus();
   }
 
@@ -244,6 +252,8 @@ class MemTableEntry
     this->value_ = i.stored_value;
     this->locator_ = i.stored_locator;
 
+    i.entry = this;
+
     return OkStatus();
   }
 
@@ -254,6 +264,12 @@ class MemTableEntry
   mutable u32 locator_;
   u32 base_locator_;
   mutable u32 revision_;
+
+  u32 get_version() const
+  {
+    const big_u32* stored_version = reinterpret_cast<const big_u32*>(this->value_.data()) - 1;
+    return *stored_version;
+  }
 };
 
 inline const std::string_view& get_key(const MemTableEntry& e)

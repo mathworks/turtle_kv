@@ -24,7 +24,7 @@ usize find_common_prefix_len(const char* data0, usize size0, const char* data1, 
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-void ART::put(std::string_view key)
+void ART::insert(std::string_view key)
 {
   thread_local NodeBase super_root{NodeType::kNodeBase};
 
