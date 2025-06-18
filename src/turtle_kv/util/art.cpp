@@ -5,39 +5,6 @@
 
 namespace turtle_kv {
 
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-template <typename... CaseFns>
-inline void ART::NodeBase::visit(CaseFns&&... case_fns)
-{
-  auto visitor = batt::make_case_of_visitor(BATT_FORWARD(case_fns)...);
-
-  const NodeType observed = this->node_type;
-
-  switch (observed) {
-    case NodeType::kNode4:
-      visitor(static_cast<Node4*>(this));
-      break;
-
-    case NodeType::kNode16:
-      visitor(static_cast<Node16*>(this));
-      break;
-
-    case NodeType::kNode48:
-      visitor(static_cast<Node48*>(this));
-      break;
-
-    case NodeType::kNode256:
-      visitor(static_cast<Node256*>(this));
-      break;
-
-    case NodeType::kNodeBase:  // fall-through
-    default:
-      BATT_PANIC() << "Bad node type: " << (int)observed;
-      BATT_UNREACHABLE();
-  }
-}
-
 namespace {
 
 usize find_common_prefix_len(const char* data0, usize size0, const char* data1, usize size1)
@@ -435,14 +402,9 @@ auto ART::grow_node(Node256*) -> Node256*
 //
 auto ART::clone_node(Node4* orig_node) -> Node4*
 {
-  Node4* new_node = new (this->alloc_storage(sizeof(Node4))) Node4{};
+  Node4* new_node = new (this->alloc_storage(sizeof(Node4))) Node4{NodeBase::NoInit{}};
 
-  new_node->assign_base_from(*orig_node);
-
-  const usize n = new_node->branch_count();
-
-  std::memcpy(new_node->key.data(), orig_node->key.data(), n);
-  std::memcpy(new_node->branches.data(), orig_node->branches.data(), n * sizeof(NodeBase*));
+  new_node->assign_from(*orig_node);
 
   return new_node;
 }
@@ -451,14 +413,9 @@ auto ART::clone_node(Node4* orig_node) -> Node4*
 //
 auto ART::clone_node(Node16* orig_node) -> Node16*
 {
-  Node16* new_node = new (this->alloc_storage(sizeof(Node16))) Node16{};
+  Node16* new_node = new (this->alloc_storage(sizeof(Node16))) Node16{NodeBase::NoInit{}};
 
-  new_node->assign_base_from(*orig_node);
-
-  const usize n = new_node->branch_count();
-
-  std::memcpy(new_node->key.data(), orig_node->key.data(), n);
-  std::memcpy(new_node->branches.data(), orig_node->branches.data(), n * sizeof(NodeBase*));
+  new_node->assign_from(*orig_node);
 
   return new_node;
 }
@@ -467,14 +424,9 @@ auto ART::clone_node(Node16* orig_node) -> Node16*
 //
 auto ART::clone_node(Node48* orig_node) -> Node48*
 {
-  Node48* new_node = new (this->alloc_storage(sizeof(Node48))) Node48{};
+  Node48* new_node = new (this->alloc_storage(sizeof(Node48))) Node48{NodeBase::NoInit{}};
 
-  new_node->assign_base_from(*orig_node);
-
-  const usize n = new_node->branch_count();
-
-  new_node->branch_for_key = orig_node->branch_for_key;
-  std::memcpy(new_node->branches.data(), orig_node->branches.data(), n * sizeof(NodeBase*));
+  new_node->assign_from(*orig_node);
 
   return new_node;
 }
@@ -483,10 +435,9 @@ auto ART::clone_node(Node48* orig_node) -> Node48*
 //
 auto ART::clone_node(Node256* orig_node) -> Node256*
 {
-  Node256* new_node = new (this->alloc_storage(sizeof(Node256))) Node256{};
+  Node256* new_node = new (this->alloc_storage(sizeof(Node256))) Node256{NodeBase::NoInit{}};
 
-  new_node->assign_base_from(*orig_node);
-  new_node->branches = orig_node->branches;
+  new_node->assign_from(*orig_node);
 
   return new_node;
 }

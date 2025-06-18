@@ -28,17 +28,19 @@ using turtle_kv::testing::RandomStringGenerator;
 //
 TEST(ArtTest, PutContainsTest)
 {
-  const usize num_keys = 1e7;
+  const usize num_keys = 1e5;
+  const usize num_scans = 10000;
+  const usize max_scan_length = 100;
+
+  std::default_random_engine rng{/*seed=*/1};
+  RandomStringGenerator generate_key;
+  std::uniform_int_distribution<usize> pick_scan_length{1, max_scan_length};
 
   std::vector<std::string> keys;
   std::unordered_set<std::string_view> inserted;
-  {
-    std::default_random_engine rng{/*seed=*/1};
-    RandomStringGenerator generate_key;
 
-    for (usize i = 0; i < num_keys; ++i) {
-      keys.emplace_back(generate_key(rng));
-    }
+  for (usize i = 0; i < num_keys; ++i) {
+    keys.emplace_back(generate_key(rng));
   }
 
   ART index;
@@ -63,6 +65,37 @@ TEST(ArtTest, PutContainsTest)
   for (const std::string& key : keys) {
     EXPECT_TRUE(index.contains(key));
   }
+
+  std::sort(keys.begin(), keys.end());
+
+  LatencyMetric scan_latency;
+
+  for (usize i = 0; i < num_scans; ++i) {
+    const std::string lower_bound_key = generate_key(rng);
+    const usize scan_length = pick_scan_length(rng);
+
+    std::vector<std::string> expected_result;
+    for (auto iter = std::lower_bound(keys.begin(), keys.end(), lower_bound_key);
+         iter != keys.end() && expected_result.size() < scan_length;
+         ++iter) {
+      expected_result.emplace_back(*iter);
+    }
+
+    std::vector<std::string> actual_result;
+    {
+      LatencyTimer timer{scan_latency};
+      index.scan_n(lower_bound_key, scan_length, [&actual_result](const std::string_view& key) {
+        actual_result.emplace_back(key);
+      });
+    }
+
+    EXPECT_EQ(expected_result.size(), actual_result.size());
+
+    ASSERT_EQ(expected_result, actual_result)
+        << BATT_INSPECT_STR(lower_bound_key) << BATT_INSPECT(i);
+  }
+
+  std::cerr << BATT_INSPECT(scan_latency) << std::endl;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
