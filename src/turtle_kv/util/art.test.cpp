@@ -66,7 +66,12 @@ TEST(ArtTest, PutContainsTest)
     EXPECT_TRUE(index.contains(key));
   }
 
-  std::sort(keys.begin(), keys.end());
+  LatencyMetric sort_latency;
+
+  {
+    LatencyTimer timer{sort_latency, keys.size()};
+    std::sort(keys.begin(), keys.end());
+  }
 
   LatencyMetric scan_latency;
 
@@ -96,7 +101,20 @@ TEST(ArtTest, PutContainsTest)
         << BATT_INSPECT_STR(lower_bound_key) << BATT_INSPECT(i);
   }
 
-  std::cerr << BATT_INSPECT(scan_latency) << std::endl;
+  LatencyMetric item_latency;
+  usize count = 0;
+  {
+    LatencyTimer timer{item_latency, num_keys};
+    index.scan(std::string_view{}, [&count](const std::string_view&) {
+      ++count;
+      return true;
+    });
+  }
+  EXPECT_EQ(count, num_keys);
+
+  std::cerr << BATT_INSPECT(scan_latency) << std::endl
+            << BATT_INSPECT(item_latency) << std::endl
+            << BATT_INSPECT(sort_latency) << std::endl;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -215,7 +233,7 @@ TEST(ArtTest, MultiThreadTest)
 {
   const int n_rounds = 3;
 
-  for (usize n_threads = 1; n_threads < std::thread::hardware_concurrency(); ++n_threads) {
+  for (usize n_threads = 1; n_threads <= std::thread::hardware_concurrency(); ++n_threads) {
     std::atomic<int> round{-1};
     std::atomic<int> pending{0};
     std::atomic<ART*> p_index{nullptr};
@@ -301,12 +319,12 @@ TEST(ArtTest, MultiThreadTest)
       ++size_i;
     }
 
-    if (n_threads > 8) {
+    if (n_threads >= 4) {
       n_threads += 1;
-      if (n_threads > 16) {
-        n_threads += 3;
-        if (n_threads > 32) {
-          n_threads += 7;
+      if (n_threads >= 8) {
+        n_threads += 2;
+        if (n_threads >= 16) {
+          n_threads += 4;
         }
       }
     }

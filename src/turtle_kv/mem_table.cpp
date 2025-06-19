@@ -8,6 +8,13 @@
 
 namespace turtle_kv {
 
+#define GET_USE_ORDERED_INDEX()                                                                    \
+  static const bool use_ordered_index = [] {                                                       \
+    const bool b = getenv_as<bool>("turtlekv_memtable_ordered_index").value_or(true);              \
+    LOG(INFO) << "turtlekv_memtable_ordered_index=" << b;                                          \
+    return b;                                                                                      \
+  }()
+
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 /*static*/ MemTable::RuntimeOptions MemTable::RuntimeOptions::with_default_values() noexcept
@@ -53,11 +60,7 @@ Status MemTable::put(ChangeLogWriter::Context& context,
                      const KeyView& key,
                      const ValueView& value) noexcept
 {
-  static const bool use_ordered_index = [] {
-    const bool b = getenv_as<bool>("turtlekv_memtable_ordered_index").value_or(true);
-    LOG(INFO) << "turtlekv_memtable_ordered_index=" << b;
-    return b;
-  }();
+  GET_USE_ORDERED_INDEX();
 
   StorageImpl storage{*this, context, OkStatus()};
 
@@ -166,6 +169,8 @@ bool MemTable::finalize() noexcept
 //
 MergeCompactor::ResultSet</*decay_to_items=*/false> MemTable::compact() noexcept
 {
+  GET_USE_ORDERED_INDEX();
+
   BATT_CHECK(this->is_finalized_);
 
   usize total_keys = 0;
@@ -174,8 +179,7 @@ MergeCompactor::ResultSet</*decay_to_items=*/false> MemTable::compact() noexcept
   std::vector<EditView> edits_out;
   edits_out.reserve(total_keys);
 
-  this->hash_index_.for_each([&](const MemTableEntry& entry) {
-    KeyView key = get_key(entry);
+  const auto value_from_entry = [&](const MemTableEntry& entry) {
     ValueView value = entry.value_;
     if (value.needs_combine()) {
       ConstBuffer slot_buffer = this->fetch_slot(entry.locator_);
@@ -202,10 +206,31 @@ MergeCompactor::ResultSet</*decay_to_items=*/false> MemTable::compact() noexcept
       }
       // else (key_len == 0) - the current revision is also the first; nothing else can be done.
     }
-    edits_out.emplace_back(key, value);
-  });
+    return value;
+  };
 
-  std::sort(edits_out.begin(), edits_out.end(), KeyOrder{});
+  if (use_ordered_index) {
+    this->ordered_index_.scan(  //
+        /*lower_bound_key=*/std::string_view{},
+        [&](const std::string_view& tmp_key) {
+          const MemTableEntry* entry = this->hash_index_.unsynchronized_find_key(tmp_key);
+          BATT_CHECK_NOT_NULLPTR(entry);
+          KeyView key = get_key(*entry);
+          ValueView value = value_from_entry(*entry);
+          edits_out.emplace_back(key, value);
+          return true;
+        });
+
+  } else {
+    this->hash_index_.for_each(  //
+        [&](const MemTableEntry& entry) {
+          KeyView key = get_key(entry);
+          ValueView value = value_from_entry(entry);
+          edits_out.emplace_back(key, value);
+        });
+
+    std::sort(edits_out.begin(), edits_out.end(), KeyOrder{});
+  }
 
   MergeCompactor::ResultSet</*decay_to_items=*/false> result_set;
   result_set.append(std::move(edits_out));
