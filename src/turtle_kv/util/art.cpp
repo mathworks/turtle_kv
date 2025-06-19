@@ -26,15 +26,12 @@ usize find_common_prefix_len(const char* data0, usize size0, const char* data1, 
 //
 void ART::insert(std::string_view key)
 {
-  thread_local NodeBase super_root{NodeType::kNodeBase};
-
   bool reset = true;
 
   const char* key_data = nullptr;
   usize key_len = 0;
-  NodeBase* root = nullptr;
-  NodeBase* parent = nullptr;
   BranchView branch;
+  NodeBase* parent = nullptr;
 
   for (;;) {
     if (reset) {
@@ -42,9 +39,24 @@ void ART::insert(std::string_view key)
 
       key_data = key.data();
       key_len = key.size();
-      root = &this->root_;
-      parent = &super_root;
-      branch.load(root);
+
+      for (;;) {
+        SeqMutex<u32>::ReadLock root_read_lock{this->super_root_.mutex_};
+        branch.load(this->root_);
+        if (!root_read_lock.changed()) {
+          break;
+        }
+      }
+
+      if (branch.ptr == nullptr) {
+        SeqMutex<u32>::WriteLock root_write_lock{this->super_root_.mutex_};
+        if (branch.reload() == nullptr) {
+          branch.store(this->make_node4(key_data, key_len))->set_terminal();
+          return;
+        }
+      }
+
+      parent = &this->super_root_;
     }
 
     bool done = false;
@@ -218,7 +230,6 @@ bool ART::contains(std::string_view key)
 
   const char* key_data = nullptr;
   usize key_len = 0;
-  NodeBase* root = nullptr;
   BranchView branch;
 
   for (;;) {
@@ -229,8 +240,17 @@ bool ART::contains(std::string_view key)
 
       key_data = key.data();
       key_len = key.size();
-      root = &this->root_;
-      branch.load(root);
+
+      for (;;) {
+        SeqMutex<u32>::ReadLock root_read_lock{this->super_root_.mutex_};
+        branch.load(this->root_);
+        if (!root_read_lock.changed()) {
+          break;
+        }
+      }
+      if (branch.ptr == nullptr) {
+        return false;
+      }
     }
 
     bool done = false;
@@ -309,11 +329,21 @@ bool ART::contains(std::string_view key)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-template <typename NodeT>
+template <typename NodeT, typename>
 auto ART::add_child(NodeT* node, u8 key_byte, NodeBase* child) -> NodeBase*
 {
   const usize i = node->add_branch();
   node->set_branch_index(key_byte, i);
+  node->branches[i] = child;
+  return child;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+auto ART::add_child(Node256* node, u8 key_byte, NodeBase* child) -> NodeBase*
+{
+  const usize i = key_byte;
+  BATT_CHECK_EQ(node->branches[i], nullptr);
   node->branches[i] = child;
   return child;
 }

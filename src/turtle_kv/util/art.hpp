@@ -519,7 +519,17 @@ class ART
   {
     std::array<char, kMaxKeyLen> buffer;
     bool done = false;
-    this->scan_impl(&this->root_, buffer.data(), 0, lower_bound_key, done, fn);
+    NodeBase* root = nullptr;
+    for (;;) {
+      SeqMutex<u32>::ReadLock root_read_lock{this->super_root_.mutex_};
+      root = this->root_;
+      if (!root_read_lock.changed()) {
+        break;
+      }
+    }
+    root->visit([&](auto* node) {
+      this->scan_impl(node, buffer.data(), 0, lower_bound_key, done, fn);
+    });
   }
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -567,8 +577,10 @@ class ART
     return this->per_thread_memory_context_.get().alloc(n, this);
   }
 
-  template <typename NodeT>
+  template <typename NodeT, typename = std::enable_if_t<!std::is_same_v<NodeT, Node256>>>
   NodeBase* add_child(NodeT* node, u8 key_byte, NodeBase* child);
+
+  NodeBase* add_child(Node256* node, u8 key_byte, NodeBase* child);
 
   template <typename NodeT>
   NodeBase* add_child(NodeT* node, u8 key_byte, const char* new_key_data, usize new_key_len);
@@ -601,7 +613,8 @@ class ART
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  Node256 root_;
+  NodeBase super_root_{NodeType::kNodeBase};
+  NodeBase* root_ = nullptr;
   absl::Mutex mutex_;
   std::vector<std::unique_ptr<ExtentStorageT>> extents_;
   ObjectThreadStorage<MemoryContext>::ScopedSlot per_thread_memory_context_;

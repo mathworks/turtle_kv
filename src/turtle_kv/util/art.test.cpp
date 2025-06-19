@@ -68,9 +68,13 @@ TEST(ArtTest, PutContainsTest)
 
   LatencyMetric sort_latency;
 
+  std::vector<std::string_view> sorted_keys;
+  for (const std::string& key : keys) {
+    sorted_keys.emplace_back(key);
+  }
   {
-    LatencyTimer timer{sort_latency, keys.size()};
-    std::sort(keys.begin(), keys.end());
+    LatencyTimer timer{sort_latency, sorted_keys.size()};
+    std::sort(sorted_keys.begin(), sorted_keys.end());
   }
 
   LatencyMetric scan_latency;
@@ -80,8 +84,8 @@ TEST(ArtTest, PutContainsTest)
     const usize scan_length = pick_scan_length(rng);
 
     std::vector<std::string> expected_result;
-    for (auto iter = std::lower_bound(keys.begin(), keys.end(), lower_bound_key);
-         iter != keys.end() && expected_result.size() < scan_length;
+    for (auto iter = std::lower_bound(sorted_keys.begin(), sorted_keys.end(), lower_bound_key);
+         iter != sorted_keys.end() && expected_result.size() < scan_length;
          ++iter) {
       expected_result.emplace_back(*iter);
     }
@@ -115,6 +119,31 @@ TEST(ArtTest, PutContainsTest)
   std::cerr << BATT_INSPECT(scan_latency) << std::endl
             << BATT_INSPECT(item_latency) << std::endl
             << BATT_INSPECT(sort_latency) << std::endl;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+TEST(ArtTest, WideKeySet)
+{
+  std::vector<std::string> keys;
+  for (u16 first = 0; first < 256; ++first) {
+    for (u16 second = 0; second < 256; ++second) {
+      char data[2] = {(char)first, (char)second};
+      keys.emplace_back(data, 2);
+    }
+  }
+
+  ART index;
+
+  for (const std::string& key : keys) {
+    EXPECT_FALSE(index.contains(key));
+    index.insert(key);
+    EXPECT_TRUE(index.contains(key));
+  }
+
+  for (const std::string& key : keys) {
+    EXPECT_TRUE(index.contains(key));
+  }
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
