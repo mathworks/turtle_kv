@@ -210,16 +210,18 @@ MergeCompactor::ResultSet</*decay_to_items=*/false> MemTable::compact() noexcept
   };
 
   if (use_ordered_index) {
-    this->ordered_index_.scan(  //
-        /*lower_bound_key=*/std::string_view{},
-        [&](const std::string_view& tmp_key) {
-          const MemTableEntry* entry = this->hash_index_.unsynchronized_find_key(tmp_key);
-          BATT_CHECK_NOT_NULLPTR(entry);
-          KeyView key = get_key(*entry);
-          ValueView value = value_from_entry(*entry);
-          edits_out.emplace_back(key, value);
-          return true;
-        });
+    ART::Scanner scanner{this->ordered_index_, /*lower_bound_key=*/std::string_view{}};
+
+    while (!scanner.is_done()) {
+      const std::string_view& tmp_key = scanner.get_key();
+
+      const MemTableEntry* entry = this->hash_index_.unsynchronized_find_key(tmp_key);
+      BATT_CHECK_NOT_NULLPTR(entry);
+
+      edits_out.emplace_back(get_key(*entry), value_from_entry(*entry));
+
+      scanner.advance();
+    }
 
   } else {
     this->hash_index_.for_each(  //

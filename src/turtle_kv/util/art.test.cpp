@@ -78,6 +78,7 @@ TEST(ArtTest, PutContainsTest)
   }
 
   LatencyMetric scan_latency;
+  LatencyMetric scanner_latency;
 
   for (usize i = 0; i < num_scans; ++i) {
     const std::string lower_bound_key = generate_key(rng);
@@ -90,33 +91,58 @@ TEST(ArtTest, PutContainsTest)
       expected_result.emplace_back(*iter);
     }
 
-    std::vector<std::string> actual_result;
-    {
-      LatencyTimer timer{scan_latency};
-      index.scan(lower_bound_key, [&actual_result, scan_length](const std::string_view& key) {
-        actual_result.emplace_back(key);
-        return actual_result.size() < scan_length;
-      });
+    for (usize j = 0; j < 3; ++j) {
+      {
+        std::vector<std::string> actual_result;
+        {
+          LatencyTimer timer{scan_latency};
+          index.scan(lower_bound_key, [&actual_result, scan_length](const std::string_view& key) {
+            actual_result.emplace_back(key);
+            return actual_result.size() < scan_length;
+          });
+        }
+
+        EXPECT_EQ(expected_result.size(), actual_result.size());
+
+        ASSERT_EQ(expected_result, actual_result)
+            << BATT_INSPECT_STR(lower_bound_key) << BATT_INSPECT(i);
+      }
+
+      {
+        std::vector<std::string> actual_result;
+        {
+          LatencyTimer timer{scanner_latency};
+
+          ART::Scanner scanner{index, lower_bound_key};
+
+          while (!scanner.is_done() && actual_result.size() < scan_length) {
+            actual_result.emplace_back(scanner.get_key());
+            scanner.advance();
+          }
+        }
+
+        EXPECT_EQ(expected_result.size(), actual_result.size());
+
+        ASSERT_EQ(expected_result, actual_result)
+            << BATT_INSPECT_STR(lower_bound_key) << BATT_INSPECT(i);
+      }
     }
-
-    EXPECT_EQ(expected_result.size(), actual_result.size());
-
-    ASSERT_EQ(expected_result, actual_result)
-        << BATT_INSPECT_STR(lower_bound_key) << BATT_INSPECT(i);
   }
 
   LatencyMetric item_latency;
   usize count = 0;
   {
     LatencyTimer timer{item_latency, num_keys};
-    index.scan(std::string_view{}, [&count](const std::string_view&) {
+    ART::Scanner scanner{index, std::string_view{}};
+    while (!scanner.is_done()) {
       ++count;
-      return true;
-    });
+      scanner.advance();
+    }
   }
   EXPECT_EQ(count, num_keys);
 
   std::cerr << BATT_INSPECT(scan_latency) << std::endl
+            << BATT_INSPECT(scanner_latency) << std::endl
             << BATT_INSPECT(item_latency) << std::endl
             << BATT_INSPECT(sort_latency) << std::endl;
 }

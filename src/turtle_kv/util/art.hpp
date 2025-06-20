@@ -339,13 +339,13 @@ class ART
 
         key_bitmap.fill(0);
 
-        const usize n_branches = this->branch_count();
+        const usize n_branches = this->self_.branch_count();
         for (usize i = 0; i < n_branches; ++i) {
-          const i32 key_byte = this->key[i];
+          const i32 key_byte = this->self_.key[i];
           if (key_byte < min_key || key_byte > max_key) {
             continue;
           }
-          branch_for_byte[key_byte] = this->branches[i];
+          branch_for_byte[key_byte] = this->self_.branches[i];
           key_bitmap[(key_byte >> 6) & 3] |= (u64{1} << (key_byte & 0x3f));
         }
 
@@ -359,7 +359,7 @@ class ART
         TURTLE_KV_ART_SMALL_NODE_OUTER_LOOP(3, 192)
       }
 
-      char get_char() const
+      i32 get_key_byte() const
       {
         return this->sorted_keys_[this->i_];
       }
@@ -406,47 +406,6 @@ class ART
       this->key[i] = key_byte;
     }
 
-    template <typename Fn>
-    void visit_branches(i32 min_key, i32 max_key, Fn&& fn) const
-    {
-      std::array<NodeBase*, 256> branch_for_byte;
-      std::array<u64, 4> key_bitmap;
-
-      key_bitmap.fill(0);
-
-      const usize n_branches = this->branch_count();
-      for (usize i = 0; i < n_branches; ++i) {
-        const i32 key_byte = this->key[i];
-        if (key_byte < min_key || key_byte > max_key) {
-          continue;
-        }
-        branch_for_byte[key_byte] = this->branches[i];
-        key_bitmap[(key_byte >> 6) & 3] |= (u64{1} << (key_byte & 0x3f));
-      }
-
-#define TURTLE_KV_ART_VISIT_BRANCH_LOOP(word_i, key_byte_offset)                                   \
-  {                                                                                                \
-    const u64 word_val = key_bitmap[word_i];                                                       \
-    for (i32 bit_i = first_bit(word_val); bit_i != 64; bit_i = next_bit(word_val, bit_i)) {        \
-      const i32 key_byte = key_byte_offset + bit_i;                                                \
-      NodeBase* branch = branch_for_byte[key_byte];                                                \
-      if (branch) {                                                                                \
-        Optional<batt::seq::LoopControl> result = batt::seq::invoke_loop_fn(fn, key_byte, branch); \
-        if (result && *result == batt::seq::LoopControl::kBreak) {                                 \
-          return;                                                                                  \
-        }                                                                                          \
-      }                                                                                            \
-    }                                                                                              \
-  }
-
-      TURTLE_KV_ART_VISIT_BRANCH_LOOP(0, 0)
-      TURTLE_KV_ART_VISIT_BRANCH_LOOP(1, 64)
-      TURTLE_KV_ART_VISIT_BRANCH_LOOP(2, 128)
-      TURTLE_KV_ART_VISIT_BRANCH_LOOP(3, 192)
-
-#undef TURTLE_KV_ART_VISIT_BRANCH_LOOP
-    }
-
     void assign_from(const Self& that)
     {
       this->Super::assign_from(static_cast<const Super&>(that));
@@ -481,9 +440,9 @@ class ART
         this->skip_invalid_branches();
       }
 
-      char get_char() const
+      i32 get_key_byte() const
       {
-        return (char)this->key_byte_;
+        return this->key_byte_;
       }
 
       NodeBase* get_branch() const
@@ -538,19 +497,6 @@ class ART
       this->branch_for_key[key_byte] = i;
     }
 
-    template <typename Fn>
-    void visit_branches(i32 min_key, i32 max_key, Fn&& fn)
-    {
-      for (i32 key_byte = min_key; key_byte <= max_key; ++key_byte) {
-        BranchIndex i = this->branch_for_key[key_byte];
-        if (i == kInvalidBranchIndex) {
-          continue;
-        }
-        NodeBase* branch = this->branches[i];
-        BATT_INVOKE_LOOP_FN((fn, key_byte, branch));
-      }
-    }
-
     void assign_from(const Self& that)
     {
       this->Super::assign_from(static_cast<const Super&>(that));
@@ -593,9 +539,9 @@ class ART
       {
       }
 
-      char get_char() const
+      i32 get_key_byte() const
       {
-        return (char)this->key_byte_;
+        return this->key_byte_;
       }
 
       NodeBase* get_branch() const
@@ -659,17 +605,6 @@ class ART
     {
     }
 
-    template <typename Fn>
-    void visit_branches(i32 min_key, i32 max_key, Fn&& fn)
-    {
-      for (i32 key_byte = min_key; key_byte <= max_key; ++key_byte) {
-        NodeBase* branch = this->branches[key_byte];
-        if (branch) {
-          BATT_INVOKE_LOOP_FN((fn, key_byte, branch));
-        }
-      }
-    }
-
     void assign_from(const Self& that)
     {
       this->Super::assign_from(static_cast<const Super&>(that));
@@ -699,6 +634,10 @@ class ART
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  class Scanner;
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
   ART() = default;
 
   void insert(std::string_view key);
@@ -706,22 +645,7 @@ class ART
   bool contains(std::string_view key);
 
   template <typename Fn>
-  void scan(std::string_view lower_bound_key, const Fn& fn)
-  {
-    std::array<char, kMaxKeyLen> buffer;
-    bool done = false;
-    NodeBase* root = nullptr;
-    for (;;) {
-      SeqMutex<u32>::ReadLock root_read_lock{this->super_root_.mutex_};
-      root = this->root_;
-      if (!root_read_lock.changed()) {
-        break;
-      }
-    }
-    root->visit([&](auto* node) {
-      this->scan_impl(node, buffer.data(), 0, lower_bound_key, done, fn);
-    });
-  }
+  void scan(std::string_view lower_bound_key, const Fn& fn);
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
@@ -794,14 +718,6 @@ class ART
 
   Node256* clone_node(Node256* orig_node);
 
-  template <typename NodeT, typename Fn>
-  void scan_impl(NodeT* node,
-                 char* prefix_buffer,
-                 usize prefix_len,
-                 std::string_view lower_bound_key,
-                 bool& done,
-                 const Fn& fn) const;
-
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   NodeBase super_root_{NodeType::kNodeBase};
@@ -846,102 +762,225 @@ inline void ART::NodeBase::visit(CaseFns&&... case_fns)
   }
 }
 
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+//
+class ART::Scanner
+{
+ public:
+  using NodeView = std::variant<batt::NoneType, Node4, Node16, Node48, Node256>;
+
+  using NodeScanState = std::variant<batt::NoneType,
+                                     Node4::ScanState,
+                                     Node16::ScanState,
+                                     Node48::ScanState,
+                                     Node256::ScanState>;
+
+  static constexpr usize kMaxDepth = ART::kMaxKeyLen;
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  struct Frame {
+    NodeView node_view_;
+    NodeScanState scan_state_;
+    usize prefix_len_;
+    std::string_view lower_bound_key_;
+    i32 min_key_byte_;
+
+    explicit Frame(usize prefix_len, std::string_view lower_bound_key) noexcept
+        : node_view_{None}
+        , scan_state_{None}
+        , prefix_len_{prefix_len}
+        , lower_bound_key_{lower_bound_key}
+        , min_key_byte_{0}
+    {
+    }
+  };
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  std::aligned_storage_t<sizeof(Frame) * kMaxDepth, /*alignment=*/64> stack_storage_;
+  Frame* end_ = reinterpret_cast<Frame*>(&this->stack_storage_);
+  usize depth_ = 0;
+  std::array<char, ART::kMaxKeyLen> key_buffer_;
+  Optional<std::string_view> next_key_;
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  explicit Scanner(ART& art, std::string_view lower_bound_key) noexcept
+  {
+    NodeBase* root = nullptr;
+    for (;;) {
+      SeqMutex<u32>::ReadLock root_read_lock{art.super_root_.mutex_};
+      root = art.root_;
+      if (!root_read_lock.changed()) {
+        break;
+      }
+    }
+
+    root->visit([&](auto* node) {
+      this->enter(node, /*prefix_len=*/0, lower_bound_key);
+    });
+
+    if (!this->next_key_) {
+      this->advance();
+    }
+  }
+
+  template <typename NodeT>
+  void enter(NodeT* node, usize prefix_len, std::string_view lower_bound_key)
+  {
+    Frame* top = new (this->end_) Frame{prefix_len, lower_bound_key};
+    ++this->depth_;
+    ++this->end_;
+
+    // We need to create a copy of the node data to protect against data races.
+    //
+    NodeT& node_view = top->node_view_.emplace<NodeT>(NodeBase::NoInit{});
+
+    // Retry the node read until we get a consistent view.
+    //
+    for (;;) {
+      SeqMutex<u32>::ReadLock read_lock{node->mutex_};
+      node_view.assign_from(*node);
+      if (!read_lock.changed()) {
+        break;
+      }
+    }
+
+    // Compare the lower bound key to the current node prefix.
+    //
+    const usize compare_len = std::min<usize>(node_view.prefix_len_, top->lower_bound_key_.size());
+    if (compare_len) {
+      const i32 order =
+          __builtin_memcmp(node_view.prefix_, top->lower_bound_key_.data(), compare_len);
+
+      // If all keys in this subtree come before the lower bound, then there is nothing to do.
+      //
+      if (order < 0) {
+        --this->depth_;
+        --this->end_;
+        return;
+      }
+
+      // If the node prefix is a prefix of the lower bound key, then drop the prefix from the lower
+      // bound; otherwise the node prefix comes *after* the lower bound, so we can safely ignore the
+      // lower bound for the rest of the recursion.
+      //
+      if (order == 0 && compare_len == node_view.prefix_len_) {
+        top->lower_bound_key_.remove_prefix(compare_len);
+      } else {
+        top->lower_bound_key_ = {};
+      }
+    }
+
+    // Set bounds for branch visitation.
+    //
+    top->min_key_byte_ = [&]() -> i32 {
+      if (top->lower_bound_key_.empty()) {
+        return 0;
+      }
+      const i32 next_char = top->lower_bound_key_.front();
+      top->lower_bound_key_.remove_prefix(1);
+      return next_char;
+    }();
+    const i32 max_key_byte = 255;
+
+    // Append the node prefix to the buffer.
+    //
+    __builtin_memcpy(this->key_buffer_.data() + top->prefix_len_,
+                     node_view.prefix_,
+                     node_view.prefix_len_);
+
+    top->prefix_len_ += node_view.prefix_len_;
+
+    // If the current node is a key-terminal, emit the contents of the buffer.
+    //
+    if (node_view.is_terminal()) {
+      this->next_key_.emplace(this->key_buffer_.data(), top->prefix_len_);
+    } else {
+      this->next_key_ = None;
+    }
+
+    top->scan_state_.emplace<typename NodeT::ScanState>(node_view,
+                                                        top->min_key_byte_,
+                                                        max_key_byte);
+  }
+
+  bool is_done() const
+  {
+    return this->depth_ == 0;
+  }
+
+  const std::string_view& get_key() const
+  {
+    return *this->next_key_;
+  }
+
+  void advance()
+  {
+    this->next_key_ = None;
+
+    for (;;) {
+      if (this->depth_ == 0) {
+        return;
+      }
+
+      Frame* top = this->end_ - 1;
+
+      batt::case_of(
+          top->scan_state_,
+          [](batt::NoneType&) {
+            BATT_PANIC() << "empty Scanner stack frame!";
+          },
+          [&](auto& scan_state)
+              -> std::enable_if_t<
+                  !std::is_same_v<std::decay_t<decltype(scan_state)>, batt::NoneType>> {
+            if (scan_state.is_done()) {
+              --this->depth_;
+              --this->end_;
+              return;
+            }
+
+            i32 key_byte = scan_state.get_key_byte();
+            NodeBase* child = scan_state.get_branch();
+
+            this->key_buffer_[top->prefix_len_] = (char)key_byte;
+
+            if (key_byte == top->min_key_byte_) {
+              child->visit([&](auto* child_node) {
+                this->enter(child_node, top->prefix_len_ + 1, top->lower_bound_key_);
+              });
+            } else {
+              child->visit([&](auto* child_node) {
+                this->enter(child_node, top->prefix_len_ + 1, std::string_view{});
+              });
+            }
+
+            scan_state.advance();
+          });
+
+      if (this->next_key_) {
+        return;
+      }
+    }
+  }
+};
+
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-template <typename NodeT, typename Fn>
-inline void ART::scan_impl(NodeT* node,
-                           char* prefix_buffer,
-                           usize prefix_len,
-                           std::string_view lower_bound_key,
-                           bool& done,
-                           const Fn& fn) const
+template <typename Fn>
+void ART::scan(std::string_view lower_bound_key, const Fn& fn)
 {
-  // We will need to create a copy of the node data to protect against data races.
-  //
-  NodeT node_view{NodeBase::NoInit{}};
+  Scanner scanner{*this, lower_bound_key};
 
-  // Retry the node read until we get a consistent view.
-  //
-  for (;;) {
-    SeqMutex<u32>::ReadLock read_lock{node->mutex_};
-    node_view.assign_from(*node);
-    if (!read_lock.changed()) {
-      break;
-    }
-  }
-
-  // Compare the lower bound key to the current node prefix.
-  //
-  const usize compare_len = std::min<usize>(node_view.prefix_len_, lower_bound_key.size());
-  if (compare_len) {
-    const i32 order = __builtin_memcmp(node_view.prefix_, lower_bound_key.data(), compare_len);
-
-    // If all keys in this subtree come before the lower bound, then there is nothing to do.
-    //
-    if (order < 0) {
+  while (!scanner.is_done()) {
+    if (!fn(scanner.get_key())) {
       return;
     }
-
-    // If the node prefix is a prefix of the lower bound key, then drop the prefix from the lower
-    // bound; otherwise the node prefix comes *after* the lower bound, so we can safely ignore the
-    // lower bound for the rest of the recursion.
-    //
-    if (order == 0 && compare_len == node_view.prefix_len_) {
-      lower_bound_key.remove_prefix(compare_len);
-    } else {
-      lower_bound_key = {};
-    }
+    scanner.advance();
   }
-
-  // Set bounds for branch visitation.
-  //
-  const i32 min_key_byte = [&]() -> i32 {
-    if (lower_bound_key.empty()) {
-      return 0;
-    }
-    const i32 next_char = lower_bound_key.front();
-    lower_bound_key.remove_prefix(1);
-    return next_char;
-  }();
-  const i32 max_key_byte = 255;
-
-  // Append the node prefix to the buffer.
-  //
-  __builtin_memcpy(prefix_buffer + prefix_len, node_view.prefix_, node_view.prefix_len_);
-  prefix_len += node_view.prefix_len_;
-
-  // If the current node is a key-terminal, emit the contents of the buffer.
-  //
-  if (node_view.is_terminal()) {
-    if (!fn(std::string_view{prefix_buffer, prefix_len})) {
-      done = true;
-      return;
-    }
-  }
-
-  // Recurse on branches.
-  //
-  node_view.visit_branches(
-      min_key_byte,
-      max_key_byte,
-      [&](i32 key_byte, NodeBase* child) -> batt::seq::LoopControl {
-        if (done) {
-          return batt::seq::LoopControl::kBreak;
-        }
-        prefix_buffer[prefix_len] = (char)key_byte;
-
-        if (key_byte == min_key_byte) {
-          child->visit([&](auto* child_node) {
-            this->scan_impl(child_node, prefix_buffer, prefix_len + 1, lower_bound_key, done, fn);
-          });
-        } else {
-          child->visit([&](auto* child_node) {
-            this->scan_impl(child_node, prefix_buffer, prefix_len + 1, {}, done, fn);
-          });
-        }
-
-        return batt::seq::LoopControl::kContinue;
-      });
 }
 
 }  // namespace turtle_kv
