@@ -147,12 +147,12 @@ class ART
       this->flags_ |= kFlagObsolete;
     }
 
-    void assign_from(const Self& that)
+    void assign_from(const Self& that, usize prefix_offset = 0)
     {
       this->flags_ = that.flags_;
-      this->prefix_len_ = that.prefix_len_;
+      this->prefix_len_ = that.prefix_len_ - prefix_offset;
       this->branch_count_ = that.branch_count_;
-      this->prefix_ = that.prefix_;
+      this->prefix_ = that.prefix_ + prefix_offset;
     }
   };
 
@@ -258,9 +258,9 @@ class ART
       return kBranchCount;
     }
 
-    void assign_from(const Self& that)
+    void assign_from(const Self& that, usize prefix_offset = 0)
     {
-      this->Super::assign_from(static_cast<const Super&>(that));
+      this->Super::assign_from(static_cast<const Super&>(that), prefix_offset);
       __builtin_memcpy(this->branches.data(),
                        that.branches.data(),
                        this->branch_count() * sizeof(NodeBase*));
@@ -406,9 +406,9 @@ class ART
       this->key[i] = key_byte;
     }
 
-    void assign_from(const Self& that)
+    void assign_from(const Self& that, usize prefix_offset = 0)
     {
-      this->Super::assign_from(static_cast<const Super&>(that));
+      this->Super::assign_from(static_cast<const Super&>(that), prefix_offset);
       __builtin_memcpy(this->key.data(), that.key.data(), this->branch_count());
     }
   };
@@ -497,9 +497,9 @@ class ART
       this->branch_for_key[key_byte] = i;
     }
 
-    void assign_from(const Self& that)
+    void assign_from(const Self& that, usize prefix_offset = 0)
     {
-      this->Super::assign_from(static_cast<const Super&>(that));
+      this->Super::assign_from(static_cast<const Super&>(that), prefix_offset);
       this->branch_for_key = that.branch_for_key;
     }
   };
@@ -605,9 +605,9 @@ class ART
     {
     }
 
-    void assign_from(const Self& that)
+    void assign_from(const Self& that, usize prefix_offset = 0)
     {
-      this->Super::assign_from(static_cast<const Super&>(that));
+      this->Super::assign_from(static_cast<const Super&>(that), prefix_offset);
       this->branches = that.branches;
     }
   };
@@ -710,13 +710,13 @@ class ART
 
   Node256* grow_node(Node256*);
 
-  Node4* clone_node(Node4* orig_node);
+  Node4* clone_node(Node4* orig_node, usize prefix_offset);
 
-  Node16* clone_node(Node16* orig_node);
+  Node16* clone_node(Node16* orig_node, usize prefix_offset);
 
-  Node48* clone_node(Node48* orig_node);
+  Node48* clone_node(Node48* orig_node, usize prefix_offset);
 
-  Node256* clone_node(Node256* orig_node);
+  Node256* clone_node(Node256* orig_node, usize prefix_offset);
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 

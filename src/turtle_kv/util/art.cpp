@@ -94,11 +94,7 @@ void ART::insert(std::string_view key)
         }
 
         Node4* new_parent = this->make_node4(node_prefix, common_len);
-
-        auto* new_node = this->clone_node(node);
-
-        new_node->prefix_ += (common_len + 1);
-        new_node->prefix_len_ -= (common_len + 1);
+        auto* new_node = this->clone_node(node, /*prefix_offset=*/(common_len + 1));
 
         this->add_child(new_parent, /*key_byte=*/node_prefix[common_len], new_node);
 
@@ -430,44 +426,44 @@ auto ART::grow_node(Node256*) -> Node256*
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-auto ART::clone_node(Node4* orig_node) -> Node4*
+auto ART::clone_node(Node4* orig_node, usize prefix_offset) -> Node4*
 {
   Node4* new_node = new (this->alloc_storage(sizeof(Node4))) Node4{NodeBase::NoInit{}};
 
-  new_node->assign_from(*orig_node);
+  new_node->assign_from(*orig_node, prefix_offset);
 
   return new_node;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-auto ART::clone_node(Node16* orig_node) -> Node16*
+auto ART::clone_node(Node16* orig_node, usize prefix_offset) -> Node16*
 {
   Node16* new_node = new (this->alloc_storage(sizeof(Node16))) Node16{NodeBase::NoInit{}};
 
-  new_node->assign_from(*orig_node);
+  new_node->assign_from(*orig_node, prefix_offset);
 
   return new_node;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-auto ART::clone_node(Node48* orig_node) -> Node48*
+auto ART::clone_node(Node48* orig_node, usize prefix_offset) -> Node48*
 {
   Node48* new_node = new (this->alloc_storage(sizeof(Node48))) Node48{NodeBase::NoInit{}};
 
-  new_node->assign_from(*orig_node);
+  new_node->assign_from(*orig_node, prefix_offset);
 
   return new_node;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-auto ART::clone_node(Node256* orig_node) -> Node256*
+auto ART::clone_node(Node256* orig_node, usize prefix_offset) -> Node256*
 {
   Node256* new_node = new (this->alloc_storage(sizeof(Node256))) Node256{NodeBase::NoInit{}};
 
-  new_node->assign_from(*orig_node);
+  new_node->assign_from(*orig_node, prefix_offset);
 
   return new_node;
 }
