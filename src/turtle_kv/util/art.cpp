@@ -64,7 +64,7 @@ void ART::insert(std::string_view key)
     branch.ptr->visit([&](auto* node) {
       SeqMutex<u32>::ReadLock node_read_lock{node->mutex_};
 
-      const char* const node_prefix = node->prefix_;
+      const char* const node_prefix = node->prefix();
       const usize node_prefix_len = node->prefix_len_;
       const bool node_is_terminal = node->is_terminal();
 
@@ -87,7 +87,7 @@ void ART::insert(std::string_view key)
         //----- --- -- -  -  -   -
         SeqMutex<u32>::WriteLock node_write_lock{node->mutex_};
 
-        if (node != branch.reload() || node_prefix != node->prefix_ ||
+        if (node != branch.reload() || node_prefix != node->prefix() ||
             node_prefix_len != node->prefix_len_ || node->is_obsolete()) {
           reset = true;
           return;
@@ -119,7 +119,7 @@ void ART::insert(std::string_view key)
           //----- --- -- -  -  -   -
           SeqMutex<u32>::WriteLock node_write_lock{node->mutex_};
 
-          if (node->is_obsolete() || node_prefix != node->prefix_ ||
+          if (node->is_obsolete() || node_prefix != node->prefix() ||
               node_prefix_len != node->prefix_len_) {
             reset = true;
             return;
@@ -255,7 +255,7 @@ bool ART::contains(std::string_view key)
     branch.ptr->visit([&](auto* node) {
       SeqMutex<u32>::ReadLock node_read_lock{node->mutex_};
 
-      const char* const node_prefix = node->prefix_;
+      const char* const node_prefix = node->prefix();
       const usize node_prefix_len = node->prefix_len_;
       const bool node_is_terminal = node->is_terminal();
 
@@ -357,10 +357,9 @@ auto ART::add_child(NodeT* node, u8 key_byte, const char* new_key_data, usize ne
 //
 auto ART::make_node4(const char* prefix, usize prefix_len) -> Node4*
 {
-  Node4* new_node = new (this->alloc_storage(sizeof(Node4))) Node4{};
+  Node4* new_node = new (this->alloc_storage(sizeof(Node4), prefix_len)) Node4{};
 
-  new_node->prefix_ = prefix;
-  new_node->prefix_len_ = prefix_len;
+  new_node->set_prefix(prefix, prefix_len);
 
   return new_node;
 }
@@ -369,10 +368,9 @@ auto ART::make_node4(const char* prefix, usize prefix_len) -> Node4*
 //
 auto ART::grow_node(Node4* old_node) -> Node16*
 {
-  Node16* new_node = new (this->alloc_storage(sizeof(Node16))) Node16{};
+  Node16* new_node = new (this->alloc_storage(sizeof(Node16), old_node->prefix_len_)) Node16{};
 
-  new_node->prefix_ = old_node->prefix_;
-  new_node->prefix_len_ = old_node->prefix_len_;
+  new_node->set_prefix(old_node->prefix(), old_node->prefix_len_);
   new_node->branch_count_ = old_node->branch_count_;
 
   std::copy(old_node->key.begin(), old_node->key.end(), new_node->key.begin());
@@ -385,10 +383,9 @@ auto ART::grow_node(Node4* old_node) -> Node16*
 //
 auto ART::grow_node(Node16* old_node) -> Node48*
 {
-  Node48* new_node = new (this->alloc_storage(sizeof(Node48))) Node48{};
+  Node48* new_node = new (this->alloc_storage(sizeof(Node48), old_node->prefix_len_)) Node48{};
 
-  new_node->prefix_ = old_node->prefix_;
-  new_node->prefix_len_ = old_node->prefix_len_;
+  new_node->set_prefix(old_node->prefix(), old_node->prefix_len_);
   new_node->branch_count_ = old_node->branch_count_;
 
   for (usize i = 0; i < new_node->branch_count_; ++i) {
@@ -403,10 +400,9 @@ auto ART::grow_node(Node16* old_node) -> Node48*
 //
 auto ART::grow_node(Node48* old_node) -> Node256*
 {
-  Node256* new_node = new (this->alloc_storage(sizeof(Node256))) Node256{};
+  Node256* new_node = new (this->alloc_storage(sizeof(Node256), old_node->prefix_len_)) Node256{};
 
-  new_node->prefix_ = old_node->prefix_;
-  new_node->prefix_len_ = old_node->prefix_len_;
+  new_node->set_prefix(old_node->prefix(), old_node->prefix_len_);
 
   for (usize key_byte = 0; key_byte < 256; ++key_byte) {
     const BranchIndex i = old_node->branch_for_key[key_byte];
@@ -428,7 +424,9 @@ auto ART::grow_node(Node256*) -> Node256*
 //
 auto ART::clone_node(Node4* orig_node, usize prefix_offset) -> Node4*
 {
-  Node4* new_node = new (this->alloc_storage(sizeof(Node4))) Node4{NodeBase::NoInit{}};
+  Node4* new_node =
+      new (this->alloc_storage(sizeof(Node4), (orig_node->prefix_len_ - prefix_offset)))
+          Node4{NodeBase::NoInit{}};
 
   new_node->assign_from(*orig_node, prefix_offset);
 
@@ -439,7 +437,9 @@ auto ART::clone_node(Node4* orig_node, usize prefix_offset) -> Node4*
 //
 auto ART::clone_node(Node16* orig_node, usize prefix_offset) -> Node16*
 {
-  Node16* new_node = new (this->alloc_storage(sizeof(Node16))) Node16{NodeBase::NoInit{}};
+  Node16* new_node =
+      new (this->alloc_storage(sizeof(Node16), (orig_node->prefix_len_ - prefix_offset)))
+          Node16{NodeBase::NoInit{}};
 
   new_node->assign_from(*orig_node, prefix_offset);
 
@@ -450,7 +450,9 @@ auto ART::clone_node(Node16* orig_node, usize prefix_offset) -> Node16*
 //
 auto ART::clone_node(Node48* orig_node, usize prefix_offset) -> Node48*
 {
-  Node48* new_node = new (this->alloc_storage(sizeof(Node48))) Node48{NodeBase::NoInit{}};
+  Node48* new_node =
+      new (this->alloc_storage(sizeof(Node48), (orig_node->prefix_len_ - prefix_offset)))
+          Node48{NodeBase::NoInit{}};
 
   new_node->assign_from(*orig_node, prefix_offset);
 
@@ -461,7 +463,9 @@ auto ART::clone_node(Node48* orig_node, usize prefix_offset) -> Node48*
 //
 auto ART::clone_node(Node256* orig_node, usize prefix_offset) -> Node256*
 {
-  Node256* new_node = new (this->alloc_storage(sizeof(Node256))) Node256{NodeBase::NoInit{}};
+  Node256* new_node =
+      new (this->alloc_storage(sizeof(Node256), (orig_node->prefix_len_ - prefix_offset)))
+          Node256{NodeBase::NoInit{}};
 
   new_node->assign_from(*orig_node, prefix_offset);
 

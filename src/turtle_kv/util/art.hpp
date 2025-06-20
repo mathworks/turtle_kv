@@ -104,7 +104,6 @@ class ART
     u8 prefix_len_;
     u8 branch_count_;
     SeqMutex<u32> mutex_;
-    const char* prefix_;
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -113,7 +112,6 @@ class ART
         , flags_{0}
         , prefix_len_{0}
         , branch_count_{0}
-        , prefix_{nullptr}
     {
     }
 
@@ -150,9 +148,21 @@ class ART
     void assign_from(const Self& that, usize prefix_offset = 0)
     {
       this->flags_ = that.flags_;
-      this->prefix_len_ = that.prefix_len_ - prefix_offset;
       this->branch_count_ = that.branch_count_;
-      this->prefix_ = that.prefix_ + prefix_offset;
+      this->set_prefix(that.prefix() + prefix_offset, that.prefix_len_ - prefix_offset);
+    }
+
+    const char* prefix() const
+    {
+      return (const char*)((((std::uintptr_t)this) - this->prefix_len_) & ~std::uintptr_t{7});
+    }
+
+    void set_prefix(const char* data, usize len)
+    {
+      this->prefix_len_ = len;
+      if (len) {
+        __builtin_memcpy((char*)this->prefix(), data, len);
+      }
     }
   };
 
@@ -203,7 +213,7 @@ class ART
     }
   }
 
-  static_assert(sizeof(NodeBase) == 16);
+  static_assert(sizeof(NodeBase) == 8);
 
   using BranchIndex = u8;
 
@@ -614,19 +624,19 @@ class ART
 
   //----- --- -- -  -  -   -
 
-  static_assert(sizeof(Node4) == 56);
+  static_assert(sizeof(Node4) == 48);
   static_assert(sizeof(Node4) % 8 == 0);
   static_assert(alignof(Node4) >= 8);
 
-  static_assert(sizeof(Node16) == 160);
+  static_assert(sizeof(Node16) == 152);
   static_assert(sizeof(Node16) % 8 == 0);
   static_assert(alignof(Node16) >= 8);
 
-  static_assert(sizeof(Node48) == 656);
+  static_assert(sizeof(Node48) == 648);
   static_assert(sizeof(Node48) % 8 == 0);
   static_assert(alignof(Node48) >= 8);
 
-  static_assert(sizeof(Node256) == 2064);
+  static_assert(sizeof(Node256) == 2056);
   static_assert(sizeof(Node256) % 8 == 0);
   static_assert(alignof(Node256) >= 8);
 
@@ -687,9 +697,11 @@ class ART
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  void* alloc_storage(usize n)
+  void* alloc_storage(usize n, usize pre)
   {
-    return this->per_thread_memory_context_.get().alloc(n, this);
+    const usize pad = (pre + 7) & ~usize{7};
+    char* const ptr = (char*)this->per_thread_memory_context_.get().alloc(n + pad, this);
+    return ptr + pad;
   }
 
   template <typename NodeT, typename = std::enable_if_t<!std::is_same_v<NodeT, Node256>>>
@@ -767,8 +779,6 @@ inline void ART::NodeBase::visit(CaseFns&&... case_fns)
 class ART::Scanner
 {
  public:
-  using NodeView = std::variant<batt::NoneType, Node4, Node16, Node48, Node256>;
-
   using NodeScanState = std::variant<batt::NoneType,
                                      Node4::ScanState,
                                      Node16::ScanState,
@@ -779,17 +789,20 @@ class ART::Scanner
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  static_assert(sizeof(Node256) > sizeof(Node48));
+  static_assert(sizeof(Node256) > sizeof(Node16));
+  static_assert(sizeof(Node256) > sizeof(Node4));
+
   struct Frame {
-    NodeView node_view_;
+    std::aligned_storage_t<sizeof(Node256)> node_storage_;
     NodeScanState scan_state_;
-    usize prefix_len_;
+    usize key_prefix_len_;
     std::string_view lower_bound_key_;
     i32 min_key_byte_;
 
-    explicit Frame(usize prefix_len, std::string_view lower_bound_key) noexcept
-        : node_view_{None}
-        , scan_state_{None}
-        , prefix_len_{prefix_len}
+    explicit Frame(usize key_prefix_len, std::string_view lower_bound_key) noexcept
+        : scan_state_{None}
+        , key_prefix_len_{key_prefix_len}
         , lower_bound_key_{lower_bound_key}
         , min_key_byte_{0}
     {
@@ -818,7 +831,7 @@ class ART::Scanner
     }
 
     root->visit([&](auto* node) {
-      this->enter(node, /*prefix_len=*/0, lower_bound_key);
+      this->enter(node, /*key_prefix_len=*/0, lower_bound_key);
     });
 
     if (!this->next_key_) {
@@ -827,21 +840,26 @@ class ART::Scanner
   }
 
   template <typename NodeT>
-  void enter(NodeT* node, usize prefix_len, std::string_view lower_bound_key)
+  void enter(NodeT* node, usize key_prefix_len, std::string_view lower_bound_key)
   {
-    Frame* top = new (this->end_) Frame{prefix_len, lower_bound_key};
+    Frame* top = new (this->end_) Frame{key_prefix_len, lower_bound_key};
     ++this->depth_;
     ++this->end_;
 
+    // Node prefix is immutable, so we don't need synchronization.
+    //
+    const char* const node_prefix = node->prefix();
+    const usize node_prefix_len = node->prefix_len_;
+
     // We need to create a copy of the node data to protect against data races.
     //
-    NodeT& node_view = top->node_view_.emplace<NodeT>(NodeBase::NoInit{});
+    NodeT& node_view = *(new (&top->node_storage_) NodeT{NodeBase::NoInit{}});
 
     // Retry the node read until we get a consistent view.
     //
     for (;;) {
       SeqMutex<u32>::ReadLock read_lock{node->mutex_};
-      node_view.assign_from(*node);
+      node_view.assign_from(*node, /*prefix_offset=*/node_prefix_len);
       if (!read_lock.changed()) {
         break;
       }
@@ -849,10 +867,9 @@ class ART::Scanner
 
     // Compare the lower bound key to the current node prefix.
     //
-    const usize compare_len = std::min<usize>(node_view.prefix_len_, top->lower_bound_key_.size());
+    const usize compare_len = std::min<usize>(node_prefix_len, top->lower_bound_key_.size());
     if (compare_len) {
-      const i32 order =
-          __builtin_memcmp(node_view.prefix_, top->lower_bound_key_.data(), compare_len);
+      const i32 order = __builtin_memcmp(node_prefix, top->lower_bound_key_.data(), compare_len);
 
       // If all keys in this subtree come before the lower bound, then there is nothing to do.
       //
@@ -866,7 +883,7 @@ class ART::Scanner
       // bound; otherwise the node prefix comes *after* the lower bound, so we can safely ignore the
       // lower bound for the rest of the recursion.
       //
-      if (order == 0 && compare_len == node_view.prefix_len_) {
+      if (order == 0 && compare_len == node_prefix_len) {
         top->lower_bound_key_.remove_prefix(compare_len);
       } else {
         top->lower_bound_key_ = {};
@@ -887,16 +904,18 @@ class ART::Scanner
 
     // Append the node prefix to the buffer.
     //
-    __builtin_memcpy(this->key_buffer_.data() + top->prefix_len_,
-                     node_view.prefix_,
-                     node_view.prefix_len_);
+    if (node_prefix_len) {
+      __builtin_memcpy(this->key_buffer_.data() + top->key_prefix_len_,
+                       node_prefix,
+                       node_prefix_len);
 
-    top->prefix_len_ += node_view.prefix_len_;
+      top->key_prefix_len_ += node_prefix_len;
+    }
 
     // If the current node is a key-terminal, emit the contents of the buffer.
     //
     if (node_view.is_terminal()) {
-      this->next_key_.emplace(this->key_buffer_.data(), top->prefix_len_);
+      this->next_key_.emplace(this->key_buffer_.data(), top->key_prefix_len_);
     } else {
       this->next_key_ = None;
     }
@@ -935,24 +954,25 @@ class ART::Scanner
           [&](auto& scan_state)
               -> std::enable_if_t<
                   !std::is_same_v<std::decay_t<decltype(scan_state)>, batt::NoneType>> {
+            //----- --- -- -  -  -   -
             if (scan_state.is_done()) {
               --this->depth_;
               --this->end_;
               return;
             }
 
-            i32 key_byte = scan_state.get_key_byte();
-            NodeBase* child = scan_state.get_branch();
+            const i32 key_byte = scan_state.get_key_byte();
+            NodeBase* const child = scan_state.get_branch();
 
-            this->key_buffer_[top->prefix_len_] = (char)key_byte;
+            this->key_buffer_[top->key_prefix_len_] = (char)key_byte;
 
             if (key_byte == top->min_key_byte_) {
               child->visit([&](auto* child_node) {
-                this->enter(child_node, top->prefix_len_ + 1, top->lower_bound_key_);
+                this->enter(child_node, top->key_prefix_len_ + 1, top->lower_bound_key_);
               });
             } else {
               child->visit([&](auto* child_node) {
-                this->enter(child_node, top->prefix_len_ + 1, std::string_view{});
+                this->enter(child_node, top->key_prefix_len_ + 1, std::string_view{});
               });
             }
 
