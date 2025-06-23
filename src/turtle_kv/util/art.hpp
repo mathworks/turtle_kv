@@ -644,6 +644,7 @@ class ART
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  template <bool kSynchronized>
   class Scanner;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -774,8 +775,37 @@ inline void ART::NodeBase::visit(CaseFns&&... case_fns)
   }
 }
 
+namespace detail {
+
+template <typename NodeT, typename AlignedStorageT>
+NodeT& scanner_view_of(usize node_prefix_len, NodeT* node, AlignedStorageT* storage, std::true_type)
+{
+  NodeT& node_view = *(new (storage) NodeT{ART::NodeBase::NoInit{}});
+
+  // Retry the node read until we get a consistent view.
+  //
+  for (;;) {
+    SeqMutex<u32>::ReadLock read_lock{node->mutex_};
+    node_view.assign_from(*node, /*prefix_offset=*/node_prefix_len);
+    if (!read_lock.changed()) {
+      break;
+    }
+  }
+
+  return node_view;
+}
+
+template <typename NodeT, typename AlignedStorageT>
+NodeT& scanner_view_of(usize, NodeT* node, AlignedStorageT*, std::false_type)
+{
+  return *node;
+}
+
+}  // namespace detail
+
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 //
+template <bool kSynchronized>
 class ART::Scanner
 {
  public:
@@ -794,7 +824,7 @@ class ART::Scanner
   static_assert(sizeof(Node256) > sizeof(Node4));
 
   struct Frame {
-    std::aligned_storage_t<sizeof(Node256)> node_storage_;
+    std::aligned_storage_t<kSynchronized ? sizeof(Node256) : 1> node_storage_;
     NodeScanState scan_state_;
     usize key_prefix_len_;
     std::string_view lower_bound_key_;
@@ -853,17 +883,10 @@ class ART::Scanner
 
     // We need to create a copy of the node data to protect against data races.
     //
-    NodeT& node_view = *(new (&top->node_storage_) NodeT{NodeBase::NoInit{}});
-
-    // Retry the node read until we get a consistent view.
-    //
-    for (;;) {
-      SeqMutex<u32>::ReadLock read_lock{node->mutex_};
-      node_view.assign_from(*node, /*prefix_offset=*/node_prefix_len);
-      if (!read_lock.changed()) {
-        break;
-      }
-    }
+    NodeT& node_view = detail::scanner_view_of(node_prefix_len,
+                                               node,
+                                               &top->node_storage_,
+                                               std::integral_constant<bool, kSynchronized>{});
 
     // Compare the lower bound key to the current node prefix.
     //
@@ -920,9 +943,9 @@ class ART::Scanner
       this->next_key_ = None;
     }
 
-    top->scan_state_.emplace<typename NodeT::ScanState>(node_view,
-                                                        top->min_key_byte_,
-                                                        max_key_byte);
+    top->scan_state_.template emplace<typename NodeT::ScanState>(node_view,
+                                                                 top->min_key_byte_,
+                                                                 max_key_byte);
   }
 
   bool is_done() const
@@ -993,7 +1016,7 @@ class ART::Scanner
 template <typename Fn>
 void ART::scan(std::string_view lower_bound_key, const Fn& fn)
 {
-  Scanner scanner{*this, lower_bound_key};
+  Scanner</*kSynchronized=*/true> scanner{*this, lower_bound_key};
 
   while (!scanner.is_done()) {
     if (!fn(scanner.get_key())) {

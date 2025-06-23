@@ -210,7 +210,7 @@ MergeCompactor::ResultSet</*decay_to_items=*/false> MemTable::compact() noexcept
   };
 
   if (use_ordered_index) {
-    ART::Scanner scanner{this->ordered_index_, /*lower_bound_key=*/std::string_view{}};
+    ART::Scanner<true> scanner{this->ordered_index_, /*lower_bound_key=*/std::string_view{}};
 
     while (!scanner.is_done()) {
       const std::string_view& tmp_key = scanner.get_key();
