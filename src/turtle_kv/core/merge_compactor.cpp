@@ -342,8 +342,8 @@ void MergeCompactor::push_frame_impl(MergeFrame* frame)
 {
   VLOG(1) << "push_frame() entered " << BATT_INSPECT(this->depth_);
 
-  BATT_CHECK_LE(frame->lines_.size(), 64);
-  BATT_CHECK_LE(frame->lines_.size() + this->depth_, 64);
+  BATT_CHECK_LE(frame->line_count(), 64);
+  BATT_CHECK_LE(frame->line_count() + this->depth_, 64);
 
   frame->active_mask_ = 0;
 
@@ -351,9 +351,9 @@ void MergeCompactor::push_frame_impl(MergeFrame* frame)
       << "This frame is already pushed onto a different compactor's stack!";
   frame->pushed_to_ = this;
 
-  for (usize i = 0; i < frame->lines_.size(); ++i) {
+  for (usize i = 0; i < frame->line_count(); ++i) {
     this->depth_ += 1;
-    MergeLine& line = frame->lines_[i];
+    MergeLine& line = *frame->get_line(i);
     BATT_CHECK_EQ(frame, line.frame_);
     line.depth_ = this->depth_;
     if (!line.empty()) {
@@ -385,7 +385,7 @@ Status MergeCompactor::await_frame_consumed_impl(MergeFrame* frame)
     this->outside_ = this->outside_.resume();
   }
   const usize old_depth = this->depth_;
-  this->depth_ -= frame->lines_.size();
+  this->depth_ -= frame->line_count();
   BATT_CHECK_LE(this->depth_, old_depth);
 
   frame->pushed_to_ = nullptr;

@@ -23,6 +23,7 @@ namespace turtle_kv {
 // Forward-declarations.
 //
 class MergeCompactor;
+class MergeScanner;
 class MergeFrame;
 
 /** \brief A sequence of non-intersecting EditSlice objects at a constant merge-depth.
@@ -31,6 +32,7 @@ class MergeLine
 {
  public:
   friend class MergeCompactor;
+  friend class MergeScanner;
   friend class MergeFrame;
 
   using FrontKeyHeap = boost::heap::d_ary_heap<Ref<MergeLine>,                         //
@@ -49,13 +51,17 @@ class MergeLine
 
   MergeLine(MergeFrame* frame, BoxedSeq<EditSlice>&& edit_slices) noexcept;
 
+  MergeLine(const MergeLine&) = delete;
+  MergeLine& operator=(const MergeLine&) = delete;
+
   /** \brief Returns true iff this line has unread data.
    */
   bool empty();
 
   /** \brief Pulls a slice from `rest` to `first`, if possible.
+   * \return true if a non-empty slice was found, false otherwise
    */
-  void advance();
+  bool advance();
 
   /** \brief Returns the stack-depth of this line.
    */
@@ -90,6 +96,11 @@ class MergeLine
   friend inline KeyView get_max_key(const MergeLine& line)
   {
     return get_max_key(line.first_);
+  }
+
+  friend inline u32 get_depth(const MergeLine& line)
+  {
+    return line.depth();
   }
 
   friend inline auto debug_print(const MergeLine& line)

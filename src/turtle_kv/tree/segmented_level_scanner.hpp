@@ -65,19 +65,22 @@ class SegmentedLevelScanner : private SegmentedLevelScannerBase
                                  PageLoader& loader,
                                  llfs::PinPageToJob pin_pages_to_job,
                                  Status& status,
-                                 i32 min_pivot_i = 0) noexcept;
+                                 i32 min_pivot_i = 0,
+                                 Optional<KeyView> min_key = None) noexcept;
 
   explicit SegmentedLevelScanner(Node& node,
                                  Level& level,
                                  PageLoader& loader,
                                  llfs::PinPageToJob pin_pages_to_job,
-                                 i32 min_pivot_i = 0) noexcept
+                                 i32 min_pivot_i = 0,
+                                 Optional<KeyView> min_key = None) noexcept
       : SegmentedLevelScanner{node,
                               level,
                               loader,
                               pin_pages_to_job,
                               this->Super::self_contained_status_,
-                              min_pivot_i}
+                              min_pivot_i,
+                              min_key}
   {
   }
 
@@ -131,6 +134,7 @@ class SegmentedLevelScanner : private SegmentedLevelScannerBase
   llfs::PinPageToJob pin_pages_to_job_;
   Status& status_;
   PinnedPageT pinned_leaf_;
+  Optional<KeyView> min_key_;
   usize segment_i_;
   i32 min_pivot_i_;
   i32 pivot_i_;
@@ -149,13 +153,15 @@ inline /*explicit*/ SegmentedLevelScanner<NodeT, LevelT, PageLoaderT>::Segmented
     PageLoader& loader,
     llfs::PinPageToJob pin_pages_to_job,
     Status& status,
-    i32 min_pivot_i) noexcept
+    i32 min_pivot_i,
+    Optional<KeyView> min_key) noexcept
     : node_{std::addressof(node)}
     , level_{std::addressof(level)}
     , loader_{std::addressof(loader)}
     , pin_pages_to_job_{pin_pages_to_job}
     , status_{status}
     , pinned_leaf_{}
+    , min_key_{min_key}
     , segment_i_{0}
     , min_pivot_i_{min_pivot_i}
     , pivot_i_{0}
@@ -311,27 +317,21 @@ inline void SegmentedLevelScanner<NodeT, LevelT, PageLoaderT>::advance_to_pivot(
 {
   BATT_CHECK_LT(target_pivot_i, this->node_->pivot_count());
 
-  const auto old_pivot_i = this->pivot_i_;
-
   this->pivot_i_ = target_pivot_i;
 
   const KeyView pivot_lower_bound_key = this->node_->get_pivot_key(this->pivot_i_);
 
-  const usize pivot_lower_bound = std::distance(leaf_page.items_begin(),  //
-                                                leaf_page.lower_bound(pivot_lower_bound_key));
+  const KeyView lower_bound_key = this->min_key_
+                                      ? std::max(*this->min_key_, pivot_lower_bound_key, KeyOrder{})
+                                      : pivot_lower_bound_key;
+
+  const usize lower_bound_i = std::distance(leaf_page.items_begin(),  //
+                                            leaf_page.lower_bound(lower_bound_key));
 
   const usize flushed_upper_bound =
       segment.get_flushed_item_upper_bound(*this->level_, this->pivot_i_);
 
-  if (flushed_upper_bound != 0) {
-    BATT_CHECK_GT(flushed_upper_bound, pivot_lower_bound)
-        << BATT_INSPECT((void*)&segment) << BATT_INSPECT(this->pivot_i_)
-        << BATT_INSPECT(old_pivot_i) << BATT_INSPECT_STR(pivot_lower_bound_key);
-
-    this->item_i_ = flushed_upper_bound;
-  } else {
-    this->item_i_ = pivot_lower_bound;
-  }
+  this->item_i_ = std::max(flushed_upper_bound, lower_bound_i);
 }
 
 }  // namespace turtle_kv

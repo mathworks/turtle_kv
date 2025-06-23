@@ -484,7 +484,8 @@ struct InMemoryNode {
                             HasPageRefs& has_page_refs,
                             const Slice<UpdateBuffer::Level>& levels_to_merge,
                             i32 min_pivot_i,
-                            bool only_pivot);
+                            bool only_pivot,
+                            Optional<KeyView> min_key = None);
 
   Status set_pivot_items_flushed(llfs::PageLoader& page_loader,
                                  usize pivot_i,

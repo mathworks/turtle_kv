@@ -60,7 +60,7 @@ class TurtleKvRecipe(ConanFile):
         self.requires("gperftools/[>=2.16 <3]", **VISIBLE)
         self.requires("llfs/[>=0.41.5 <1]", **VISIBLE)
         self.requires("pcg-cpp/[>=cci.20220409]", **VISIBLE)
-        self.requires("vqf/[>=0.2.3 <1]", **VISIBLE)
+        self.requires("vqf/[>=0.2.4 <1]", **VISIBLE)
         self.requires("zlib/[>=1.3 <2]", **OVERRIDE)
 
         if platform.system() == "Linux":

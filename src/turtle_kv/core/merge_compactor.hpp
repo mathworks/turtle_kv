@@ -1,6 +1,7 @@
 #pragma once
 
 #include <turtle_kv/core/edit_view.hpp>
+#include <turtle_kv/core/merge_compactor_base.hpp>
 #include <turtle_kv/core/merge_frame.hpp>
 #include <turtle_kv/core/merge_line.hpp>
 
@@ -26,7 +27,7 @@ namespace turtle_kv {
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 // Implements the core edit multi-level merge/compaction algorithm.
 //
-class MergeCompactor
+class MergeCompactor : public MergeCompactorBase
 {
  public:
   static std::atomic<bool>& debug_log_on()
@@ -372,7 +373,7 @@ class MergeCompactor
   //
   BackKeyHeap by_back_key_;
 
-  // The current depth of  the stack.
+  // The current depth of the stack.
   //
   usize depth_ = 0;
 

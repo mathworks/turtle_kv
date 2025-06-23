@@ -6,6 +6,7 @@
 #include <turtle_kv/import/ref.hpp>
 #include <turtle_kv/import/slice.hpp>
 
+#include <batteries/compare.hpp>
 #include <batteries/small_fn.hpp>
 
 #include <algorithm>
@@ -61,7 +62,7 @@ struct MinKeyHeapOrder {
   template <typename L, typename R>
   bool operator()(const L& l, const R& r) const noexcept
   {
-    return get_min_key(r) < get_min_key(l);
+    return KeyOrder{}(get_min_key(r), get_min_key(l));
   }
 };
 
@@ -69,10 +70,20 @@ struct MaxKeyHeapOrder {
   template <typename L, typename R>
   bool operator()(const L& l, const R& r) const noexcept
   {
-    return get_max_key(r) < get_max_key(l);
+    return KeyOrder{}(get_max_key(r), get_max_key(l));
   }
 };
 
+struct MinKeyAndDepthHeapOrder {
+  template <typename L, typename R>
+  bool operator()(const L& l, const R& r) const
+  {
+    batt::Order order = batt::compare(get_min_key(l), get_min_key(r));
+
+    return (order == batt::Order::Greater) ||
+           ((order == batt::Order::Equal) && (get_depth(l) > get_depth(r)));
+  }
+};
 }  // namespace turtle_kv
 
 namespace batt {

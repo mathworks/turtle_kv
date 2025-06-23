@@ -836,7 +836,8 @@ void InMemoryNode::push_levels_to_merge(MergeFrame& frame,
                                         HasPageRefs& has_page_refs,
                                         const Slice<Level>& levels_to_merge,
                                         i32 min_pivot_i,
-                                        bool only_pivot)
+                                        bool only_pivot,
+                                        Optional<KeyView> min_key)
 {
   for (Level& level : levels_to_merge) {
     frame.push_line(batt::case_of(  //
@@ -864,7 +865,7 @@ void InMemoryNode::push_levels_to_merge(MergeFrame& frame,
                      llfs::PinPageToJob::kDefault,
                      segment_load_status,
                      min_pivot_i,
-                 }  //
+                     min_key}  //
                  | seq::boxed();
         }));
   }

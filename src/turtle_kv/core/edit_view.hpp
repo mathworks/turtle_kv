@@ -238,6 +238,13 @@ inline Optional<ItemView> to_item_view(const PackedKeyValue& kv)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+inline EditView to_edit_view(const PackedKeyValue& kv)
+{
+  return EditView{get_key(kv), get_value(kv)};
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 inline const EditView& to_edit_view(const EditView& edit)
 {
   return edit;

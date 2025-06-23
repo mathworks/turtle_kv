@@ -9,6 +9,7 @@
 #include <turtle_kv/tree/pinning_page_loader.hpp>
 #include <turtle_kv/tree/subtree_table.hpp>
 #include <turtle_kv/tree/the_key.hpp>
+#include <turtle_kv/tree/tree_scanner.hpp>
 
 #include <turtle_kv/core/testing/generate.hpp>
 
@@ -16,6 +17,7 @@
 
 #include <turtle_kv/import/constants.hpp>
 #include <turtle_kv/import/int_types.hpp>
+#include <turtle_kv/import/metrics.hpp>
 
 #include <llfs/testing/test_config.hpp>
 //
@@ -47,7 +49,10 @@ using turtle_kv::global_max_key;
 using turtle_kv::global_min_key;
 using turtle_kv::InMemoryNode;
 using turtle_kv::IsRoot;
+using turtle_kv::ItemView;
 using turtle_kv::KeyView;
+using turtle_kv::LatencyMetric;
+using turtle_kv::LatencyTimer;
 using turtle_kv::make_memory_page_cache;
 using turtle_kv::NeedsSplit;
 using turtle_kv::None;
@@ -64,6 +69,7 @@ using turtle_kv::SubtreeTable;
 using turtle_kv::Table;
 using turtle_kv::THE_KEY;
 using turtle_kv::TreeOptions;
+using turtle_kv::TreeScanner;
 using turtle_kv::TreeSerializeContext;
 using turtle_kv::ValueView;
 using turtle_kv::testing::RandomResultSetGenerator;
@@ -71,6 +77,8 @@ using turtle_kv::testing::RandomResultSetGenerator;
 using llfs::StableStringStore;
 
 using batt::getenv_as;
+
+constexpr usize kAverageScanSize = 50;
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
@@ -118,6 +126,38 @@ void verify_table_point_queries(Table& expected_table, Table& actual_table, Rng&
       }
       min_key = key;
     }
+  }
+}
+
+void verify_range_scan(LatencyMetric* scan_latency,
+                       Table& expected_table,
+                       const Slice<std::pair<KeyView, ValueView>>& actual_read_items,
+                       const KeyView& min_key)
+{
+  std::array<std::pair<KeyView, ValueView>, kAverageScanSize> buffer;
+  Optional<LatencyTimer> timer;
+  if (scan_latency) {
+    timer.emplace(*scan_latency);
+  }
+  StatusOr<usize> n_read = expected_table.scan(min_key, as_slice(buffer));
+  timer = None;
+  ASSERT_TRUE(n_read.ok()) << BATT_INSPECT(n_read);
+  ASSERT_EQ(*n_read, actual_read_items.size());
+
+  Slice<std::pair<KeyView, ValueView>> expected_read_items = as_slice(buffer.data(), *n_read);
+
+  auto expected_item_iter = expected_read_items.begin();
+  auto actual_item_iter = actual_read_items.begin();
+
+  for (usize i = 0; i < actual_read_items.size(); ++i) {
+    BATT_CHECK_NE(expected_item_iter, expected_read_items.end());
+    BATT_CHECK_NE(actual_item_iter, actual_read_items.end());
+
+    ASSERT_EQ(expected_item_iter->first, actual_item_iter->first) << BATT_INSPECT(i);
+    ASSERT_EQ(expected_item_iter->second, actual_item_iter->second) << BATT_INSPECT(i);
+
+    ++expected_item_iter;
+    ++actual_item_iter;
   }
 }
 
@@ -256,6 +296,8 @@ void SubtreeBatchUpdateScenario::run()
 
   BATT_DEBUG_INFO(BATT_INSPECT(this->seed));
 
+  LatencyMetric scan_latency;
+
   std::default_random_engine rng{this->seed};
 
   std::uniform_int_distribution<int> pick_bool{0, 1};
@@ -390,6 +432,25 @@ void SubtreeBatchUpdateScenario::run()
           verify_table_point_queries(expected_table, actual_table, rng, batt::log2_ceil(i)))
           << BATT_INSPECT(this->seed) << BATT_INSPECT(i);
 
+      {
+        auto root_ptr = std::make_shared<Subtree>(tree.clone_serialized_or_panic());
+        std::unique_ptr<llfs::PageCacheJob> scanner_page_job = page_cache->new_job();
+        TreeScanner scanner{*scanner_page_job, root_ptr};
+
+        std::array<std::pair<KeyView, ValueView>, kAverageScanSize> scan_items_buffer;
+        KeyView min_key = update.result_set.get_min_key();
+
+        scanner.seek_to(min_key);
+        batt::StatusOr<usize> items_read = scanner.scan_items(as_slice(scan_items_buffer));
+        BATT_CHECK(items_read.ok());
+
+        ASSERT_NO_FATAL_FAILURE(verify_range_scan(&scan_latency,
+                                                  expected_table,
+                                                  as_slice(scan_items_buffer.data(), *items_read),
+                                                  min_key))
+            << BATT_INSPECT(i);
+      }
+
       if (my_id == 0) {
         LOG(INFO) << "checkpoint verified!";
       }
@@ -398,6 +459,10 @@ void SubtreeBatchUpdateScenario::run()
       //
       page_loader.emplace(*page_cache);
     }
+  }
+
+  if (my_id == 1) {
+    LOG(INFO) << BATT_INSPECT(scan_latency);
   }
 }
 

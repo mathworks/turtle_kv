@@ -36,7 +36,7 @@ bool MergeLine::empty()
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-void MergeLine::advance()
+bool MergeLine::advance()
 {
   // Set `first_` to the next non-empty slice.
   //
@@ -44,12 +44,14 @@ void MergeLine::advance()
     Optional<EditSlice> next_slice = this->rest_.next();
     if (!next_slice) {
       // End of sequence.
-      break;
+      //
+      return false;
     }
     this->first_ = *next_slice;
     if (!is_empty(this->first_)) {
       // Found a non-empty slice.
-      break;
+      //
+      return true;
     }
   }
 }
@@ -99,10 +101,10 @@ bool MergeLine::begins_after(const KeyView& key) const
 usize MergeLine::get_index_in_frame() const
 {
   BATT_CHECK_NOT_NULLPTR(this->frame_);
-  BATT_CHECK_GE(this, this->frame_->lines_.data());
-  BATT_CHECK_LT(this, this->frame_->lines_.data() + this->frame_->lines_.size());
+  BATT_CHECK_GE(this, this->frame_->get_line(0));
+  BATT_CHECK_LT(this, this->frame_->get_line(this->frame_->line_count_));
 
-  return this - this->frame_->lines_.data();
+  return this - this->frame_->get_line(0);
 }
 
 }  // namespace turtle_kv
