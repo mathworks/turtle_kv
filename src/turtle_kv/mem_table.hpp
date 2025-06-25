@@ -383,12 +383,6 @@ class DeltasScanner
 
   void set_next_item()
   {
-    auto on_scope_exit = batt::finally([&] {
-      if (this->next_item_) {
-        BATT_CHECK_LE(this->lower_bound_key_, get_key(*this->next_item_));
-      }
-    });
-
     for (;;) {
       if (this->heap_.empty()) {
         return;

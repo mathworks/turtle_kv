@@ -271,6 +271,11 @@ struct PackedNodePage {
     return as_const_slice(this->children_begin(), this->children_end());
   }
 
+  const llfs::PackedPageId& get_child_id(i32 pivot_i) const
+  {
+    return this->children[pivot_i];
+  }
+
   Subtree get_child(i32 pivot_i) const;
 
   //----- --- -- -  -  -   -
