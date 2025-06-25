@@ -114,7 +114,7 @@ TEST(ArtTest, PutContainsTest)
         {
           LatencyTimer timer{scanner_latency};
 
-          ART::Scanner<true> scanner{index, lower_bound_key};
+          ART::Scanner<ART::Synchronized::kTrue> scanner{index, lower_bound_key};
 
           while (!scanner.is_done() && actual_result.size() < scan_length) {
             actual_result.emplace_back(scanner.get_key());
@@ -133,7 +133,7 @@ TEST(ArtTest, PutContainsTest)
         {
           LatencyTimer timer{scanner_nosync_latency};
 
-          ART::Scanner<false> scanner{index, lower_bound_key};
+          ART::Scanner<ART::Synchronized::kFalse> scanner{index, lower_bound_key};
 
           while (!scanner.is_done() && actual_result.size() < scan_length) {
             actual_result.emplace_back(scanner.get_key());
@@ -154,7 +154,7 @@ TEST(ArtTest, PutContainsTest)
     usize count = 0;
     {
       LatencyTimer timer{item_latency, num_keys};
-      ART::Scanner<true> scanner{index, std::string_view{}};
+      ART::Scanner<ART::Synchronized::kTrue> scanner{index, std::string_view{}};
       while (!scanner.is_done()) {
         ++count;
         scanner.advance();
@@ -168,7 +168,7 @@ TEST(ArtTest, PutContainsTest)
     usize count = 0;
     {
       LatencyTimer timer{item_nosync_latency, num_keys};
-      ART::Scanner<false> scanner{index, std::string_view{}};
+      ART::Scanner<ART::Synchronized::kFalse> scanner{index, std::string_view{}};
       while (!scanner.is_done()) {
         ++count;
         scanner.advance();

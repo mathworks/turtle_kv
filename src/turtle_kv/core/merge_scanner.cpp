@@ -26,6 +26,10 @@ MergeScanner::~MergeScanner() noexcept
 //
 void MergeScanner::set_generator(GeneratorFn&& fn)
 {
+  BATT_CHECK(this->by_front_key_.empty());
+  BATT_CHECK(!this->inside_);
+  BATT_CHECK(!this->outside_);
+
   this->inside_ = callcc(this->inside_stack_.get_allocator(),
                          [this, fn = std::move(fn)](batt::Continuation&& origin) {
                            this->outside_ = origin.resume();
@@ -50,6 +54,8 @@ void MergeScanner::stop()
   if (this->inside_) {
     this->inside_ = this->inside_.resume();
   }
+
+  this->by_front_key_.clear();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

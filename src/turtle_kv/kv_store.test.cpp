@@ -61,7 +61,14 @@ TEST(KVStoreTest, CreateAndOpen)
         for (const char* workload_file : {
                  "data/workloads/workload-abcdf.test.txt",
                  "data/workloads/workload-abcdf.txt",
+                 "data/workloads/workload-e.test.txt",
+                 "data/workloads/workload-e.txt",
              }) {
+          if (size_tiered && std::strstr(workload_file, "workload-e")) {
+            LOG(INFO) << "Skipping workload-e (scans) for size-tiered config";
+            continue;
+          }
+
           StatusOr<llfs::ScopedIoRing> scoped_io_ring =
               llfs::ScopedIoRing::make_new(llfs::MaxQueueDepth{4096},  //
                                            llfs::ThreadPoolSize{1});

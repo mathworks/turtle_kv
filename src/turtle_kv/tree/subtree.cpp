@@ -31,9 +31,14 @@ namespace turtle_kv {
 //
 /*static*/ Subtree Subtree::from_page_id(const llfs::PageId& page_id)
 {
-  return Subtree{
-      .impl = llfs::PageIdSlot::from_page_id(page_id),
-  };
+  return Subtree{llfs::PageIdSlot::from_page_id(page_id)};
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+/*static*/ Subtree Subtree::from_packed_page_id(const llfs::PackedPageId& packed_page_id)
+{
+  return Subtree::from_page_id(packed_page_id.unpack());
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -55,6 +60,58 @@ namespace turtle_kv {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+/*explicit*/ Subtree::Subtree(const llfs::PageIdSlot& page_id_slot) noexcept : impl_{page_id_slot}
+{
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+/*explicit*/ Subtree::Subtree(llfs::PageIdSlot&& page_id_slot) noexcept
+    : impl_{std::move(page_id_slot)}
+{
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+/*explicit*/ Subtree::Subtree(std::unique_ptr<InMemoryLeaf>&& in_memory_leaf) noexcept
+    : impl_{std::move(in_memory_leaf)}
+{
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+/*explicit*/ Subtree::Subtree(std::unique_ptr<InMemoryNode>&& in_memory_node) noexcept
+    : impl_{std::move(in_memory_node)}
+{
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Subtree::Subtree(Subtree&& other) noexcept
+    : impl_{std::move(other.impl_)}
+    , locked_{other.locked_.load()}
+{
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Subtree::~Subtree() noexcept
+{
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Subtree& Subtree::operator=(Subtree&& other) noexcept
+{
+  if (this != &other) {
+    this->impl_ = std::move(other.impl_);
+    this->locked_.store(other.locked_.load());
+  }
+  return *this;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 Status Subtree::apply_batch_update(const TreeOptions& tree_options,
                                    ParentNodeHeight parent_height,
                                    BatchUpdate& update,
@@ -62,11 +119,12 @@ Status Subtree::apply_batch_update(const TreeOptions& tree_options,
                                    IsRoot is_root)
 {
   BATT_CHECK_GT(parent_height, 0);
+  BATT_CHECK(!this->locked_.load());
 
   Subtree& subtree = *this;
 
   StatusOr<Subtree> new_subtree = batt::case_of(  //
-      subtree.impl,
+      subtree.impl_,
 
       //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
       //
@@ -90,7 +148,7 @@ Status Subtree::apply_batch_update(const TreeOptions& tree_options,
           new_leaf->set_edit_size_totals(std::move(*update.edit_size_totals));
           update.edit_size_totals = None;
 
-          return Subtree{.impl = std::move(new_leaf)};
+          return Subtree{std::move(new_leaf)};
         }
         BATT_CHECK_GT(parent_height, 1);
 
@@ -132,7 +190,7 @@ Status Subtree::apply_batch_update(const TreeOptions& tree_options,
           new_leaf->set_edit_size_totals(
               update.context.compute_running_total(new_leaf->result_set));
 
-          return Subtree{.impl = std::move(new_leaf)};
+          return Subtree{std::move(new_leaf)};
 
         } else {
           //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -146,7 +204,7 @@ Status Subtree::apply_batch_update(const TreeOptions& tree_options,
 
           BATT_REQUIRE_OK(node->apply_batch_update(update, key_upper_bound, is_root));
 
-          return Subtree{.impl = std::move(node)};
+          return Subtree{std::move(node)};
         }
       },
 
@@ -174,7 +232,7 @@ Status Subtree::apply_batch_update(const TreeOptions& tree_options,
         in_memory_leaf->set_edit_size_totals(
             update.context.compute_running_total(in_memory_leaf->result_set));
 
-        return Subtree{.impl = std::move(in_memory_leaf)};
+        return Subtree{std::move(in_memory_leaf)};
       },
 
       //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
@@ -187,7 +245,7 @@ Status Subtree::apply_batch_update(const TreeOptions& tree_options,
 
         BATT_REQUIRE_OK(in_memory_node->apply_batch_update(update, key_upper_bound, is_root));
 
-        return Subtree{.impl = std::move(in_memory_node)};
+        return Subtree{std::move(in_memory_node)};
       });
 
   BATT_REQUIRE_OK(new_subtree);
@@ -228,6 +286,8 @@ Status Subtree::split_and_grow(BatchUpdateContext& context,
                                const TreeOptions& tree_options,
                                const KeyView& key_upper_bound)
 {
+  BATT_CHECK(!this->locked_.load());
+
   StatusOr<Optional<Subtree>> upper_half_subtree = this->try_split(context);
   if (upper_half_subtree.ok() && !*upper_half_subtree) {
     return OkStatus();
@@ -245,7 +305,7 @@ Status Subtree::split_and_grow(BatchUpdateContext& context,
                                   key_upper_bound,
                                   IsRoot{true}));
 
-  this->impl = std::move(new_root);
+  this->impl_ = std::move(new_root);
 
   return OkStatus();
 }
@@ -255,7 +315,7 @@ Status Subtree::split_and_grow(BatchUpdateContext& context,
 StatusOr<i32> Subtree::get_height(llfs::PageLoader& page_loader) const
 {
   return batt::case_of(
-      this->impl,
+      this->impl_,
       [&](const llfs::PageIdSlot& page_id_slot) -> StatusOr<i32> {
         if (!page_id_slot.page_id) {
           return 0;
@@ -285,7 +345,7 @@ StatusOr<KeyView> Subtree::get_min_key(llfs::PageLoader& page_loader,
                                        llfs::PinnedPage& pinned_page_out) const
 {
   return batt::case_of(
-      this->impl,
+      this->impl_,
       [&](const llfs::PageIdSlot& page_id_slot) -> StatusOr<KeyView> {
         return visit_tree_page(  //
             page_loader,
@@ -314,7 +374,7 @@ StatusOr<KeyView> Subtree::get_max_key(llfs::PageLoader& page_loader,
                                        llfs::PinnedPage& pinned_page_out) const
 {
   return batt::case_of(
-      this->impl,
+      this->impl_,
       [&](const llfs::PageIdSlot& page_id_slot) -> StatusOr<KeyView> {
         return visit_tree_page(  //
             page_loader,
@@ -342,7 +402,7 @@ StatusOr<KeyView> Subtree::get_max_key(llfs::PageLoader& page_loader,
 SubtreeViability Subtree::get_viability() const
 {
   return batt::case_of(
-      this->impl,
+      this->impl_,
       [&](const llfs::PageIdSlot& page_id_slot [[maybe_unused]]) -> SubtreeViability {
         return Viable{};
       },
@@ -360,7 +420,7 @@ StatusOr<ValueView> Subtree::find_key(ParentNodeHeight parent_height, KeyQuery& 
   }
 
   return batt::case_of(
-      this->impl,
+      this->impl_,
       [&](const llfs::PageIdSlot& page_id_slot) -> StatusOr<ValueView> {
         if (parent_height != 2) {
           llfs::PinnedPage pinned_node_page;
@@ -390,7 +450,7 @@ std::function<void(std::ostream&)> Subtree::dump(i32 detail_level) const
 {
   return [this](std::ostream& out) {
     batt::case_of(
-        this->impl,
+        this->impl_,
         [&](const llfs::PageIdSlot& page_id_slot) {
           if (!page_id_slot.page_id) {
             out << "Empty{}";
@@ -423,7 +483,7 @@ std::function<void(std::ostream&)> Subtree::dump(i32 detail_level) const
 Optional<llfs::PageId> Subtree::get_page_id() const
 {
   return batt::case_of(
-      this->impl,
+      this->impl_,
       [](const llfs::PageIdSlot& page_id_slot) -> Optional<llfs::PageId> {
         return page_id_slot.page_id;
       },
@@ -436,8 +496,10 @@ Optional<llfs::PageId> Subtree::get_page_id() const
 //
 StatusOr<Optional<Subtree>> Subtree::try_split(BatchUpdateContext& context)
 {
+  BATT_CHECK(!this->locked_.load());
+
   return batt::case_of(
-      this->impl,
+      this->impl_,
 
       [&](const llfs::PageIdSlot& page_id_slot) -> StatusOr<Optional<Subtree>> {
         BATT_PANIC() << "Splitting a serialized subtree is not supported! (Should have been split "
@@ -453,7 +515,7 @@ StatusOr<Optional<Subtree>> Subtree::try_split(BatchUpdateContext& context)
         if (leaf_upper_half == nullptr) {
           return Optional<Subtree>{None};
         }
-        return {Subtree{.impl = std::move(leaf_upper_half)}};
+        return {Subtree{std::move(leaf_upper_half)}};
       },
 
       [&](const std::unique_ptr<InMemoryNode>& node) -> StatusOr<Optional<Subtree>> {
@@ -464,7 +526,7 @@ StatusOr<Optional<Subtree>> Subtree::try_split(BatchUpdateContext& context)
           return Optional<Subtree>{None};
         }
 
-        return {Subtree{.impl = std::move(node_upper_half)}};
+        return {Subtree{std::move(node_upper_half)}};
       });
 }
 
@@ -472,8 +534,10 @@ StatusOr<Optional<Subtree>> Subtree::try_split(BatchUpdateContext& context)
 //
 Status Subtree::try_flush(BatchUpdateContext& context)
 {
+  BATT_CHECK(!this->locked_.load());
+
   return batt::case_of(
-      this->impl,
+      this->impl_,
 
       [&](const llfs::PageIdSlot& page_id_slot [[maybe_unused]]) -> Status {
         return {batt::StatusCode::kUnimplemented};
@@ -492,27 +556,25 @@ Status Subtree::try_flush(BatchUpdateContext& context)
 //
 llfs::PackedPageId Subtree::packed_page_id_or_panic() const
 {
-  BATT_CHECK((batt::is_case<llfs::PageIdSlot>(this->impl)));
+  BATT_CHECK((batt::is_case<llfs::PageIdSlot>(this->impl_)));
 
-  return llfs::PackedPageId::from(std::get<llfs::PageIdSlot>(this->impl).page_id);
+  return llfs::PackedPageId::from(std::get<llfs::PageIdSlot>(this->impl_).page_id);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 bool Subtree::is_serialized() const
 {
-  return batt::is_case<llfs::PageIdSlot>(this->impl);
+  return batt::is_case<llfs::PageIdSlot>(this->impl_);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 Subtree Subtree::clone_serialized_or_panic() const
 {
-  BATT_CHECK((batt::is_case<llfs::PageIdSlot>(this->impl)));
+  BATT_CHECK((batt::is_case<llfs::PageIdSlot>(this->impl_)));
 
-  Subtree clone;
-  clone.impl.emplace<llfs::PageIdSlot>() = *this->get_page_id();
-  return clone;
+  return Subtree{std::get<llfs::PageIdSlot>(this->impl_)};
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -520,14 +582,16 @@ Subtree Subtree::clone_serialized_or_panic() const
 Status Subtree::start_serialize(TreeSerializeContext& context)
 {
   return batt::case_of(
-      this->impl,
+      this->impl_,
       [](const llfs::PageIdSlot&) -> Status {
         return OkStatus();
       },
-      [&context](std::unique_ptr<InMemoryLeaf>& leaf) -> Status {
+      [&context, this](std::unique_ptr<InMemoryLeaf>& leaf) -> Status {
+        BATT_CHECK(!this->locked_.load());
         return leaf->start_serialize(context);
       },
-      [&context](std::unique_ptr<InMemoryNode>& node) -> Status {
+      [&context, this](std::unique_ptr<InMemoryNode>& node) -> Status {
+        BATT_CHECK(!this->locked_.load());
         return node->start_serialize(context);
       });
 }
@@ -539,17 +603,21 @@ StatusOr<llfs::PageId> Subtree::finish_serialize(TreeSerializeContext& context)
   batt::BoolStatus newly_serialized = batt::BoolStatus::kUnknown;
 
   StatusOr<llfs::PageId> page_id = batt::case_of(
-      this->impl,
+      this->impl_,
       [&context,
        &newly_serialized](const llfs::PageIdSlot& page_id_slot) -> StatusOr<llfs::PageId> {
         newly_serialized = batt::BoolStatus::kFalse;
         return page_id_slot.page_id;
       },
-      [&context, &newly_serialized](std::unique_ptr<InMemoryLeaf>& leaf) -> StatusOr<llfs::PageId> {
+      [&context, &newly_serialized, this](
+          std::unique_ptr<InMemoryLeaf>& leaf) -> StatusOr<llfs::PageId> {
+        BATT_CHECK(!this->locked_.load());
         newly_serialized = batt::BoolStatus::kTrue;
         return leaf->finish_serialize(context);
       },
-      [&context, &newly_serialized](std::unique_ptr<InMemoryNode>& node) -> StatusOr<llfs::PageId> {
+      [&context, &newly_serialized, this](
+          std::unique_ptr<InMemoryNode>& node) -> StatusOr<llfs::PageId> {
+        BATT_CHECK(!this->locked_.load());
         newly_serialized = batt::BoolStatus::kTrue;
         return node->finish_serialize(context);
       });
@@ -558,10 +626,18 @@ StatusOr<llfs::PageId> Subtree::finish_serialize(TreeSerializeContext& context)
 
   BATT_CHECK_NE(newly_serialized, batt::BoolStatus::kUnknown);
   if (newly_serialized == batt::BoolStatus::kTrue) {
-    this->impl.emplace<llfs::PageIdSlot>(llfs::PageIdSlot::from_page_id(*page_id));
+    this->impl_.emplace<llfs::PageIdSlot>(llfs::PageIdSlot::from_page_id(*page_id));
   }
 
   return page_id;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void Subtree::lock()
+{
+  BATT_CHECK(this->is_serialized());
+  this->locked_.store(true);
 }
 
 }  // namespace turtle_kv

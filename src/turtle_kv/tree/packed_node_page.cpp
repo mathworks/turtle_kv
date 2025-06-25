@@ -189,9 +189,7 @@ PackedNodePage* build_node_page(const MutableBuffer& buffer, const InMemoryNode&
 //
 Subtree PackedNodePage::get_child(i32 pivot_i) const
 {
-  return Subtree{
-      .impl = llfs::PageIdSlot::from_page_id(this->children[pivot_i].unpack()),
-  };
+  return Subtree::from_packed_page_id(this->children[pivot_i]);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

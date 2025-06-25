@@ -145,18 +145,42 @@ inline bool scan_and_verify_operation_handler(WorkloadState& state)
     if (results[i].first != expected_key) {
       ADD_FAILURE() << "Scan key " << i
                     << " does not match expected: " << BATT_INSPECT(expected_key)
-                    << BATT_INSPECT(expected_value) << BATT_INSPECT(results[i].first)
-                    << BATT_INSPECT(results[i].second);
+                    << BATT_INSPECT(expected_value) << ";" << BATT_INSPECT(results[i].first)
+                    << BATT_INSPECT(results[i].second) << BATT_INSPECT_STR(min_key)
+                    << BATT_INSPECT(query_count) << BATT_INSPECT(result_count);
       return false;
     }
 
     if (results[i].second.as_str() != expected_value) {
       ADD_FAILURE() << "Scan value " << i
                     << " does not match expected: " << BATT_INSPECT(expected_key)
-                    << BATT_INSPECT(expected_value) << BATT_INSPECT(results[i].first)
+                    << BATT_INSPECT(expected_value) << ";" << BATT_INSPECT(results[i].first)
                     << BATT_INSPECT(results[i].second) << BATT_INSPECT(results[i].second.as_str());
       return false;
     }
+  }
+
+  return true;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+inline bool scan_operation_handler(WorkloadState& state)
+{
+  std::string min_key;
+  int query_count;
+
+  state.in >> min_key >> query_count;
+
+  std::vector<std::pair<KeyView, ValueView>> results;
+  results.resize(query_count);
+
+  StatusOr<usize> status = state.table.scan(min_key, as_slice(results));
+
+  if (!status.ok()) {
+    ADD_FAILURE() << "Scan failed! " << BATT_INSPECT(status) << BATT_INSPECT(min_key)
+                  << BATT_INSPECT(query_count);
+    return false;
   }
 
   return true;
@@ -213,6 +237,7 @@ inline std::tuple<usize, batt::SmallVec<LatencyMeasurement, 32>> run_workload(
   handlers['P'] = &put_operation_handler;
   handlers['T'] = &get_and_test_operation_handler;
   handlers['V'] = &scan_and_verify_operation_handler;
+  handlers['S'] = &scan_operation_handler;
 
   std::ifstream ifs{workload_file};
   BATT_CHECK(ifs.good()) << BATT_INSPECT_STR(workload_file.string());

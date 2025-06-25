@@ -644,7 +644,13 @@ class ART
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  template <bool kSynchronized>
+  enum struct Synchronized {
+    kFalse = 0,
+    kTrue = 1,
+    kDynamic = 2,
+  };
+
+  template <Synchronized kSynchronized>
   class Scanner;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -777,8 +783,14 @@ inline void ART::NodeBase::visit(CaseFns&&... case_fns)
 
 namespace detail {
 
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 template <typename NodeT, typename AlignedStorageT>
-NodeT& scanner_view_of(usize node_prefix_len, NodeT* node, AlignedStorageT* storage, std::true_type)
+NodeT& scanner_view_of(usize node_prefix_len,
+                       NodeT* node,
+                       AlignedStorageT* storage,
+                       std::integral_constant<ART::Synchronized, ART::Synchronized::kTrue>,
+                       const Optional<bool>&)
 {
   NodeT& node_view = *(new (storage) NodeT{ART::NodeBase::NoInit{}});
 
@@ -795,17 +807,46 @@ NodeT& scanner_view_of(usize node_prefix_len, NodeT* node, AlignedStorageT* stor
   return node_view;
 }
 
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 template <typename NodeT, typename AlignedStorageT>
-NodeT& scanner_view_of(usize, NodeT* node, AlignedStorageT*, std::false_type)
+NodeT& scanner_view_of(usize,
+                       NodeT* node,
+                       AlignedStorageT*,
+                       std::integral_constant<ART::Synchronized, ART::Synchronized::kFalse>,
+                       const Optional<bool>&)
 {
   return *node;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <typename NodeT, typename AlignedStorageT>
+NodeT& scanner_view_of(usize node_prefix_len,
+                       NodeT* node,
+                       AlignedStorageT* storage,
+                       std::integral_constant<ART::Synchronized, ART::Synchronized::kDynamic>,
+                       const Optional<bool>& sync)
+{
+  if (sync.value_or(true)) {
+    return scanner_view_of(node_prefix_len,
+                           node,
+                           storage,
+                           std::integral_constant<ART::Synchronized, ART::Synchronized::kTrue>{},
+                           sync);
+  }
+  return scanner_view_of(node_prefix_len,
+                         node,
+                         storage,
+                         std::integral_constant<ART::Synchronized, ART::Synchronized::kFalse>{},
+                         sync);
 }
 
 }  // namespace detail
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 //
-template <bool kSynchronized>
+template <ART::Synchronized kSynchronized>
 class ART::Scanner
 {
  public:
@@ -817,6 +858,8 @@ class ART::Scanner
 
   static constexpr usize kMaxDepth = ART::kMaxKeyLen;
 
+  using SyncType = std::integral_constant<ART::Synchronized, kSynchronized>;
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   static_assert(sizeof(Node256) > sizeof(Node48));
@@ -824,7 +867,8 @@ class ART::Scanner
   static_assert(sizeof(Node256) > sizeof(Node4));
 
   struct Frame {
-    std::aligned_storage_t<kSynchronized ? sizeof(Node256) : 1> node_storage_;
+    std::aligned_storage_t<(kSynchronized == ART::Synchronized::kFalse) ? 1 : sizeof(Node256)>
+        node_storage_;
     NodeScanState scan_state_;
     usize key_prefix_len_;
     std::string_view lower_bound_key_;
@@ -846,10 +890,14 @@ class ART::Scanner
   usize depth_ = 0;
   std::array<char, ART::kMaxKeyLen> key_buffer_;
   Optional<std::string_view> next_key_;
+  Optional<bool> synchronized_;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  explicit Scanner(ART& art, std::string_view lower_bound_key) noexcept
+  explicit Scanner(ART& art,
+                   std::string_view lower_bound_key,
+                   Optional<bool> synchronized = None) noexcept
+      : synchronized_{synchronized}
   {
     NodeBase* root = nullptr;
     for (;;) {
@@ -869,6 +917,17 @@ class ART::Scanner
     }
   }
 
+  bool is_synchronized() const
+  {
+    if (kSynchronized == ART::Synchronized::kFalse) {
+      return false;
+    }
+    if (kSynchronized == ART::Synchronized::kTrue) {
+      return true;
+    }
+    return this->synchronized_.value_or(true);
+  }
+
   template <typename NodeT>
   void enter(NodeT* node, usize key_prefix_len, std::string_view lower_bound_key)
   {
@@ -886,7 +945,8 @@ class ART::Scanner
     NodeT& node_view = detail::scanner_view_of(node_prefix_len,
                                                node,
                                                &top->node_storage_,
-                                               std::integral_constant<bool, kSynchronized>{});
+                                               SyncType{},
+                                               this->synchronized_);
 
     // Compare the lower bound key to the current node prefix.
     //
@@ -1016,7 +1076,7 @@ class ART::Scanner
 template <typename Fn>
 void ART::scan(std::string_view lower_bound_key, const Fn& fn)
 {
-  Scanner</*kSynchronized=*/true> scanner{*this, lower_bound_key};
+  Scanner<Synchronized::kTrue> scanner{*this, lower_bound_key};
 
   while (!scanner.is_done()) {
     if (!fn(scanner.get_key())) {

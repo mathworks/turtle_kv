@@ -9,6 +9,7 @@
 #include <turtle_kv/tree/in_memory_node.hpp>
 #include <turtle_kv/tree/leaf_page_view.hpp>
 #include <turtle_kv/tree/node_page_view.hpp>
+#include <turtle_kv/tree/tree_scanner.hpp>
 
 #include <turtle_kv/util/memory_stats.hpp>
 
@@ -340,6 +341,7 @@ u64 query_page_loader_reset_every_n()
           DeltaBatchId{1}.to_mem_table_id(),
       });
       state->base_checkpoint_ = Checkpoint::empty_at_batch(DeltaBatchId::from_u64(0));
+      state->base_checkpoint_.tree()->lock();
 
       BATT_CHECK_EQ(state->use_count(), 0);
       intrusive_ptr_add_ref(state);
@@ -368,7 +370,7 @@ u64 query_page_loader_reset_every_n()
     , checkpoint_generator_{this->worker_pool_,
                             this->tree_options_,
                             this->page_cache(),
-                            batt::make_copy(this->state_.load()->base_checkpoint_),
+                            this->state_.load()->base_checkpoint_.clone(),
                             *this->checkpoint_log_}
 
     , checkpoint_batch_count_{0}
@@ -550,6 +552,22 @@ void KVStore::reset_thread_context() noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+llfs::PageLoader& KVStore::ThreadContext::get_page_loader()
+{
+  const u64 n = query_page_loader_reset_every_n();
+  if (!n) {
+    return this->page_cache;
+  }
+
+  if ((this->query_count & n) == 0) {
+    this->query_page_loader.emplace(this->page_cache);
+  }
+
+  return *this->query_page_loader;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 StatusOr<ValueView> KVStore::get(const KeyView& key) noexcept /*override*/
 {
   const State* const observed_state = this->state_.load();
@@ -603,18 +621,7 @@ StatusOr<ValueView> KVStore::get(const KeyView& key) noexcept /*override*/
   ++thread_context.query_count;
   thread_context.query_result_storage.emplace();
 
-  llfs::PageLoader& page_loader = [&]() -> llfs::PageLoader& {
-    const u64 n = query_page_loader_reset_every_n();
-    if (!n) {
-      return this->page_cache();
-    }
-
-    if ((thread_context.query_count & n) == 0) {
-      thread_context.query_page_loader.emplace(this->page_cache());
-    }
-
-    return *thread_context.query_page_loader;
-  }();
+  llfs::PageLoader& page_loader = thread_context.get_page_loader();
 
   KeyQuery query{
       page_loader,
@@ -651,10 +658,128 @@ StatusOr<usize> KVStore::scan(
     const KeyView& min_key,
     const Slice<std::pair<KeyView, ValueView>>& items_out) noexcept /*override*/
 {
-  (void)min_key;
-  (void)items_out;
+  const State* const observed_state = this->state_.load();
+  boost::intrusive_ptr<const State> pinned_state{observed_state};
+  ThreadContext& thread_context = this->per_thread_.get(this);
 
-  return {batt::StatusCode::kUnimplemented};
+  const usize n_mem_tables = observed_state->deltas_.size() + 1;
+
+  using DeltaScannerMemory =
+      std::aligned_storage_t<sizeof(MemTable::Scanner), alignof(MemTable::Scanner)>;
+
+  // Allocate memory for MemTable scanners.
+  //
+  std::array<DeltaScannerMemory, 32> local_delta_scanners;
+  DeltaScannerMemory* delta_scanners_memory = local_delta_scanners.data();
+  if (n_mem_tables > local_delta_scanners.size()) {
+    delta_scanners_memory = new DeltaScannerMemory[n_mem_tables];
+  }
+
+  // Construct the delta scanners.
+  //
+  MemTable::Scanner* delta_scanners = reinterpret_cast<MemTable::Scanner*>(delta_scanners_memory);
+
+  usize delta_scanners_size = 0;
+
+  // Arrange for delta scanners to be deleted when done.
+  //
+  auto on_scope_exit = batt::finally([&] {
+    for (usize i = 0; i < delta_scanners_size; ++i) {
+      delta_scanners[i].~Scanner();
+    }
+    if (delta_scanners_memory != local_delta_scanners.data()) {
+      delete[] delta_scanners_memory;
+    }
+  });
+
+  for (; delta_scanners_size < n_mem_tables - 1; ++delta_scanners_size) {
+    const usize i = delta_scanners_size;
+    new (&delta_scanners_memory[i]) MemTable::Scanner{*observed_state->deltas_[i], min_key};
+  }
+
+  // Construct the scanner for the live MemTable.
+  //
+  new (&delta_scanners_memory[delta_scanners_size])
+      MemTable::Scanner{*observed_state->mem_table_, min_key};
+
+  ++delta_scanners_size;
+
+  // Create the merged delta scanner.
+  //
+  DeltasScanner deltas_scanner{as_slice(delta_scanners, delta_scanners_size), min_key};
+
+  // Create the tree scanner.
+  //
+  TreeScanner checkpoint_scanner{thread_context.get_page_loader(),
+                                 batt::make_copy(observed_state->base_checkpoint_.tree())};
+
+  BATT_CHECK(observed_state->base_checkpoint_.tree()->is_serialized());
+
+  checkpoint_scanner.seek_to(min_key);
+  checkpoint_scanner.prepare();
+
+  // Merge items from deltas and checkpoint.
+  //
+  Optional<EditView> next_delta_edit = deltas_scanner.next();
+  Optional<EditView> next_checkpoint_edit = checkpoint_scanner.next();
+
+  usize n_read = 0;
+
+  const auto consume_one = [&items_out, &n_read](Optional<EditView>& next_edit, auto& scanner) {
+    items_out[n_read].first = next_edit->key;
+    items_out[n_read].second = next_edit->value;
+    next_edit = scanner.next();
+  };
+
+  const auto consume_rest = [&items_out, &n_read](Optional<EditView>& next_edit, auto& scanner) {
+    while (next_edit) {
+      items_out[n_read].first = next_edit->key;
+      items_out[n_read].second = next_edit->value;
+      ++n_read;
+      if (n_read == items_out.size()) {
+        break;
+      }
+      next_edit = scanner.next();
+    }
+  };
+
+  while (n_read < items_out.size()) {
+    if (!next_delta_edit) {
+      consume_rest(next_checkpoint_edit, checkpoint_scanner);
+      break;
+    }
+    if (!next_checkpoint_edit) {
+      consume_rest(next_delta_edit, deltas_scanner);
+      break;
+    }
+
+    switch (batt::compare(get_key(*next_delta_edit), get_key(*next_checkpoint_edit))) {
+      case batt::Order::Less:
+        consume_one(next_delta_edit, deltas_scanner);
+        break;
+
+      case batt::Order::Equal: {
+        EditView edit = combine(*next_delta_edit, *next_checkpoint_edit);
+        items_out[n_read].first = edit.key;
+        items_out[n_read].second = edit.value;
+        next_delta_edit = deltas_scanner.next();
+        next_checkpoint_edit = checkpoint_scanner.next();
+        break;
+      }
+
+      case batt::Order::Greater:
+        consume_one(next_checkpoint_edit, checkpoint_scanner);
+        break;
+
+      default:
+        BATT_PANIC() << "Bad comparison result!";
+        BATT_UNREACHABLE();
+    }
+
+    ++n_read;
+  }
+
+  return n_read;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -695,6 +820,8 @@ Status KVStore::update_checkpoint(const State* observed_state)
       intrusive_ptr_release(new_state);
       return OkStatus();
     }
+
+    BATT_CHECK(observed_state->base_checkpoint_.tree()->is_serialized());
 
     new_state->deltas_ = observed_state->deltas_;
     new_state->deltas_.emplace_back(observed_state->mem_table_);
@@ -944,10 +1071,13 @@ Status KVStore::commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_jo
 
     new_state->base_checkpoint_ = std::move(*checkpoint_job->checkpoint);
     new_state->base_checkpoint_.notify_durable(std::move(*slot_read_lock));
+    new_state->base_checkpoint_.tree()->lock();
 
     BATT_CHECK(new_state->base_checkpoint_.tree()->is_serialized());
 
     const State* old_state = this->state_.load();
+
+    BATT_CHECK(old_state->base_checkpoint_.tree()->is_serialized());
 
     // Save the old checkpoint's slot lower bound so we can trim to it later.
     //

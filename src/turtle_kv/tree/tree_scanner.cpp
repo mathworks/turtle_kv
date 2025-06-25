@@ -35,7 +35,7 @@ batt::Status TreeScanGenerator::operator()()
 void TreeScanGenerator::visit_subtree(const Subtree& root)
 {
   batt::case_of(
-      root.impl,
+      root.impl_,
       [&](const llfs::PageIdSlot& page_id_slot) {
         this->visit_page(page_id_slot);
       },
@@ -51,6 +51,12 @@ void TreeScanGenerator::visit_subtree(const Subtree& root)
 //
 void TreeScanGenerator::visit_page(const llfs::PageIdSlot& page_id_slot)
 {
+  // Check for empty tree.
+  //
+  if (!page_id_slot.is_valid()) {
+    return;
+  }
+
   StatusOr<llfs::PinnedPage> pinned_page =
       page_id_slot.load_through(this->page_loader_.get(),
                                 llfs::PageLoadOptions{
@@ -58,7 +64,8 @@ void TreeScanGenerator::visit_page(const llfs::PageIdSlot& page_id_slot)
                                     llfs::OkIfNotFound{false},
                                     llfs::LruPriority{kNodeLruPriority},
                                 });
-  BATT_CHECK(pinned_page.ok());
+
+  BATT_CHECK(pinned_page.ok()) << BATT_INSPECT(pinned_page.status()) << BATT_INSPECT(page_id_slot);
 
   const auto& page_header =
       *static_cast<const llfs::PackedPageHeader*>(pinned_page->const_buffer().data());
@@ -82,6 +89,10 @@ void TreeScanGenerator::visit_packed_leaf(const PackedLeafPage& leaf_page)
 
   Slice<const PackedKeyValue> edit_slice =
       as_slice(leaf_page.lower_bound(this->min_key_), leaf_page.items_end());
+
+  if (edit_slice.empty()) {
+    return;
+  }
 
   frame.push_line(seq::single_item(EditSlice{edit_slice}) | seq::boxed());
 
@@ -124,8 +135,8 @@ void TreeScanGenerator::visit_packed_node(const PackedNodePage& node)
                                        llfs::PinPageToJob::kFalse,
                                        segment_load_status,
                                        (i32)min_key_pivot,
-                                       this->min_key_} |
-                    seq::boxed());
+                                       this->min_key_}  //
+                    | seq::boxed());
   }
 
   this->context_.push_frame(&frame);

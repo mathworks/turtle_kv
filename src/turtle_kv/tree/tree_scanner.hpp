@@ -62,9 +62,19 @@ class TreeScanner
 
   void rewind();
 
- private:
   void prepare();
 
+  Optional<EditView> peek()
+  {
+    return this->merge_scanner_->peek();
+  }
+
+  Optional<EditView> next()
+  {
+    return this->merge_scanner_->next();
+  }
+
+ private:
   llfs::PageLoader& page_loader_;
   std::shared_ptr<const Subtree> root_;
   KeyView min_key_;

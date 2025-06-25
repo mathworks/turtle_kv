@@ -56,9 +56,7 @@ using PackedSegment = PackedUpdateBuffer::Segment;
   node->common_key_prefix = packed_node.common_key_prefix();
 
   for (usize pivot_i = 0; pivot_i < pivot_count; ++pivot_i) {
-    node->children[pivot_i] = Subtree{
-        .impl = llfs::PageIdSlot::from_page_id(packed_node.children[pivot_i].unpack()),
-    };
+    node->children[pivot_i] = Subtree::from_packed_page_id(packed_node.children[pivot_i]);
     node->pending_bytes[pivot_i] = packed_node.pending_bytes[pivot_i];
     node->pivot_keys_[pivot_i] = packed_node.get_pivot_key(pivot_i);
   }

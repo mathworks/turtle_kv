@@ -61,6 +61,7 @@ class KVStore : public Table
   };
 
   struct ThreadContext {
+    llfs::PageCache& page_cache;
     boost::intrusive_ptr<llfs::StorageContext> storage_context;
     Optional<PinningPageLoader> query_page_loader;
     Optional<PageSliceStorage> query_result_storage;
@@ -72,8 +73,9 @@ class KVStore : public Table
     //+++++++++++-+-+--+----- --- -- -  -  -   -
 
     explicit ThreadContext(KVStore* kv_store) noexcept
-        : storage_context{kv_store->storage_context_}
-        , query_page_loader{kv_store->page_cache()}
+        : page_cache{kv_store->page_cache()}
+        , storage_context{kv_store->storage_context_}
+        , query_page_loader{this->page_cache}
         , log_writer_{*kv_store->log_writer_}
         , log_writer_context_{this->log_writer_}
     {
@@ -87,6 +89,8 @@ class KVStore : public Table
       }
       return *this->log_writer_context_;
     }
+
+    llfs::PageLoader& get_page_loader();
   };
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
