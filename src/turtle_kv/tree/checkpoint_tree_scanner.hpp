@@ -1,5 +1,7 @@
 #pragma once
 
+#include <turtle_kv/scan_metrics.hpp>
+
 #include <turtle_kv/import/int_types.hpp>
 
 #include <turtle_kv/tree/algo/nodes.hpp>
@@ -54,6 +56,12 @@ class CheckpointTreeScanner
 
   Status start()
   {
+    // Handle the empty tree case.
+    //
+    if (!this->root_.is_valid()) {
+      return OkStatus();
+    }
+
     BATT_REQUIRE_OK(this->enter_subtree(this->tree_height_, this->root_));
     BATT_REQUIRE_OK(this->set_next_item());
 

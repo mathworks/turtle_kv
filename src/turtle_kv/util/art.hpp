@@ -285,6 +285,31 @@ class ART
     using Super = GrowableNode<kBranchCount, Self>;
     using NoInit = NodeBase::NoInit;
 
+#define TURTLE_KV_ART_SMALL_NODE_PRE_1(start)                                                      \
+  case (start): {                                                                                  \
+    const i32 key_byte = this->self_.key[(start)];                                                 \
+    if (key_byte >= min_key && key_byte <= max_key) {                                              \
+      branch_for_byte[key_byte] = this->self_.branches[(start)];                                   \
+      key_bitmap[(key_byte >> 6) & 3] |= (u64{1} << (key_byte & 0x3f));                            \
+    }                                                                                              \
+  }
+
+#define TURTLE_KV_ART_SMALL_NODE_PRE_2(start)                                                      \
+  TURTLE_KV_ART_SMALL_NODE_PRE_1((start) + 1)                                                      \
+  TURTLE_KV_ART_SMALL_NODE_PRE_1((start) + 0)
+
+#define TURTLE_KV_ART_SMALL_NODE_PRE_4(start)                                                      \
+  TURTLE_KV_ART_SMALL_NODE_PRE_2((start) + 2)                                                      \
+  TURTLE_KV_ART_SMALL_NODE_PRE_2((start) + 0)
+
+#define TURTLE_KV_ART_SMALL_NODE_PRE_8(start)                                                      \
+  TURTLE_KV_ART_SMALL_NODE_PRE_4((start) + 4)                                                      \
+  TURTLE_KV_ART_SMALL_NODE_PRE_4((start) + 0)
+
+#define TURTLE_KV_ART_SMALL_NODE_PRE_16(start)                                                     \
+  TURTLE_KV_ART_SMALL_NODE_PRE_8((start) + 8)                                                      \
+  TURTLE_KV_ART_SMALL_NODE_PRE_8((start) + 0)
+
 #define TURTLE_KV_ART_SMALL_NODE_INNER_LOOP_1(key_byte_offset)                                     \
   if (bit_i == 64) {                                                                               \
     break;                                                                                         \
@@ -347,9 +372,22 @@ class ART
         std::array<NodeBase*, 256> branch_for_byte;
         std::array<u64, 4> key_bitmap;
 
-        key_bitmap.fill(0);
+        key_bitmap[0] = 0;
+        key_bitmap[1] = 0;
+        key_bitmap[2] = 0;
+        key_bitmap[3] = 0;
 
         const usize n_branches = this->self_.branch_count();
+
+#if 0
+        BATT_SUPPRESS_IF_GCC("-Wimplicit-fallthrough")
+        switch (n_branches - 1) {
+          TURTLE_KV_ART_SMALL_NODE_PRE_16(0)
+          default:
+            break;
+        }
+        BATT_UNSUPPRESS_IF_GCC()
+#else
         for (usize i = 0; i < n_branches; ++i) {
           const i32 key_byte = this->self_.key[i];
           if (key_byte < min_key || key_byte > max_key) {
@@ -358,7 +396,9 @@ class ART
           branch_for_byte[key_byte] = this->self_.branches[i];
           key_bitmap[(key_byte >> 6) & 3] |= (u64{1} << (key_byte & 0x3f));
         }
+#endif
 
+#if 1
         u64 word_val;
         i32 key_byte;
         NodeBase* branch;
@@ -367,6 +407,22 @@ class ART
         TURTLE_KV_ART_SMALL_NODE_OUTER_LOOP(1, 64)
         TURTLE_KV_ART_SMALL_NODE_OUTER_LOOP(2, 128)
         TURTLE_KV_ART_SMALL_NODE_OUTER_LOOP(3, 192)
+#else
+        for (usize word_i = 0; word_i < 4; ++word_i) {
+          const u64 word_val = key_bitmap[word_i];
+          if (!word_val) {
+            continue;
+          }
+          const i32 key_byte_offset = (word_i << 6);
+          for (i32 bit_i = __builtin_ctzll(word_val); bit_i != 64;
+               bit_i = next_bit(word_val, bit_i)) {
+            const i32 key_byte = key_byte_offset + bit_i;
+            this->sorted_branches_[this->branch_count_] = branch_for_byte[key_byte];
+            this->sorted_keys_[this->branch_count_] = key_byte;
+            ++this->branch_count_;
+          }
+        }
+#endif
       }
 
       i32 get_key_byte() const

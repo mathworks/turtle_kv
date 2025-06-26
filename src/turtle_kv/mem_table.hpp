@@ -3,6 +3,7 @@
 #include <turtle_kv/change_log_writer.hpp>
 #include <turtle_kv/concurrent_hash_index.hpp>
 #include <turtle_kv/mem_table_entry.hpp>
+#include <turtle_kv/scan_metrics.hpp>
 
 #include <turtle_kv/core/edit_view.hpp>
 #include <turtle_kv/core/key_view.hpp>
@@ -21,6 +22,7 @@
 #include <batteries/async/worker_pool.hpp>
 #include <batteries/shared_ptr.hpp>
 #include <batteries/static_assert.hpp>
+#include <batteries/utility.hpp>
 
 #include <algorithm>
 #include <string_view>
@@ -335,19 +337,29 @@ class DeltasScanner
   //
   explicit DeltasScanner(const Slice<MemTable::Scanner>& delta_scanners,
                          const KeyView& lower_bound_key) noexcept
-      : heap_{}
-      , lower_bound_key_{lower_bound_key}
+      : lower_bound_key_{lower_bound_key}
   {
-    this->heap_.resize(delta_scanners.size());
+    usize n_scanners = delta_scanners.size();
+    if (n_scanners * 2 > this->static_storage_.size()) {
+      this->dynamic_storage_.reset(new MemTable::Scanner*[n_scanners * 2]);
+      this->heap_front_ = this->dynamic_storage_.get();
+      this->tmp_front_ = this->dynamic_storage_.get() + n_scanners;
+    } else {
+      this->heap_front_ = this->static_storage_.data();
+      this->tmp_front_ = this->static_storage_.data() + n_scanners;
+    }
+
+    this->heap_back_ = this->heap_front_ + n_scanners;
+    this->tmp_back_ = this->tmp_front_;
 
     std::transform(delta_scanners.begin(),
                    delta_scanners.end(),
-                   this->heap_.begin(),
+                   this->heap_front_,
                    [](MemTable::Scanner& scanner) -> MemTable::Scanner* {
                      return &scanner;
                    });
 
-    std::make_heap(this->heap_.begin(), this->heap_.end(), DeltaScannerHeapOrder{});
+    std::make_heap(this->heap_front_, this->heap_back_, DeltaScannerHeapOrder{});
     this->set_next_item();
   }
 
@@ -366,56 +378,78 @@ class DeltasScanner
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
-  void pop(MemTable::Scanner* top)
+  BATT_ALWAYS_INLINE void pop()
   {
-    BATT_CHECK_EQ(top, this->heap_.front());
-    std::pop_heap(this->heap_.begin(), this->heap_.end(), DeltaScannerHeapOrder{});
+    if (this->heap_front_ + 1 != this->heap_back_) {
+      std::pop_heap(this->heap_front_, this->heap_back_, DeltaScannerHeapOrder{});
+    }
+    --this->heap_back_;
   }
 
-  void push_unless_empty(MemTable::Scanner* top)
+  BATT_ALWAYS_INLINE void push_unless_empty(MemTable::Scanner* top)
   {
-    if (top->is_done()) {
-      this->heap_.pop_back();
-    } else {
-      std::push_heap(this->heap_.begin(), this->heap_.end(), DeltaScannerHeapOrder{});
+    if (!top->is_done()) {
+      *this->heap_back_ = top;
+      ++this->heap_back_;
+      if (this->heap_front_ + 1 != this->heap_back_) {
+        std::push_heap(this->heap_front_, this->heap_back_, DeltaScannerHeapOrder{});
+      }
     }
   }
 
-  void set_next_item()
+  BATT_ALWAYS_INLINE void set_next_item()
   {
     for (;;) {
-      if (this->heap_.empty()) {
-        return;
+      if (this->heap_front_ == this->heap_back_) {
+        break;
       }
 
-      MemTable::Scanner* const top = this->heap_.front();
-
       if (!this->next_item_) {
-        this->pop(top);
+        MemTable::Scanner* const top = *this->heap_front_;
+        this->pop();
         this->next_item_ = top->next();
-        this->push_unless_empty(top);
+        *this->tmp_back_ = top;
+        ++this->tmp_back_;
+        continue;
+      }
 
-      } else if (get_key(*this->next_item_) == get_key(*top)) {
-        this->pop(top);
+      MemTable::Scanner* const top = *this->heap_front_;
+
+      if (get_key(*this->next_item_) == get_key(*top)) {
+        this->pop();
         Optional<EditView> older_item = top->next();
         if (this->next_item_->needs_combine()) {
           *this->next_item_ = combine(*this->next_item_, *older_item);
         }
-        this->push_unless_empty(top);
-
-      } else {
-        return;
+        *this->tmp_back_ = top;
+        ++this->tmp_back_;
+        continue;
       }
+
+      break;
+    }
+
+    while (this->tmp_back_ != this->tmp_front_) {
+      --this->tmp_back_;
+      this->push_unless_empty(*this->tmp_back_);
     }
   }
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  SmallVec<MemTable::Scanner*, 32> heap_;
+  KeyView lower_bound_key_;
+
+  std::unique_ptr<MemTable::Scanner*[]> dynamic_storage_;
+
+  std::array<MemTable::Scanner*, 64> static_storage_;
+
+  MemTable::Scanner** heap_front_;
+  MemTable::Scanner** heap_back_;
+
+  MemTable::Scanner** tmp_front_;
+  MemTable::Scanner** tmp_back_;
 
   Optional<EditView> next_item_;
-
-  KeyView lower_bound_key_;
 };
 
 }  // namespace turtle_kv

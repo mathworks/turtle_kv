@@ -88,6 +88,8 @@ class Checkpoint
     return this->tree_;
   }
 
+  /** \brief Returns the height of the tree.
+   */
   i32 tree_height() const
   {
     return this->tree_height_;

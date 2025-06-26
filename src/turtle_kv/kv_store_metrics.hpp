@@ -28,6 +28,14 @@ struct KVStoreMetrics {
 
   StatsMetric<u64> checkpoint_pinned_pages_stats;
 
+  //----- --- -- -  -  -   -
+  // Scan/Scanner related metrics.
+  //
+  LatencyMetric scan_latency;
+  LatencyMetric scan_init_latency;
+  LatencyMetric scan_delta_item_latency;
+  LatencyMetric scan_checkpoint_item_latency;
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   u64 total_get_count() const

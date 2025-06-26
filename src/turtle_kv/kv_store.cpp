@@ -5,11 +5,11 @@
 #include <turtle_kv/file_utils.hpp>
 #include <turtle_kv/page_file.hpp>
 
+#include <turtle_kv/tree/checkpoint_tree_scanner.hpp>
 #include <turtle_kv/tree/filter_builder.hpp>
 #include <turtle_kv/tree/in_memory_node.hpp>
 #include <turtle_kv/tree/leaf_page_view.hpp>
 #include <turtle_kv/tree/node_page_view.hpp>
-#include <turtle_kv/tree/tree_scanner.hpp>
 
 #include <turtle_kv/util/memory_stats.hpp>
 
@@ -710,13 +710,16 @@ StatusOr<usize> KVStore::scan(
 
   // Create the tree scanner.
   //
-  TreeScanner checkpoint_scanner{thread_context.get_page_loader(),
-                                 batt::make_copy(observed_state->base_checkpoint_.tree())};
-
   BATT_CHECK(observed_state->base_checkpoint_.tree()->is_serialized());
 
-  checkpoint_scanner.seek_to(min_key);
-  checkpoint_scanner.prepare();
+  CheckpointTreeScanner checkpoint_scanner{
+      thread_context.get_page_loader(),
+      observed_state->base_checkpoint_.tree()->page_id_slot_or_panic(),
+      observed_state->base_checkpoint_.tree_height(),
+      min_key,
+  };
+
+  BATT_REQUIRE_OK(checkpoint_scanner.start());
 
   // Merge items from deltas and checkpoint.
   //
@@ -1265,6 +1268,8 @@ std::function<void(std::ostream&)> KVStore::debug_info() noexcept
         << BATT_INSPECT(PackedLeafPage::metrics().find_key_success_count) << "\n"      //
         << BATT_INSPECT(PackedLeafPage::metrics().find_key_failure_count) << "\n"      //
         << BATT_INSPECT(PackedLeafPage::metrics().find_key_latency) << "\n"            //
+        << "\n"                                                                        //
+        << BATT_INSPECT(kv_store.scan_init_latency) << "\n"                            //
         << "\n"                                                                        //
         << BATT_INSPECT(BloomFilterMetrics::instance().word_count_stats) << "\n"       //
         << BATT_INSPECT(BloomFilterMetrics::instance().byte_size_stats) << "\n"        //

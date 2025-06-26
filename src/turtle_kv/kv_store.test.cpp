@@ -7,6 +7,8 @@
 
 #include <turtle_kv/testing/workload.test.hpp>
 
+#include <turtle_kv/scan_metrics.hpp>
+
 #include <turtle_kv/core/table.hpp>
 
 namespace {
@@ -18,6 +20,8 @@ using llfs::PageSize;
 
 using turtle_kv::KeyView;
 using turtle_kv::KVStore;
+using turtle_kv::LatencyMetric;
+using turtle_kv::LatencyTimer;
 using turtle_kv::OkStatus;
 using turtle_kv::RemoveExisting;
 using turtle_kv::Slice;
@@ -33,8 +37,43 @@ using turtle_kv::testing::run_workload;
 //
 TEST(KVStoreTest, CreateAndOpen)
 {
+  LatencyMetric noop_latency;
+
+  for (usize i = 0; i < 1e4; ++i) {
+    LatencyTimer timer{noop_latency};
+  }
+
+  double timer_overhead_usec = noop_latency.average_usec();
+  {
+    usize i = 0;
+    usize stable_count = 0;
+
+    for (i = 0; i < 1e6; ++i) {
+      {
+        LatencyTimer timer{noop_latency};
+      }
+      double epsilon = timer_overhead_usec - noop_latency.average_usec();
+      timer_overhead_usec = noop_latency.average_usec();
+
+      if (std::abs(epsilon) < timer_overhead_usec * 0.01) {
+        ++stable_count;
+        if (stable_count == 10) {
+          break;
+        }
+      } else {
+        stable_count = 0;
+      }
+    }
+    u64 timer_overhead_nanos = timer_overhead_usec * 1000;
+    LOG(INFO) << BATT_INSPECT(noop_latency) << BATT_INSPECT(timer_overhead_usec)
+              << BATT_INSPECT(timer_overhead_nanos) << BATT_INSPECT(stable_count)
+              << BATT_INSPECT(i);
+  }
+
   std::thread test_thread{[&] {
     BATT_CHECK_OK(batt::pin_thread_to_cpu(0));
+
+    auto& scan_metrics = turtle_kv::ScanMetrics::instance();
 
     for (bool size_tiered : {false, true}) {
       std::filesystem::path test_kv_store_dir = "/mnt/kv-bakeoff/turtle_kv_Test/kv_store";
@@ -52,6 +91,9 @@ TEST(KVStoreTest, CreateAndOpen)
       tree_options.set_leaf_size(1 * kMiB);
       tree_options.set_key_size_hint(24);
       tree_options.set_value_size_hint(10);
+      if (!size_tiered) {
+        tree_options.set_buffer_level_trim(3);
+      }
       tree_options.set_size_tiered(size_tiered);
 
       auto runtime_options = KVStore::RuntimeOptions::with_default_values();
@@ -107,6 +149,18 @@ TEST(KVStoreTest, CreateAndOpen)
           ASSERT_TRUE(kv_store_opened.ok()) << BATT_INSPECT(kv_store_opened.status());
 
           KVStore& kv_store = **kv_store_opened;
+
+          auto on_scope_exit = batt::finally([&] {
+            std::cerr << std::endl
+                      << BATT_INSPECT(kv_store.metrics().scan_latency) << std::endl
+                      << BATT_INSPECT(kv_store.metrics().scan_init_latency) << std::endl
+                      << BATT_INSPECT(scan_metrics.checkpoint_set_next_item_latency) << std::endl
+                      << BATT_INSPECT(scan_metrics.deltas_set_next_item_latency) << std::endl
+                      << BATT_INSPECT(scan_metrics.memtable_set_next_item_latency) << std::endl
+                      << std::endl;
+
+            scan_metrics.reset();
+          });
 
           kv_store.set_checkpoint_distance(chi);
 
