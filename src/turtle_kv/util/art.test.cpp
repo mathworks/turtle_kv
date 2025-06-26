@@ -22,6 +22,7 @@ using namespace batt::int_types;
 using turtle_kv::ART;
 using turtle_kv::LatencyMetric;
 using turtle_kv::LatencyTimer;
+using turtle_kv::None;
 using turtle_kv::testing::RandomStringGenerator;
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -44,6 +45,11 @@ TEST(ArtTest, PutContainsTest)
   }
 
   ART index;
+
+  {
+    ART::Scanner<ART::Synchronized::kFalse> scanner{index, ""};
+    EXPECT_TRUE(scanner.is_done());
+  }
 
   usize i = 0;
   for (const std::string& key : keys) {

@@ -964,12 +964,14 @@ class ART::Scanner
       }
     }
 
-    root->visit([&](auto* node) {
-      this->enter(node, /*key_prefix_len=*/0, lower_bound_key);
-    });
+    if (root) {
+      root->visit([&](auto* node) {
+        this->enter(node, /*key_prefix_len=*/0, lower_bound_key);
+      });
 
-    if (!this->next_key_) {
-      this->advance();
+      if (!this->next_key_) {
+        this->advance();
+      }
     }
   }
 
