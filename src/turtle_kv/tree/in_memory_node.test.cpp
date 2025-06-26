@@ -5,6 +5,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <turtle_kv/tree/checkpoint_tree_scanner.hpp>
 #include <turtle_kv/tree/memory_storage.hpp>
 #include <turtle_kv/tree/pinning_page_loader.hpp>
 #include <turtle_kv/tree/subtree_table.hpp>
@@ -43,6 +44,7 @@ using ResultSet = turtle_kv::MergeCompactor::ResultSet<kDecayToItems>;
 using turtle_kv::BatchUpdate;
 using turtle_kv::BatchUpdateContext;
 using turtle_kv::bit_count;
+using turtle_kv::CheckpointTreeScanner;
 using turtle_kv::DecayToItem;
 using turtle_kv::EditView;
 using turtle_kv::global_max_key;
@@ -153,7 +155,8 @@ void verify_range_scan(LatencyMetric* scan_latency,
     BATT_CHECK_NE(expected_item_iter, expected_read_items.end());
     BATT_CHECK_NE(actual_item_iter, actual_read_items.end());
 
-    ASSERT_EQ(expected_item_iter->first, actual_item_iter->first) << BATT_INSPECT(i);
+    ASSERT_EQ(expected_item_iter->first, actual_item_iter->first)
+        << BATT_INSPECT(i) << BATT_INSPECT_STR(min_key);
     ASSERT_EQ(expected_item_iter->second, actual_item_iter->second) << BATT_INSPECT(i);
 
     ++expected_item_iter;
@@ -297,6 +300,7 @@ void SubtreeBatchUpdateScenario::run()
   BATT_DEBUG_INFO(BATT_INSPECT(this->seed));
 
   LatencyMetric scan_latency;
+  LatencyMetric scan_latency2;
 
   std::default_random_engine rng{this->seed};
 
@@ -441,14 +445,48 @@ void SubtreeBatchUpdateScenario::run()
         KeyView min_key = update.result_set.get_min_key();
 
         scanner.seek_to(min_key);
-        batt::StatusOr<usize> items_read = scanner.scan_items(as_slice(scan_items_buffer));
+        batt::StatusOr<usize> items_read =
+            BATT_COLLECT_LATENCY(scan_latency, scanner.scan_items(as_slice(scan_items_buffer)));
+
         BATT_CHECK(items_read.ok());
 
-        ASSERT_NO_FATAL_FAILURE(verify_range_scan(&scan_latency,
+        ASSERT_NO_FATAL_FAILURE(verify_range_scan(nullptr,
                                                   expected_table,
                                                   as_slice(scan_items_buffer.data(), *items_read),
                                                   min_key))
             << BATT_INSPECT(i);
+
+        // Verify CheckpointTreeScanner as well.
+        //
+        scan_items_buffer.fill(std::make_pair(KeyView{}, ValueView{}));
+        {
+          CheckpointTreeScanner cts{
+              *page_loader,
+              root_ptr->page_id_slot_or_panic(),
+              BATT_OK_RESULT_OR_PANIC(root_ptr->get_height(*page_loader)),
+              min_key,
+          };
+
+          usize n_read = 0;
+          {
+            LatencyTimer timer{scan_latency2};
+            BATT_CHECK_OK(cts.start());
+            for (auto& kv_pair : scan_items_buffer) {
+              Optional<EditView> item = cts.next();
+              if (!item) {
+                break;
+              }
+              kv_pair.first = item->key;
+              kv_pair.second = item->value;
+              ++n_read;
+            }
+          }
+          ASSERT_NO_FATAL_FAILURE(verify_range_scan(nullptr,
+                                                    expected_table,
+                                                    as_slice(scan_items_buffer.data(), n_read),
+                                                    min_key))
+              << BATT_INSPECT(i) << BATT_INSPECT_STR(min_key);
+        }
       }
 
       if (my_id == 0) {
@@ -463,6 +501,7 @@ void SubtreeBatchUpdateScenario::run()
 
   if (my_id == 1) {
     LOG(INFO) << BATT_INSPECT(scan_latency);
+    LOG(INFO) << BATT_INSPECT(scan_latency2);
   }
 }
 

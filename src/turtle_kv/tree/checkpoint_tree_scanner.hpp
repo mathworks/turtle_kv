@@ -55,7 +55,6 @@ class CheckpointTreeScanner
   Status start()
   {
     BATT_REQUIRE_OK(this->enter_subtree(this->tree_height_, this->root_));
-    BATT_REQUIRE_OK(this->resume());
     BATT_REQUIRE_OK(this->set_next_item());
 
     return OkStatus();
@@ -105,6 +104,9 @@ class CheckpointTreeScanner
 
     //----- --- -- -  -  -   -
 
+    //+++++++++++-+-+--+----- --- -- -  -  -   -
+    // PackedNodePage frame
+    //
     explicit PathFrame(CheckpointTreeScanner& tree_scanner,
                        llfs::PinnedPage&& page,
                        const PackedNodePage& node,
@@ -141,6 +143,9 @@ class CheckpointTreeScanner
       }
     }
 
+    //+++++++++++-+-+--+----- --- -- -  -  -   -
+    // PackedLeafPage frame
+    //
     explicit PathFrame(CheckpointTreeScanner& tree_scanner,
                        llfs::PinnedPage&& page,
                        const PackedLeafPage& leaf,
@@ -150,15 +155,17 @@ class CheckpointTreeScanner
         , pivot_i_{0}
     {
       KVSlice first_slice = as_slice(leaf.lower_bound(min_key), leaf.items_end());
-      if (!first_slice.empty()) {
-        this->active_levels_ = 1;
-        tree_scanner.frame_for_tier_.emplace_back(PathFrameLocation{
-            .frame = this,
-            .level_i = 0,
-        });
-        KVSlice& tier = tree_scanner.tiers_.emplace_back(first_slice);
-        tree_scanner.push_heap(&tier);
+      if (first_slice.empty()) {
+        return;
       }
+
+      this->active_levels_ = 1;
+      tree_scanner.frame_for_tier_.emplace_back(PathFrameLocation{
+          .frame = this,
+          .level_i = 0,
+      });
+      KVSlice& tier = tree_scanner.tiers_.emplace_back(first_slice);
+      tree_scanner.push_heap(&tier);
     }
 
     i32 get_height() const
@@ -216,36 +223,47 @@ class CheckpointTreeScanner
     const auto& page_header =
         *static_cast<const llfs::PackedPageHeader*>(pinned_page->const_buffer().data());
 
-    if (height > 1 && page_header.layout_id != NodePageView::page_layout_id()) {
-      return {batt::StatusCode::kDataLoss};
-    }
-
-    BATT_CHECK_EQ(height, 1);
-
-    if (page_header.layout_id != LeafPageView::page_layout_id()) {
-      return {batt::StatusCode::kDataLoss};
+    if (height > 1) {
+      if (page_header.layout_id != NodePageView::page_layout_id()) {
+        return {batt::StatusCode::kDataLoss};
+      }
+    } else {
+      BATT_CHECK_EQ(height, 1);
+      if (page_header.layout_id != LeafPageView::page_layout_id()) {
+        return {batt::StatusCode::kDataLoss};
+      }
     }
 
     return OkStatus();
   }
 
-  Status enter_subtree(i32 subtree_height, const llfs::PageIdSlot& subtree_root)
+  Status enter_subtree(i32 subtree_height, llfs::PageIdSlot subtree_root)
   {
-    StatusOr<llfs::PinnedPage> pinned_page =
-        subtree_root.load_through(this->page_loader_,
-                                  llfs::PageLoadOptions{
-                                      llfs::PinPageToJob::kFalse,
-                                      llfs::OkIfNotFound{false},
-                                      llfs::LruPriority{kNodeLruPriority},
-                                  });
+    for (;;) {
+      StatusOr<llfs::PinnedPage> pinned_page =
+          subtree_root.load_through(this->page_loader_,
+                                    llfs::PageLoadOptions{
+                                        llfs::PinPageToJob::kFalse,
+                                        llfs::OkIfNotFound{false},
+                                        llfs::LruPriority{kNodeLruPriority},
+                                    });
 
-    BATT_REQUIRE_OK(pinned_page);
-    BATT_REQUIRE_OK(this->validate_page_layout(subtree_height, *pinned_page));
+      BATT_REQUIRE_OK(pinned_page);
+      BATT_REQUIRE_OK(this->validate_page_layout(subtree_height, *pinned_page));
 
-    if (subtree_height == 1) {
-      BATT_REQUIRE_OK(this->enter_leaf(std::move(*pinned_page)));
-    } else {
+      if (subtree_height == 1) {
+        BATT_REQUIRE_OK(this->enter_leaf(std::move(*pinned_page)));
+        break;
+      }
+
       BATT_REQUIRE_OK(this->enter_node(std::move(*pinned_page)));
+
+      PathFrame& frame = this->path_frames_.back();
+
+      subtree_root =
+          llfs::PageIdSlot::from_page_id(frame.node_->get_child_id(frame.pivot_i_).unpack());
+
+      --subtree_height;
     }
 
     return OkStatus();

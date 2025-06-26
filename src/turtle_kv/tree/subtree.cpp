@@ -563,6 +563,15 @@ llfs::PackedPageId Subtree::packed_page_id_or_panic() const
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+llfs::PageIdSlot Subtree::page_id_slot_or_panic() const
+{
+  BATT_CHECK((batt::is_case<llfs::PageIdSlot>(this->impl_)));
+
+  return std::get<llfs::PageIdSlot>(this->impl_);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 bool Subtree::is_serialized() const
 {
   return batt::is_case<llfs::PageIdSlot>(this->impl_);

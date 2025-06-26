@@ -129,6 +129,8 @@ class Subtree
    */
   llfs::PackedPageId packed_page_id_or_panic() const;
 
+  llfs::PageIdSlot page_id_slot_or_panic() const;
+
   /** \brief Attempts to split the tree at the top level only; if successful, returns the new
    * right-sibling (i.e. key range _after_ this).
    *
