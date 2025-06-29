@@ -68,45 +68,28 @@ class StackMerger
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  explicit StackMerger(usize capacity = 0) noexcept
+  {
+    this->reserve(capacity);
+  }
+
   explicit StackMerger(const Slice<T>& items) noexcept
   {
-    static_assert(sizeof(T) >= 8);
-    static_assert(alignof(T) >= 8);
-
-    const usize n_items = items.size();
-
-    // Allocate storage.
-    //
-    if (n_items > this->static_array_.size()) {
-      this->begin_ = new ItemRef[items.size()];
-    } else {
-      this->begin_ = this->static_array_.data();
-    }
-
-    // Initialize item pointers.
-    //
-    for (usize i = 0; i < n_items; ++i) {
-      this->begin_[i] = Self::from_pointer(&items[i]);
-    }
-    this->end_ = this->begin_ + n_items;
-
-    // Make heap.
-    //
-    const usize end_i = (n_items + 1) / 3;
-    for (usize i = end_i; i > 0;) {
-      --i;
-      this->sift_down(i);
-    }
+    this->initialize(items, /*minimum_capacity=*/0);
   }
 
   ~StackMerger() noexcept
   {
-    if (this->begin_ != this->static_array_.data()) {
-      delete[] this->begin_;
-    }
+    this->release_storage();
   }
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  void reset(const Slice<T>& items, usize minimum_capacity = 0)
+  {
+    this->release_storage();
+    this->initialize(items, minimum_capacity);
+  }
 
   /** \brief Returns true iff the StackMerger is empty.
    */
@@ -151,6 +134,18 @@ class StackMerger
     this->sift_down(0);
   }
 
+  /** \brief Inserts a new stack item.
+   */
+  void insert(T* item)
+  {
+    const usize child_i = this->size();
+
+    *this->end_ = Self::from_pointer(item);
+    ++this->end_;
+
+    this->sift_up(child_i);
+  }
+
   /** \brief Returns a function which prints a human-friendly representation of this object.
    */
   auto dump_items() const
@@ -186,6 +181,50 @@ class StackMerger
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
+  void initialize(const Slice<T>& items, usize minimum_capacity)
+  {
+    const usize n_items = items.size();
+    this->reserve(std::max(minimum_capacity, n_items));
+
+    // Initialize item pointers.
+    //
+    for (usize i = 0; i < n_items; ++i) {
+      this->begin_[i] = Self::from_pointer(&items[i]);
+    }
+    this->end_ = this->begin_ + n_items;
+
+    // Make heap.
+    //
+    const usize end_i = (n_items + 1) / 3;
+    for (usize i = end_i; i > 0;) {
+      --i;
+      this->sift_down(i);
+    }
+  }
+
+  void release_storage()
+  {
+    if (this->begin_ != this->static_array_.data()) {
+      delete[] this->begin_;
+    }
+  }
+
+  /** \brief Initializes internal storage.
+   */
+  void reserve(usize capacity)
+  {
+    static_assert(sizeof(T) >= 8);
+    static_assert(alignof(T) >= 8);
+
+    // Allocate storage.
+    //
+    if (capacity > this->static_array_.size()) {
+      this->begin_ = new ItemRef[capacity];
+    } else {
+      this->begin_ = this->static_array_.data();
+    }
+  }
+
   /** \brief Returns true iff the left argument comes before the right in min-heap order.
    */
   BATT_ALWAYS_INLINE bool compare(ItemRef left_iptr, ItemRef right_iptr) const
@@ -239,6 +278,40 @@ class StackMerger
 
       std::swap(parent, *p_min);
       parent_i = i_min;
+    }
+  }
+
+  void sift_up(usize child_i)
+  {
+    DVLOG(1) << "sift_up(" << child_i << ")";
+
+    if (child_i == 0) {
+      return;
+    }
+
+    ItemRef* child = &(this->begin_[child_i]);
+
+    for (;;) {
+      const usize parent_i = Self::get_parent(child_i);
+      ItemRef& parent = this->begin_[parent_i];
+
+      DVLOG(1) << BATT_INSPECT(parent_i);
+
+      // child's siblings are known to be not-less-than parent, by the heap invariant; so, we only
+      // need to compare with parent and swap if they are out of order.
+      //
+      if (this->compare(parent, *child)) {
+        DVLOG(1) << "parent is less than child; stopping";
+        break;
+      }
+
+      std::swap(parent, *child);
+
+      if (parent_i == 0) {
+        break;
+      }
+      child = &parent;
+      child_i = parent_i;
     }
   }
 

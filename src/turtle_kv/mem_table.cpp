@@ -160,8 +160,7 @@ usize MemTable::scan_keys_impl(const KeyView& min_key,
 //
 bool MemTable::finalize() noexcept
 {
-  const bool prior_value = this->is_finalized_;
-  this->is_finalized_ = true;
+  const bool prior_value = this->is_finalized_.exchange(true);
   return prior_value == false;
 }
 
@@ -179,7 +178,7 @@ MergeCompactor::ResultSet</*decay_to_items=*/false> MemTable::compact() noexcept
   std::vector<EditView> edits_out;
   edits_out.reserve(total_keys);
 
-  const auto value_from_entry = [&](const MemTableEntry& entry) {
+  const auto value_from_entry = [this](const MemTableEntry& entry) {
     ValueView value = entry.value_;
     if (value.needs_combine()) {
       ConstBuffer slot_buffer = this->fetch_slot(entry.locator_);

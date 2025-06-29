@@ -80,7 +80,8 @@ using llfs::StableStringStore;
 
 using batt::getenv_as;
 
-constexpr usize kAverageScanSize = 50;
+constexpr usize kMinScanSize = 1;
+constexpr usize kMaxScanSize = 100;
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
@@ -134,17 +135,19 @@ void verify_table_point_queries(Table& expected_table, Table& actual_table, Rng&
 void verify_range_scan(LatencyMetric* scan_latency,
                        Table& expected_table,
                        const Slice<std::pair<KeyView, ValueView>>& actual_read_items,
-                       const KeyView& min_key)
+                       const KeyView& min_key,
+                       usize scan_len)
 {
-  std::array<std::pair<KeyView, ValueView>, kAverageScanSize> buffer;
+  std::array<std::pair<KeyView, ValueView>, kMaxScanSize> buffer;
   Optional<LatencyTimer> timer;
   if (scan_latency) {
     timer.emplace(*scan_latency);
   }
-  StatusOr<usize> n_read = expected_table.scan(min_key, as_slice(buffer));
+  StatusOr<usize> n_read = expected_table.scan(min_key, as_slice(buffer.data(), scan_len));
   timer = None;
   ASSERT_TRUE(n_read.ok()) << BATT_INSPECT(n_read);
   ASSERT_EQ(*n_read, actual_read_items.size());
+  EXPECT_LE(*n_read, scan_len);
 
   Slice<std::pair<KeyView, ValueView>> expected_read_items = as_slice(buffer.data(), *n_read);
 
@@ -305,6 +308,7 @@ void SubtreeBatchUpdateScenario::run()
   std::default_random_engine rng{this->seed};
 
   std::uniform_int_distribution<int> pick_bool{0, 1};
+  std::uniform_int_distribution<usize> pick_scan_len{1, 100};
 
   const usize max_i = getenv_as<usize>("TURTLE_TREE_TEST_BATCH_COUNT").value_or(225);
   const bool size_tiered =
@@ -441,19 +445,22 @@ void SubtreeBatchUpdateScenario::run()
         std::unique_ptr<llfs::PageCacheJob> scanner_page_job = page_cache->new_job();
         TreeScanner scanner{*scanner_page_job, root_ptr};
 
-        std::array<std::pair<KeyView, ValueView>, kAverageScanSize> scan_items_buffer;
+        const usize scan_len = pick_scan_len(rng);
+        std::array<std::pair<KeyView, ValueView>, kMaxScanSize> scan_items_buffer;
         KeyView min_key = update.result_set.get_min_key();
 
         scanner.seek_to(min_key);
         batt::StatusOr<usize> items_read =
-            BATT_COLLECT_LATENCY(scan_latency, scanner.scan_items(as_slice(scan_items_buffer)));
+            BATT_COLLECT_LATENCY(scan_latency,
+                                 scanner.scan_items(as_slice(scan_items_buffer.data(), scan_len)));
 
         BATT_CHECK(items_read.ok());
 
         ASSERT_NO_FATAL_FAILURE(verify_range_scan(nullptr,
                                                   expected_table,
                                                   as_slice(scan_items_buffer.data(), *items_read),
-                                                  min_key))
+                                                  min_key,
+                                                  scan_len))
             << BATT_INSPECT(i);
 
         // Verify CheckpointTreeScanner as well.
@@ -479,13 +486,17 @@ void SubtreeBatchUpdateScenario::run()
               kv_pair.first = item->key;
               kv_pair.second = item->value;
               ++n_read;
+              if (n_read == scan_len) {
+                break;
+              }
             }
           }
           ASSERT_NO_FATAL_FAILURE(verify_range_scan(nullptr,
                                                     expected_table,
                                                     as_slice(scan_items_buffer.data(), n_read),
-                                                    min_key))
-              << BATT_INSPECT(i) << BATT_INSPECT_STR(min_key);
+                                                    min_key,
+                                                    scan_len))
+              << BATT_INSPECT(i) << BATT_INSPECT_STR(min_key) << BATT_INSPECT(scan_len);
         }
       }
 

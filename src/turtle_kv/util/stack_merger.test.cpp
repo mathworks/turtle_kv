@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 
 #include <turtle_kv/import/env.hpp>
+#include <turtle_kv/import/optional.hpp>
 #include <turtle_kv/import/slice.hpp>
 
 #include <batteries/stream_util.hpp>
@@ -20,6 +21,7 @@ using namespace turtle_kv::int_types;
 
 using turtle_kv::as_slice;
 using turtle_kv::getenv_as;
+using turtle_kv::Optional;
 using turtle_kv::Slice;
 using turtle_kv::StackMerger;
 
@@ -44,7 +46,8 @@ class StackMergerTest : public ::testing::Test
 //
 TEST_F(StackMergerTest, HeapSort)
 {
-  for (usize trial = 0; trial < n_trials; ++trial) {
+  bool insert_each = false;
+  for (usize trial = 0; trial < n_trials; ++trial, insert_each = !insert_each) {
     // Generate a list of random numbers.
     //
     std::vector<i64> nums(100);
@@ -55,7 +58,17 @@ TEST_F(StackMergerTest, HeapSort)
 
     // Create a StackMerger from the random numbers.
     //
-    StackMerger<i64> m{as_slice(nums)};
+    Optional<StackMerger<i64>> opt_m;
+    if (insert_each) {
+      opt_m.emplace(nums.size());
+      for (i64& n : nums) {
+        opt_m->check_invariants();
+        opt_m->insert(&n);
+      }
+    } else {
+      opt_m.emplace(as_slice(nums));
+    }
+    StackMerger<i64>& m = *opt_m;
     m.check_invariants();
 
     EXPECT_FALSE(m.empty());
@@ -85,7 +98,8 @@ struct SliceFrontOrder {
 //
 TEST_F(StackMergerTest, KWiseMerge)
 {
-  for (usize trial = 0; trial < n_trials; ++trial) {
+  bool insert_each = false;
+  for (usize trial = 0; trial < n_trials; ++trial, insert_each = !insert_each) {
     // Generate a list of random numbers.
     //
     std::vector<i64> nums(100);
@@ -119,7 +133,18 @@ TEST_F(StackMergerTest, KWiseMerge)
 
     // Create a StackMerger from the sorted slices.
     //
-    StackMerger<Slice<i64>, SliceFrontOrder<i64>> m{as_slice(slices)};
+    Optional<StackMerger<Slice<i64>, SliceFrontOrder<i64>>> opt_m;
+    if (insert_each) {
+      opt_m.emplace(slices.size());
+      for (Slice<i64>& s : slices) {
+        opt_m->check_invariants();
+        opt_m->insert(&s);
+      }
+    } else {
+      opt_m.emplace(as_slice(slices));
+    }
+
+    auto& m = *opt_m;
     m.check_invariants();
 
     EXPECT_FALSE(m.empty());
