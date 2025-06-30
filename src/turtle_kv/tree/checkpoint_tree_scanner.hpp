@@ -371,7 +371,13 @@ class CheckpointTreeScanner
       slice->drop_front();
 
       if (slice->empty()) {
-        this->heap_.remove_first();
+        PathFrameLocation& location = this->frame_for_tier_[slice - this->tiers_.data()];
+        *slice = location.frame->pull_next(location.level_i);
+        if (slice->empty()) {
+          this->heap_.remove_first();
+        } else {
+          this->heap_.update_first();
+        }
       } else {
         this->heap_.update_first();
       }
