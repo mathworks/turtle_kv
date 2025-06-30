@@ -39,6 +39,8 @@ namespace turtle_kv {
 class KVStore : public Table
 {
  public:
+  friend class KVStoreScanner;
+
   struct Config {
     TreeOptions tree_options = TreeOptions::with_default_values();
     u64 initial_capacity_bytes = 0;

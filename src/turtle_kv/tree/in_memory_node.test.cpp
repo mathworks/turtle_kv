@@ -5,7 +5,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <turtle_kv/tree/checkpoint_tree_scanner.hpp>
+#include <turtle_kv/kv_store_scanner.hpp>
+
 #include <turtle_kv/tree/memory_storage.hpp>
 #include <turtle_kv/tree/pinning_page_loader.hpp>
 #include <turtle_kv/tree/subtree_table.hpp>
@@ -44,7 +45,6 @@ using ResultSet = turtle_kv::MergeCompactor::ResultSet<kDecayToItems>;
 using turtle_kv::BatchUpdate;
 using turtle_kv::BatchUpdateContext;
 using turtle_kv::bit_count;
-using turtle_kv::CheckpointTreeScanner;
 using turtle_kv::DecayToItem;
 using turtle_kv::EditView;
 using turtle_kv::global_max_key;
@@ -53,6 +53,7 @@ using turtle_kv::InMemoryNode;
 using turtle_kv::IsRoot;
 using turtle_kv::ItemView;
 using turtle_kv::KeyView;
+using turtle_kv::KVStoreScanner;
 using turtle_kv::LatencyMetric;
 using turtle_kv::LatencyTimer;
 using turtle_kv::make_memory_page_cache;
@@ -467,7 +468,7 @@ void SubtreeBatchUpdateScenario::run()
         //
         scan_items_buffer.fill(std::make_pair(KeyView{}, ValueView{}));
         {
-          CheckpointTreeScanner cts{
+          KVStoreScanner cts{
               *page_loader,
               root_ptr->page_id_slot_or_panic(),
               BATT_OK_RESULT_OR_PANIC(root_ptr->get_height(*page_loader)),

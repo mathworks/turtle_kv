@@ -220,8 +220,6 @@ void ART::insert(std::string_view key)
 //
 bool ART::contains(std::string_view key)
 {
-  VLOG(1) << "ART::contains(" << batt::c_str_literal(key) << ")";
-
   bool reset = true;
 
   const char* key_data = nullptr;
@@ -230,8 +228,6 @@ bool ART::contains(std::string_view key)
 
   for (;;) {
     if (reset) {
-      VLOG(1) << " -- (reset=true)";
-
       reset = false;
 
       key_data = key.data();
@@ -264,25 +260,16 @@ bool ART::contains(std::string_view key)
         return;
       }
 
-      VLOG(1) << " -- node.prefix = "
-              << batt::c_str_literal(std::string_view{node_prefix, node_prefix_len});
-
-      VLOG(1) << " -- key_data    = " << batt::c_str_literal(std::string_view{key_data, key_len});
-
       const usize common_len =
           find_common_prefix_len(node_prefix, node_prefix_len, key_data, key_len);
 
-      VLOG(1) << " --" << BATT_INSPECT(common_len) << BATT_INSPECT(key_len);
-
       if (common_len != node_prefix_len) {
-        VLOG(1) << " -- (partial prefix mismatch; not found)";
         done = true;
         result = false;
         return;
       }
 
       if (common_len == key_len) {
-        VLOG(1) << " -- key consumed;" << BATT_INSPECT(node_is_terminal);
         done = true;
         result = node_is_terminal;
         return;
@@ -305,7 +292,6 @@ bool ART::contains(std::string_view key)
       }
 
       if (next.p_ptr == nullptr || next.ptr == nullptr) {
-        VLOG(1) << BATT_INSPECT((void*)next.p_ptr) << BATT_INSPECT((void*)next.ptr);
         done = true;
         result = false;
         return;

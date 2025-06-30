@@ -3,6 +3,7 @@
 
 #include <turtle_kv/checkpoint_log.hpp>
 #include <turtle_kv/file_utils.hpp>
+#include <turtle_kv/kv_store_scanner.hpp>
 #include <turtle_kv/page_file.hpp>
 
 #include <turtle_kv/tree/checkpoint_tree_scanner.hpp>
@@ -658,131 +659,10 @@ StatusOr<usize> KVStore::scan(
     const KeyView& min_key,
     const Slice<std::pair<KeyView, ValueView>>& items_out) noexcept /*override*/
 {
-  const State* const observed_state = this->state_.load();
-  boost::intrusive_ptr<const State> pinned_state{observed_state};
-  ThreadContext& thread_context = this->per_thread_.get(this);
+  KVStoreScanner scanner{*this, min_key};
+  BATT_REQUIRE_OK(scanner.start());
 
-  const usize n_mem_tables = observed_state->deltas_.size() + 1;
-
-  using DeltaScannerMemory =
-      std::aligned_storage_t<sizeof(MemTable::Scanner), alignof(MemTable::Scanner)>;
-
-  // Allocate memory for MemTable scanners.
-  //
-  std::array<DeltaScannerMemory, 32> local_delta_scanners;
-  DeltaScannerMemory* delta_scanners_memory = local_delta_scanners.data();
-  if (n_mem_tables > local_delta_scanners.size()) {
-    delta_scanners_memory = new DeltaScannerMemory[n_mem_tables];
-  }
-
-  // Construct the delta scanners.
-  //
-  MemTable::Scanner* delta_scanners = reinterpret_cast<MemTable::Scanner*>(delta_scanners_memory);
-
-  usize delta_scanners_size = 0;
-
-  // Arrange for delta scanners to be deleted when done.
-  //
-  auto on_scope_exit = batt::finally([&] {
-    for (usize i = 0; i < delta_scanners_size; ++i) {
-      delta_scanners[i].~Scanner();
-    }
-    if (delta_scanners_memory != local_delta_scanners.data()) {
-      delete[] delta_scanners_memory;
-    }
-  });
-
-  for (; delta_scanners_size < n_mem_tables - 1; ++delta_scanners_size) {
-    const usize i = delta_scanners_size;
-    new (&delta_scanners_memory[i]) MemTable::Scanner{*observed_state->deltas_[i], min_key};
-  }
-
-  // Construct the scanner for the live MemTable.
-  //
-  new (&delta_scanners_memory[delta_scanners_size])
-      MemTable::Scanner{*observed_state->mem_table_, min_key};
-
-  ++delta_scanners_size;
-
-  // Create the merged delta scanner.
-  //
-  DeltasScanner deltas_scanner{as_slice(delta_scanners, delta_scanners_size), min_key};
-
-  // Create the tree scanner.
-  //
-  BATT_CHECK(observed_state->base_checkpoint_.tree()->is_serialized());
-
-  CheckpointTreeScanner checkpoint_scanner{
-      thread_context.get_page_loader(),
-      observed_state->base_checkpoint_.tree()->page_id_slot_or_panic(),
-      observed_state->base_checkpoint_.tree_height(),
-      min_key,
-  };
-
-  BATT_REQUIRE_OK(checkpoint_scanner.start());
-
-  // Merge items from deltas and checkpoint.
-  //
-  Optional<EditView> next_delta_edit = deltas_scanner.next();
-  Optional<EditView> next_checkpoint_edit = checkpoint_scanner.next();
-
-  usize n_read = 0;
-
-  const auto consume_one = [&items_out, &n_read](Optional<EditView>& next_edit, auto& scanner) {
-    items_out[n_read].first = next_edit->key;
-    items_out[n_read].second = next_edit->value;
-    next_edit = scanner.next();
-  };
-
-  const auto consume_rest = [&items_out, &n_read](Optional<EditView>& next_edit, auto& scanner) {
-    while (next_edit) {
-      items_out[n_read].first = next_edit->key;
-      items_out[n_read].second = next_edit->value;
-      ++n_read;
-      if (n_read == items_out.size()) {
-        break;
-      }
-      next_edit = scanner.next();
-    }
-  };
-
-  while (n_read < items_out.size()) {
-    if (!next_delta_edit) {
-      consume_rest(next_checkpoint_edit, checkpoint_scanner);
-      break;
-    }
-    if (!next_checkpoint_edit) {
-      consume_rest(next_delta_edit, deltas_scanner);
-      break;
-    }
-
-    switch (batt::compare(get_key(*next_delta_edit), get_key(*next_checkpoint_edit))) {
-      case batt::Order::Less:
-        consume_one(next_delta_edit, deltas_scanner);
-        break;
-
-      case batt::Order::Equal: {
-        EditView edit = combine(*next_delta_edit, *next_checkpoint_edit);
-        items_out[n_read].first = edit.key;
-        items_out[n_read].second = edit.value;
-        next_delta_edit = deltas_scanner.next();
-        next_checkpoint_edit = checkpoint_scanner.next();
-        break;
-      }
-
-      case batt::Order::Greater:
-        consume_one(next_checkpoint_edit, checkpoint_scanner);
-        break;
-
-      default:
-        BATT_PANIC() << "Bad comparison result!";
-        BATT_UNREACHABLE();
-    }
-
-    ++n_read;
-  }
-
-  return n_read;
+  return scanner.read(items_out);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

@@ -73,8 +73,6 @@ TEST(KVStoreTest, CreateAndOpen)
   std::thread test_thread{[&] {
     BATT_CHECK_OK(batt::pin_thread_to_cpu(0));
 
-    auto& scan_metrics = turtle_kv::ScanMetrics::instance();
-
     for (bool size_tiered : {false, true}) {
       std::filesystem::path test_kv_store_dir = "/mnt/kv-bakeoff/turtle_kv_Test/kv_store";
 
@@ -149,18 +147,6 @@ TEST(KVStoreTest, CreateAndOpen)
           ASSERT_TRUE(kv_store_opened.ok()) << BATT_INSPECT(kv_store_opened.status());
 
           KVStore& kv_store = **kv_store_opened;
-
-          auto on_scope_exit = batt::finally([&] {
-            std::cerr << std::endl
-                      << BATT_INSPECT(kv_store.metrics().scan_latency) << std::endl
-                      << BATT_INSPECT(kv_store.metrics().scan_init_latency) << std::endl
-                      << BATT_INSPECT(scan_metrics.checkpoint_set_next_item_latency) << std::endl
-                      << BATT_INSPECT(scan_metrics.deltas_set_next_item_latency) << std::endl
-                      << BATT_INSPECT(scan_metrics.memtable_set_next_item_latency) << std::endl
-                      << std::endl;
-
-            scan_metrics.reset();
-          });
 
           kv_store.set_checkpoint_distance(chi);
 
