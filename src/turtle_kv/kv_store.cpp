@@ -6,7 +6,6 @@
 #include <turtle_kv/kv_store_scanner.hpp>
 #include <turtle_kv/page_file.hpp>
 
-#include <turtle_kv/tree/checkpoint_tree_scanner.hpp>
 #include <turtle_kv/tree/filter_builder.hpp>
 #include <turtle_kv/tree/in_memory_node.hpp>
 #include <turtle_kv/tree/leaf_page_view.hpp>
