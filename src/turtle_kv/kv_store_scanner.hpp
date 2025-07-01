@@ -77,6 +77,7 @@ class KVStoreScanner
     std::variant<NoneType,
                  MemTableScanState<ART::Synchronized::kTrue>,
                  MemTableScanState<ART::Synchronized::kFalse>,
+                 Slice<const EditView>,
                  TreeLevelScanState>
         state_impl;
 
@@ -91,6 +92,8 @@ class KVStoreScanner
     explicit ScanLevel(DeltaMemTableTag,
                        MemTable& mem_table,
                        ART::Scanner<ART::Synchronized::kFalse>& art_scanner) noexcept;
+
+    explicit ScanLevel(const Slice<const EditView>& edit_view_slice) noexcept;
 
     //----- --- -- -  -  -   -
 

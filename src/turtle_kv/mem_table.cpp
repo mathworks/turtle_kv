@@ -172,6 +172,22 @@ MergeCompactor::ResultSet</*decay_to_items=*/false> MemTable::compact() noexcept
 
   BATT_CHECK(this->is_finalized_);
 
+  for (;;) {
+    const u32 observed = this->compaction_state_.fetch_or(Self::kCompactionState_InProgress);
+    if (observed == Self::kCompactionState_Todo) {
+      break;
+    }
+    if (observed == Self::kCompactionState_Complete) {
+      return this->compacted_edits_;
+    }
+    BATT_CHECK_EQ(observed, Self::kCompactionState_InProgress);
+  }
+
+  auto on_scope_exit = batt::finally([&] {
+    const u32 locked_state = this->compaction_state_.fetch_or(kCompactionState_Complete);
+    BATT_CHECK_EQ(locked_state, Self::kCompactionState_InProgress);
+  });
+
   usize total_keys = 0;
   total_keys = this->hash_index_.size();
 
@@ -234,10 +250,9 @@ MergeCompactor::ResultSet</*decay_to_items=*/false> MemTable::compact() noexcept
     std::sort(edits_out.begin(), edits_out.end(), KeyOrder{});
   }
 
-  MergeCompactor::ResultSet</*decay_to_items=*/false> result_set;
-  result_set.append(std::move(edits_out));
+  this->compacted_edits_.append(std::move(edits_out));
 
-  return result_set;
+  return this->compacted_edits_;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -251,6 +266,45 @@ ConstBuffer MemTable::fetch_slot(u32 locator) const noexcept
   const usize slot_index = (locator & 0xffff);
 
   return this->blocks_[block_index]->get_slot(slot_index);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Optional<Slice<const EditView>> MemTable::poll_compacted_edits() const
+{
+  if (this->compaction_state_.load() != Self::kCompactionState_Complete) {
+    return None;
+  }
+  return this->compacted_edits_slice_impl();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Slice<const EditView> MemTable::await_compacted_edits() const
+{
+  while (this->compaction_state_.load() != Self::kCompactionState_Complete) {
+    continue;
+  }
+  return this->compacted_edits_slice_impl();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Slice<const EditView> MemTable::compacted_edits_slice_impl() const
+{
+  MergeCompactor::ResultSet</*decay_to_items=*/false>::range_type flat_edits =
+      this->compacted_edits_.get();
+
+  Flatten<const Chunk<const EditView*>*, const EditView*> flat_edits_begin = flat_edits.begin();
+  Flatten<const Chunk<const EditView*>*, const EditView*> flat_edits_end = flat_edits.end();
+
+  const Chunk<const EditView*>* chunks_begin = flat_edits_begin.chunk_iter_;
+  const Chunk<const EditView*>* chunks_end = flat_edits_end.chunk_iter_;
+
+  BATT_CHECK_EQ(std::distance(chunks_begin, chunks_end), 1);
+  BATT_CHECK_EQ(flat_edits_begin.cached_chunk_.offset, 0);
+
+  return flat_edits_begin.cached_chunk_.items;
 }
 
 }  // namespace turtle_kv

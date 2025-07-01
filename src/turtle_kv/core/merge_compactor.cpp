@@ -889,17 +889,32 @@ BoxedSeq<EditSlice> MergeCompactor::ResultSet<kDecayToItems>::live_edit_slices(
     return seq::Empty<EditSlice>{} | seq::boxed();
   }
 
-  auto rest_of_chunks = as_seq(as_slice(std::next(chunks_begin), chunks_end))  //
-                        | seq::map([](const Chunk<const EditView*>& chunk) -> EditSlice {
-                            return EditSlice{chunk.items};
-                          });
-
   Chunk<const EditView*> first_chunk = *chunks_begin;
 
   const EditView* first_chunk_end = first_chunk.items.end();
 
   const EditView* first_edit =
       std::lower_bound(first_chunk.items.begin(), first_chunk_end, lower_bound, KeyOrder{});
+
+  //----- --- -- -  -  -   -
+
+  auto rest_of_chunks_begin = std::next(chunks_begin);
+
+  if (rest_of_chunks_begin == chunks_end) {
+    if (first_edit == first_chunk_end) {
+      return seq::Empty<EditSlice>{} | seq::boxed();
+    }
+
+    return seq::single_item(EditSlice{as_slice(first_edit, first_chunk_end)})  //
+           | seq::boxed();
+  }
+
+  //----- --- -- -  -  -   -
+
+  auto rest_of_chunks = as_seq(as_slice(rest_of_chunks_begin, chunks_end))  //
+                        | seq::map([](const Chunk<const EditView*>& chunk) -> EditSlice {
+                            return EditSlice{chunk.items};
+                          });
 
   if (first_edit == first_chunk.items.end()) {
     return std::move(rest_of_chunks) | seq::boxed();

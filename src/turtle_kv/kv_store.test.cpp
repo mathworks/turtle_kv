@@ -5,6 +5,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <turtle_kv/core/testing/generate.hpp>
 #include <turtle_kv/testing/workload.test.hpp>
 
 #include <turtle_kv/scan_metrics.hpp>
@@ -31,7 +32,9 @@ using turtle_kv::StdMapTable;
 using turtle_kv::Table;
 using turtle_kv::ValueView;
 using turtle_kv::testing::get_project_file;
+using turtle_kv::testing::RandomStringGenerator;
 using turtle_kv::testing::run_workload;
+using turtle_kv::testing::SequentialStringGenerator;
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
@@ -195,6 +198,97 @@ TEST(KVStoreTest, StdMapWorkloadTest)
   EXPECT_GT(op_count, 100000);
 
   LOG(INFO) << BATT_INSPECT(op_count);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+TEST(KVStoreTest, ScanStressTest)
+{
+  const usize kNumKeys = 10 * 1000 * 1000;
+  const double kNumScansPerKey = 150;
+  const usize kMinScanLenLog2 = 0;
+  const usize kMaxScanLenLog2 = 14;
+
+  std::default_random_engine rng{/*seed=*/1};
+  RandomStringGenerator generate_key;
+  SequentialStringGenerator generate_value{100};
+  std::uniform_int_distribution<usize> pick_scan_len_log2{kMinScanLenLog2, kMaxScanLenLog2};
+
+  StdMapTable expected_table;
+
+  std::filesystem::path test_kv_store_dir = "/mnt/kv-bakeoff/turtle_kv_Test/kv_scan_stress";
+
+  KVStore::Config kv_store_config;
+
+  kv_store_config.initial_capacity_bytes = 512 * kMiB;
+  kv_store_config.change_log_size_bytes = 512 * kMiB;
+
+  auto& tree_options = kv_store_config.tree_options;
+
+  tree_options.set_node_size(4 * kKiB);
+  tree_options.set_leaf_size(1 * kMiB);
+  tree_options.set_key_size_hint(24);
+  tree_options.set_value_size_hint(10);
+
+  Status create_status = KVStore::create(test_kv_store_dir, kv_store_config, RemoveExisting{true});
+
+  ASSERT_TRUE(create_status.ok()) << BATT_INSPECT(create_status);
+
+  StatusOr<std::unique_ptr<KVStore>> open_result = KVStore::open(test_kv_store_dir, tree_options);
+
+  ASSERT_TRUE(open_result.ok()) << BATT_INSPECT(open_result.status());
+
+  KVStore& actual_table = **open_result;
+
+  actual_table.set_checkpoint_distance(5);
+
+  usize n_scans = 0;
+
+  for (usize i = 0; i < kNumKeys; ++i) {
+    std::string key = generate_key(rng);
+    std::string value = generate_value();
+
+    Status expected_put_status = expected_table.put(KeyView{key}, ValueView::from_str(value));
+    Status actual_put_status = actual_table.put(KeyView{key}, ValueView::from_str(value));
+
+    ASSERT_TRUE(expected_put_status.ok()) << BATT_INSPECT(expected_put_status);
+    ASSERT_TRUE(actual_put_status.ok()) << BATT_INSPECT(actual_put_status);
+
+    const usize target_scans = double(i + 1) * kNumScansPerKey;
+    for (; n_scans < target_scans; ++n_scans) {
+      std::string min_key = generate_key(rng);
+
+      std::uniform_int_distribution<usize> pick_scan_len{1, usize{1} << pick_scan_len_log2(rng)};
+      const usize scan_len = pick_scan_len(rng);
+
+      std::vector<std::pair<KeyView, ValueView>> expected_scan_result(scan_len);
+      std::vector<std::pair<KeyView, ValueView>> actual_scan_result(scan_len);
+
+      StatusOr<usize> expected_n = expected_table.scan(min_key, as_slice(expected_scan_result));
+      StatusOr<usize> actual_n = actual_table.scan(min_key, as_slice(actual_scan_result));
+
+      ASSERT_TRUE(expected_n.ok());
+      ASSERT_TRUE(actual_n.ok());
+      ASSERT_EQ(*expected_n, *actual_n);
+
+      const usize n = *expected_n;
+      for (usize k = 0; k < n; ++k) {
+        if (actual_scan_result[k] != expected_scan_result[k]) {
+          StatusOr<ValueView> v = actual_table.get(expected_scan_result[k].first);
+          EXPECT_TRUE(v.ok());
+          if (v.ok()) {
+            EXPECT_EQ(*v, expected_scan_result[k].second);
+          }
+        }
+        ASSERT_EQ(actual_scan_result[k], expected_scan_result[k])
+            << BATT_INSPECT(k) << BATT_INSPECT(i) << BATT_INSPECT(n_scans)
+            << BATT_INSPECT_STR(min_key) << BATT_INSPECT(expected_n) << BATT_INSPECT(actual_n)
+            << BATT_INSPECT(scan_len);
+      }
+    }
+  }
+
+  LOG(INFO) << BATT_INSPECT(n_scans);
 }
 
 }  // namespace

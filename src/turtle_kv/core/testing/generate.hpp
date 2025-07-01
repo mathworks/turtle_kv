@@ -120,6 +120,42 @@ class RandomStringGenerator : public MinMaxSize<256>
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 //
+class SequentialStringGenerator
+{
+ public:
+  SequentialStringGenerator(usize len) noexcept : buffer_(len, '_')
+  {
+  }
+
+  std::string operator()()
+  {
+    char* p = this->buffer_.data();
+    char* end = p + this->buffer_.size();
+    for (;;) {
+      if (*p == '_') {
+        *p = 'a';
+        break;
+      }
+      *p += 1;
+      if (*p > 'z') {
+        *p = '_';
+        ++p;
+        if (p == end) {
+          break;
+        }
+      } else {
+        break;
+      }
+    }
+    return std::string(buffer_.data(), buffer_.size());
+  }
+
+ private:
+  std::vector<char> buffer_;
+};
+
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+//
 class RandomResultSetGenerator : public MinMaxSize<usize{1} << 24>
 {
  public:

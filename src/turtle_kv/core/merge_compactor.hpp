@@ -132,6 +132,9 @@ class MergeCompactor : public MergeCompactorBase
 
     using value_type = std::conditional_t<kDecayToItems, ItemView, EditView>;
 
+    using range_type =
+        boost::iterator_range<Flatten<const Chunk<const value_type*>*, const value_type*>>;
+
     static ResultSet from(OutputBuffer<kDecayToItems>&& output);
 
     /** \brief Returns the concatenation of the passed ResultSet objects, consuming them in the
@@ -149,7 +152,7 @@ class MergeCompactor : public MergeCompactorBase
     ResultSet(ResultSet&&) = default;
     ResultSet& operator=(ResultSet&&) = default;
 
-    auto get() const
+    range_type get() const
     {
       return flatten(this->chunks_.data(), this->chunks_.data() + this->chunks_.size() - 1);
     }

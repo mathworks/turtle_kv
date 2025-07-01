@@ -37,6 +37,8 @@ BATT_STATIC_ASSERT_TYPE_EQ(KeyView, std::string_view);
 class MemTable : public batt::RefCounted<MemTable>
 {
  public:
+  using Self = MemTable;
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   struct RuntimeOptions {
@@ -66,6 +68,12 @@ class MemTable : public batt::RefCounted<MemTable>
   /** \brief The number of change log block slots to pre-allocate in this object.
    */
   static constexpr usize kBlockListPreAllocSize = 4096;
+
+  //----- --- -- -  -  -   -
+
+  static constexpr u32 kCompactionState_Todo = 0;
+  static constexpr u32 kCompactionState_InProgress = 1;
+  static constexpr u32 kCompactionState_Complete = 3;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -153,6 +161,16 @@ class MemTable : public batt::RefCounted<MemTable>
     return this->ordered_index_;
   }
 
+  /** \brief Returns the sorted, compacted edits of this MemTable as a single Slice, if compact()
+   * has completed; None otherwise.  This function does not block.
+   */
+  Optional<Slice<const EditView>> poll_compacted_edits() const;
+
+  /** \brief Waits for compacted edits to become available, then returns them.  Does not trigger
+   * compaction; only waits for it to be completed.
+   */
+  Slice<const EditView> await_compacted_edits() const;
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
   struct StorageImpl {
@@ -178,6 +196,8 @@ class MemTable : public batt::RefCounted<MemTable>
 
   ConstBuffer fetch_slot(u32 locator) const noexcept;
 
+  Slice<const EditView> compacted_edits_slice_impl() const;
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   std::atomic<bool> is_finalized_;
@@ -201,6 +221,10 @@ class MemTable : public batt::RefCounted<MemTable>
   absl::Mutex block_list_mutex_;
 
   batt::SmallVec<ChangeLogBlock*, MemTable::kBlockListPreAllocSize> blocks_;
+
+  std::atomic<u32> compaction_state_{0};
+
+  MergeCompactor::ResultSet</*decay_to_items=*/false> compacted_edits_;
 };
 
 // #=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++

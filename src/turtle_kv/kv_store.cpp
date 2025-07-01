@@ -581,6 +581,7 @@ StatusOr<ValueView> KVStore::get(const KeyView& key) noexcept /*override*/
   if (value) {
     if (!value->needs_combine()) {
       this->metrics_.mem_table_get_count.add(1);
+      // VLOG(1) << "found key " << batt::c_str_literal(key) << " in active MemTable";
       return *value;
     }
   }
@@ -597,6 +598,8 @@ StatusOr<ValueView> KVStore::get(const KeyView& key) noexcept /*override*/
                                                                   delta->finalized_get(key));
 
     if (delta_value) {
+      // VLOG(1) << "found key " << batt::c_str_literal(key) << " in delta MemTable " << i << "/"
+      //         << observed_state->deltas_.size();
       if (value) {
         *value = combine(*value, *delta_value);
         if (!value->needs_combine()) {
@@ -636,6 +639,7 @@ StatusOr<ValueView> KVStore::get(const KeyView& key) noexcept /*override*/
                                   pinned_state->base_checkpoint_.find_key(query));
 
   if (value_from_checkpoint.ok()) {
+    // VLOG(1) << "found key " << batt::c_str_literal(key) << " in checkpoint tree";
     this->metrics_.checkpoint_get_count.add(1);
     if (value) {
       return combine(*value, *value_from_checkpoint);

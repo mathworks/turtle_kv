@@ -10,6 +10,7 @@
 #include <batteries/static_assert.hpp>
 #include <batteries/utility.hpp>
 
+#include <ostream>
 #include <string_view>
 
 namespace turtle_kv {
@@ -148,6 +149,12 @@ __attribute__((packed));
 
 BATT_STATIC_ASSERT_EQ(sizeof(PackedKeyValue), 4);
 BATT_STATIC_ASSERT_EQ(alignof(PackedKeyValue), 4);
+
+inline std::ostream& operator<<(std::ostream& out, const PackedKeyValue& kv)
+{
+  return out << "{.key=" << batt::c_str_literal(kv.key_view()) << ", .value=" << kv.value_view()
+             << ",}";
+}
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
