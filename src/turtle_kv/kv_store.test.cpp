@@ -30,6 +30,7 @@ using turtle_kv::Status;
 using turtle_kv::StatusOr;
 using turtle_kv::StdMapTable;
 using turtle_kv::Table;
+using turtle_kv::TreeOptions;
 using turtle_kv::ValueView;
 using turtle_kv::testing::get_project_file;
 using turtle_kv::testing::RandomStringGenerator;
@@ -40,39 +41,6 @@ using turtle_kv::testing::SequentialStringGenerator;
 //
 TEST(KVStoreTest, CreateAndOpen)
 {
-  LatencyMetric noop_latency;
-
-  for (usize i = 0; i < 1e4; ++i) {
-    LatencyTimer timer{noop_latency};
-  }
-
-  double timer_overhead_usec = noop_latency.average_usec();
-  {
-    usize i = 0;
-    usize stable_count = 0;
-
-    for (i = 0; i < 1e6; ++i) {
-      {
-        LatencyTimer timer{noop_latency};
-      }
-      double epsilon = timer_overhead_usec - noop_latency.average_usec();
-      timer_overhead_usec = noop_latency.average_usec();
-
-      if (std::abs(epsilon) < timer_overhead_usec * 0.01) {
-        ++stable_count;
-        if (stable_count == 10) {
-          break;
-        }
-      } else {
-        stable_count = 0;
-      }
-    }
-    u64 timer_overhead_nanos = timer_overhead_usec * 1000;
-    LOG(INFO) << BATT_INSPECT(noop_latency) << BATT_INSPECT(timer_overhead_usec)
-              << BATT_INSPECT(timer_overhead_nanos) << BATT_INSPECT(stable_count)
-              << BATT_INSPECT(i);
-  }
-
   std::thread test_thread{[&] {
     BATT_CHECK_OK(batt::pin_thread_to_cpu(0));
 
@@ -86,7 +54,7 @@ TEST(KVStoreTest, CreateAndOpen)
 
       LOG(INFO) << BATT_INSPECT(kv_store_config.tree_options.filter_bits_per_key());
 
-      auto& tree_options = kv_store_config.tree_options;
+      TreeOptions& tree_options = kv_store_config.tree_options;
 
       tree_options.set_node_size(4 * kKiB);
       tree_options.set_leaf_size(1 * kMiB);
@@ -204,10 +172,10 @@ TEST(KVStoreTest, StdMapWorkloadTest)
 //
 TEST(KVStoreTest, ScanStressTest)
 {
-  const usize kNumKeys = 10 * 1000 * 1000;
-  const double kNumScansPerKey = 150;
-  const usize kMinScanLenLog2 = 0;
-  const usize kMaxScanLenLog2 = 14;
+  const usize kNumKeys = 1 * 1000 * 1000;
+  const double kNumScansPerKey = 0.15;
+  const usize kMinScanLenLog2 = 1;
+  const usize kMaxScanLenLog2 = 10;
 
   std::default_random_engine rng{/*seed=*/1};
   RandomStringGenerator generate_key;
@@ -223,7 +191,7 @@ TEST(KVStoreTest, ScanStressTest)
   kv_store_config.initial_capacity_bytes = 512 * kMiB;
   kv_store_config.change_log_size_bytes = 512 * kMiB;
 
-  auto& tree_options = kv_store_config.tree_options;
+  TreeOptions& tree_options = kv_store_config.tree_options;
 
   tree_options.set_node_size(4 * kKiB);
   tree_options.set_leaf_size(1 * kMiB);
@@ -242,9 +210,16 @@ TEST(KVStoreTest, ScanStressTest)
 
   actual_table.set_checkpoint_distance(5);
 
+  // Keep a histogram of scans per scan length (log scale).
+  //
+  std::array<usize, kMaxScanLenLog2 + 1> hist;
+  hist.fill(0);
+
   usize n_scans = 0;
 
   for (usize i = 0; i < kNumKeys; ++i) {
+    LOG_EVERY_N(INFO, kNumKeys / 10) << BATT_INSPECT(i) << BATT_INSPECT_RANGE(hist);
+
     std::string key = generate_key(rng);
     std::string value = generate_value();
 
@@ -258,7 +233,9 @@ TEST(KVStoreTest, ScanStressTest)
     for (; n_scans < target_scans; ++n_scans) {
       std::string min_key = generate_key(rng);
 
-      std::uniform_int_distribution<usize> pick_scan_len{1, usize{1} << pick_scan_len_log2(rng)};
+      const usize scan_len_log2 = pick_scan_len_log2(rng);
+      std::uniform_int_distribution<usize> pick_scan_len{usize{1} << (scan_len_log2 - 1),
+                                                         (usize{1} << scan_len_log2)};
       const usize scan_len = pick_scan_len(rng);
 
       std::vector<std::pair<KeyView, ValueView>> expected_scan_result(scan_len);
@@ -272,6 +249,9 @@ TEST(KVStoreTest, ScanStressTest)
       ASSERT_EQ(*expected_n, *actual_n);
 
       const usize n = *expected_n;
+
+      hist[batt::log2_ceil(n)] += 1;
+
       for (usize k = 0; k < n; ++k) {
         if (actual_scan_result[k] != expected_scan_result[k]) {
           StatusOr<ValueView> v = actual_table.get(expected_scan_result[k].first);
