@@ -337,6 +337,17 @@ struct InMemoryNode {
     //+++++++++++-+-+--+----- --- -- -  -  -   -
 
     SmallFn<void(std::ostream&)> dump() const;
+
+    usize count_non_empty_levels() const
+    {
+      usize count = 0;
+      for (const Level& level : this->levels) {
+        if (!batt::is_case<EmptyLevel>(level)) {
+          ++count;
+        }
+      }
+      return count;
+    }
   };
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -

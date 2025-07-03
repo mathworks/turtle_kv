@@ -1041,7 +1041,8 @@ StatusOr<std::unique_ptr<InMemoryNode>> InMemoryNode::try_split(BatchUpdateConte
       // of segments/levels, then we can try fixing this by re-compacting the entire update
       // buffer.
       //
-      if (compacting_levels_might_fix(this->get_viability())) {
+      if (compacting_levels_might_fix(this->get_viability()) &&
+          this->update_buffer.count_non_empty_levels() > 1) {
         BATT_REQUIRE_OK(this->compact_update_buffer_levels(context));
         return this->try_split(context);
       }
