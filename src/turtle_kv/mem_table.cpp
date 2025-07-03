@@ -301,10 +301,15 @@ Slice<const EditView> MemTable::compacted_edits_slice_impl() const
   const Chunk<const EditView*>* chunks_begin = flat_edits_begin.chunk_iter_;
   const Chunk<const EditView*>* chunks_end = flat_edits_end.chunk_iter_;
 
-  BATT_CHECK_EQ(std::distance(chunks_begin, chunks_end), 1);
-  BATT_CHECK_EQ(flat_edits_begin.cached_chunk_.offset, 0);
+  const isize n_chunks = std::distance(chunks_begin, chunks_end);
 
-  return flat_edits_begin.cached_chunk_.items;
+  if (n_chunks == 1) {
+    BATT_CHECK_EQ(flat_edits_begin.cached_chunk_.offset, 0);
+    return flat_edits_begin.cached_chunk_.items;
+  }
+
+  BATT_CHECK_EQ(n_chunks, 0);
+  return {};
 }
 
 }  // namespace turtle_kv
