@@ -493,6 +493,8 @@ Status InMemoryNode::flush_to_pivot(BatchUpdateContext& update_context, i32 pivo
   BATT_ASSIGN_OK_RESULT(BatchUpdate child_update,
                         this->collect_pivot_batch(update_context, pivot_i, pivot_key_range));
 
+  this->latest_flush_pivot_i_ = pivot_i;
+
   const usize orig_child_update_byte_size = child_update.get_byte_size();
 
   // Take the largest prefix of the merged edits as possible, without making the flushed batch too
@@ -1037,13 +1039,41 @@ StatusOr<std::unique_ptr<InMemoryNode>> InMemoryNode::try_split(BatchUpdateConte
         auto reset_now = std::move(reset_this_on_failure);
       }
 
+      // Check to see whether various fixes might avoid the failure to split...
+      //
+      bool retry_split = false;
+
       // If the only thing preventing us from splitting the node is related to there being a lot
       // of segments/levels, then we can try fixing this by re-compacting the entire update
       // buffer.
       //
-      if (compacting_levels_might_fix(this->get_viability()) &&
+      if (!retry_split && compacting_levels_might_fix(this->get_viability()) &&
           this->update_buffer.count_non_empty_levels() > 1) {
         BATT_REQUIRE_OK(this->compact_update_buffer_levels(context));
+        retry_split = true;
+      }
+
+      // If we need to reduce the number of levels, and there is enough pending update data to
+      // reflush to the most recently flushed pivot, then try doing that.
+      //
+      if (!retry_split) {
+        // The reason we are only considering the latest pivot to be flushed is that we are
+        // probably inside try_split because of another flush, and we don't want to deal with any
+        // issues arising from two splits (i.e., different pivots) at once.
+        //
+        const i32 reflush_pivot_i = this->latest_flush_pivot_i_.value_or((i32)this->pivot_count());
+
+        const bool recently_flushed = reflush_pivot_i < (i32)this->pivot_count();
+
+        const bool can_reflush = recently_flushed && (this->pending_bytes[reflush_pivot_i] >=
+                                                      this->tree_options.min_flush_size());
+        if (can_reflush) {
+          BATT_REQUIRE_OK(this->flush_to_pivot(context, reflush_pivot_i));
+          retry_split = true;
+        }
+      }
+
+      if (retry_split) {
         return this->try_split(context);
       }
 

@@ -360,6 +360,7 @@ struct InMemoryNode {
   SmallVec<llfs::PinnedPage, 64> child_pages;
   SmallVec<usize, 64> pending_bytes;
   u64 pending_bytes_is_exact = 0;
+  Optional<i32> latest_flush_pivot_i_;
   SmallVec<KeyView, 65> pivot_keys_;
   KeyView max_key_;
   KeyView common_key_prefix;
