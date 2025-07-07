@@ -9,3 +9,15 @@ TurtleKV is different.  Instead of using a write- or read-optimized on-disk stru
 Today, TurtleKV offers excellent performance relative to other state-of-the-art key-value stores.  Because its tuning optimization strategy is based on memory allocation rather than on-disk structure, applications that use it to store data can continue to run faster and more efficiently as TurtleKV is updated and improved, with no requirement to migrate to a new data format.
 
 TurtleKV uses the [Conan package management system](https://conan.io/), and is built on MathWorks' [Low Level File System (LLFS)](https://github.com/mathworks/llfs/) library.
+
+## Getting Started
+
+**Note: TurtleKV is currently only supported on x86_64 architecture, on the GNU/Linux operating system.**
+
+1. Install the `cor` command line tool ([instructions here](https://gitlab.com/batteriesincluded/batt-cli#cor-launcher-cor-toolkit-launcher-front-end))
+2. Clone the TurtleKV repo and `cd` into the cloned directory
+3. Build (`cor build`)
+4. (Optional) Run tests (`cor test`)
+5. Export to the local Conan cache (`cor export` or `cor export-pkg`)
+6. Include a dependency to `turtle_kv/[>=0.0.20 <1]` in your conanfile.py or conanfile.txt
+
