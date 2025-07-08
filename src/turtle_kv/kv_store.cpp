@@ -1092,6 +1092,15 @@ std::function<void(std::ostream&)> KVStore::debug_info() noexcept
           total_get_count;
     }
 
+    const auto print_page_alloc_info = [&](std::ostream& out) {
+      for (const llfs::PageDeviceEntry* entry : cache.all_devices()) {
+        if (!entry->can_alloc || !entry->arena.has_allocator()) {
+          continue;
+        }
+        out << entry->arena.allocator().debug_info() << "\n";
+      }
+    };
+
     double page_reads_per_get_4k = page_reads_per_get[12];
     double page_reads_per_get_8k = page_reads_per_get[13];
     double page_reads_per_get_16k = page_reads_per_get[14];
@@ -1231,6 +1240,8 @@ std::function<void(std::ostream&)> KVStore::debug_info() noexcept
         << BATT_INSPECT(page_reads_per_get_16m) << "\n"                                //
         << BATT_INSPECT(page_reads_per_get_32m) << "\n"                                //
         << BATT_INSPECT(page_reads_per_get_64m) << "\n"                                //
+        << "\n"                                                                        //
+        << print_page_alloc_info                                                       //
         << "\n"                                                                        //
         << dump_memory_stats() << "\n"                                                 //
         ;
