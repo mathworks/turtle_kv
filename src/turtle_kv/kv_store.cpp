@@ -322,7 +322,8 @@ u64 query_page_loader_reset_every_n()
                               const RuntimeOptions& runtime_options,
                               std::unique_ptr<ChangeLogWriter>&& change_log_writer,
                               std::unique_ptr<llfs::Volume>&& checkpoint_log) noexcept
-    : task_scheduler_{task_scheduler}
+    : metrics_{}
+    , task_scheduler_{task_scheduler}
     , worker_pool_{worker_pool}
     , scoped_io_ring_{std::move(scoped_io_ring)}
     , storage_context_{std::move(storage_context)}
@@ -337,6 +338,7 @@ u64 query_page_loader_reset_every_n()
     , state_{[&] {
       State* state = new State{};
       state->mem_table_.reset(new MemTable{
+          this->metrics_,
           /*max_byte_size=*/this->tree_options_.leaf_data_size(),
           DeltaBatchId{1}.to_mem_table_id(),
       });
@@ -696,6 +698,7 @@ Status KVStore::update_checkpoint(const State* observed_state)
   BATT_CHECK_EQ(new_state->use_count(), 1);
 
   new_state->mem_table_.reset(new MemTable{
+      this->metrics_,
       /*max_byte_size=*/this->tree_options_.flush_size(),
       next_batch_id.to_mem_table_id(),
   });
@@ -1242,6 +1245,9 @@ std::function<void(std::ostream&)> KVStore::debug_info() noexcept
         << BATT_INSPECT(page_reads_per_get_64m) << "\n"                                //
         << "\n"                                                                        //
         << print_page_alloc_info                                                       //
+        << "\n"                                                                        //
+        << BATT_INSPECT(kv_store.mem_table_alloc) << "\n"                              //
+        << BATT_INSPECT(kv_store.mem_table_free) << "\n"                               //
         << "\n"                                                                        //
         << dump_memory_stats() << "\n"                                                 //
         ;

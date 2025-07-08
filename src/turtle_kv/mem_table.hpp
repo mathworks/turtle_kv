@@ -2,6 +2,7 @@
 
 #include <turtle_kv/change_log_writer.hpp>
 #include <turtle_kv/concurrent_hash_index.hpp>
+#include <turtle_kv/kv_store_metrics.hpp>
 #include <turtle_kv/mem_table_entry.hpp>
 #include <turtle_kv/scan_metrics.hpp>
 
@@ -110,7 +111,7 @@ class MemTable : public batt::RefCounted<MemTable>
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  explicit MemTable(usize max_byte_size, Optional<u64> id = None) noexcept;
+  explicit MemTable(KVStoreMetrics& metrics, usize max_byte_size, Optional<u64> id = None) noexcept;
 
   MemTable(const MemTable&) = delete;
   MemTable& operator=(const MemTable&) = delete;
@@ -199,6 +200,8 @@ class MemTable : public batt::RefCounted<MemTable>
   Slice<const EditView> compacted_edits_slice_impl() const;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  KVStoreMetrics& metrics_;
 
   std::atomic<bool> is_finalized_;
 

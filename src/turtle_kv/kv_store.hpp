@@ -222,6 +222,8 @@ class KVStore : public Table
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  KVStoreMetrics metrics_;
+
   batt::TaskScheduler& task_scheduler_;
 
   batt::WorkerPool& worker_pool_;
@@ -251,8 +253,6 @@ class KVStore : public Table
   batt::CpuCacheLineIsolated<batt::Watch<usize>> deltas_size_;
 
   std::shared_ptr<batt::Grant::Issuer> checkpoint_token_pool_;
-
-  KVStoreMetrics metrics_;
 
   batt::Watch<bool> halt_{false};
 

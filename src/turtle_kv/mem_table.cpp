@@ -27,8 +27,11 @@ namespace turtle_kv {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-/*explicit*/ MemTable::MemTable(usize max_byte_size, Optional<u64> id) noexcept
-    : is_finalized_{false}
+/*explicit*/ MemTable::MemTable(KVStoreMetrics& metrics,
+                                usize max_byte_size,
+                                Optional<u64> id) noexcept
+    : metrics_{metrics}
+    , is_finalized_{false}
     , hash_index_{max_byte_size /
                   getenv_as<usize>("turtlekv_memtable_hash_bucket_div").value_or(32)}
     , max_byte_size_{BATT_CHECKED_CAST(i64, max_byte_size)}
@@ -41,6 +44,7 @@ namespace turtle_kv {
     , block_list_mutex_{}
     , blocks_{}
 {
+  this->metrics_.mem_table_alloc.add(1);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -52,6 +56,8 @@ MemTable::~MemTable() noexcept
   }
 
   [[maybe_unused]] const bool b = this->finalize();
+
+  this->metrics_.mem_table_free.add(1);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
