@@ -54,18 +54,21 @@ class TurtleKvRecipe(ConanFile):
         OVERRIDE = self.cor.OVERRIDE
 
         self.requires("abseil/[>=20250127.0]", **VISIBLE, **OVERRIDE)
-        self.requires("batteries/[>=0.59.0 <1]", **VISIBLE, **OVERRIDE)
+        #self.requires("batteries/[>=0.59.0 <1]", **VISIBLE, **OVERRIDE)
+        self.requires("batteries/0.59.3-devel", **VISIBLE)
         self.requires("boost/[>=1.85.0 <2]", **VISIBLE, **OVERRIDE)
         self.requires("glog/[>=0.7.0 <1]", **VISIBLE)
         self.requires("gperftools/[>=2.16 <3]", **VISIBLE)
-        self.requires("llfs/[>=0.41.18 <1]", **VISIBLE)
+        #self.requires("jemalloc/5.3.0", **VISIBLE, **OVERRIDE)
+        #self.requires("llfs/[>=0.41.18 <1]", **VISIBLE)
+        self.requires("llfs/0.41.19-devel", **VISIBLE)
         self.requires("pcg-cpp/[>=cci.20220409]", **VISIBLE)
         self.requires("vqf/[>=0.2.4 <1]", **VISIBLE)
         self.requires("zlib/[>=1.3 <2]", **OVERRIDE)
 
         if platform.system() == "Linux":
             self.requires("libfuse/[>=3.16.2 <4]", **VISIBLE)
-            self.requires("libunwind/[>=1.7.2 <2]", **VISIBLE)
+            self.requires("libunwind/[>=1.8.0 <2]", **VISIBLE, **OVERRIDE)
             self.requires("liburing/[>=2.4 <3]", **VISIBLE)
 
         self.test_requires("gtest/[>=1.14.0 <2]")

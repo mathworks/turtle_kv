@@ -449,6 +449,9 @@ KVStore::~KVStore() noexcept
   }
 #endif
 
+  LOG(INFO) << BATT_INSPECT(MergeCompactor::metrics().output_buffer_waste);
+  LOG(INFO) << BATT_INSPECT(MergeCompactor::metrics().result_set_waste);
+
   this->halt();
   this->join();
 

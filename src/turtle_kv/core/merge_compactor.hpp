@@ -8,13 +8,15 @@
 #include <turtle_kv/util/flatten.hpp>
 
 #include <turtle_kv/import/interval.hpp>
+#include <turtle_kv/import/metrics.hpp>
 #include <turtle_kv/import/ref.hpp>
 #include <turtle_kv/import/seq.hpp>
 #include <turtle_kv/import/small_fn.hpp>
 #include <turtle_kv/import/small_vec.hpp>
 
-// #include <batteries/async/continuation.hpp>
+#include <batteries/assert.hpp>
 #include <batteries/async/worker_pool.hpp>
+#include <batteries/math.hpp>
 #include <batteries/small_vec.hpp>
 #include <batteries/status.hpp>
 
@@ -47,6 +49,17 @@ class MergeCompactor : public MergeCompactorBase
 
   template <bool kDecayToItems>
   class ResultSet;
+
+  struct Metrics {
+    StatsMetric<i64> output_buffer_waste;
+    StatsMetric<i64> result_set_waste;
+  };
+
+  static Metrics& metrics()
+  {
+    static Metrics m_;
+    return m_;
+  }
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
   // A buffer that collects merge/compacted edits.
@@ -134,7 +147,7 @@ class MergeCompactor : public MergeCompactorBase
 
     void append(OutputBuffer<kDecayToItems>&& output);
 
-    void append(std::vector<EditView>&& buffer, const Slice<const value_type>& items);
+    void append(std::vector<EditView>&& buffer, Slice<const value_type> items);
 
     void append(std::vector<EditView>&& buffer);
 
@@ -242,8 +255,31 @@ class MergeCompactor : public MergeCompactorBase
         make_end_chunk<const value_type*>()};
 
     mutable u64 packed_size_{Self::kInvalidPackedSize};
+
     HasPageRefs has_page_refs_{false};
+
+    // The total capacity of all referenced buffers.
+    //
+    usize footprint_ = 0;
   };
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  static usize buffer_size_for_item_count(usize item_count)
+  {
+    constexpr i32 kGranularityBits = 15;
+
+    const usize buffer_size = [&]() -> usize {
+      if (item_count > (usize{1} << kGranularityBits)) {
+        return batt::round_up_bits(kGranularityBits, item_count);
+      }
+      return usize{1} << batt::log2_ceil(item_count);
+    }();
+
+    BATT_CHECK_GE(buffer_size, item_count);
+
+    return buffer_size;
+  }
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 

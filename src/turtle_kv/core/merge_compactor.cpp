@@ -130,8 +130,9 @@ Status MergeCompactor::read_some_impl(OutputBuffer<kDecayToItems>& output,
 
     // Reserve buffer space.
     //
+    const usize n_items_to_reserve = MergeCompactor::buffer_size_for_item_count(total_items);
     for (auto& buffer : output.buffer_) {
-      buffer.reserve(total_items);
+      buffer.reserve(n_items_to_reserve);
     }
 
     SmallVec<Slice<const EditView>, 64> collected_edit_slices;
@@ -454,6 +455,14 @@ template <bool kDecayToItems>
                       std::make_move_iterator(second.buffers_.end()));
 
   //----- --- -- -  -  -   -
+  // Calculate the total footprint.
+  //
+  ans.footprint_ = 0;
+  for (const std::shared_ptr<const std::vector<EditView>>& buffer : ans.buffers_) {
+    ans.footprint_ += buffer->capacity();
+  }
+
+  //----- --- -- -  -  -   -
   ans.chunks_.clear();
 
   BATT_CHECK(ans.chunks_.empty());
@@ -530,7 +539,6 @@ void MergeCompactor::ResultSet<kDecayToItems>::append(OutputBuffer<kDecayToItems
   std::vector<EditView>& active_buffer = *it;
 
   this->append(std::move(active_buffer), output.merged_);
-
   output.merged_ = Slice<const value_type>{nullptr, nullptr};
 
   BATT_CHECK(active_buffer.empty());
@@ -541,7 +549,7 @@ void MergeCompactor::ResultSet<kDecayToItems>::append(OutputBuffer<kDecayToItems
 //
 template <bool kDecayToItems>
 void MergeCompactor::ResultSet<kDecayToItems>::append(std::vector<EditView>&& buffer,
-                                                      const Slice<const value_type>& items)
+                                                      Slice<const value_type> items)
 {
   if (items.empty()) {
     return;
@@ -551,10 +559,38 @@ void MergeCompactor::ResultSet<kDecayToItems>::append(std::vector<EditView>&& bu
   //
   this->invalidate_packed_size();
 
-  const auto new_inner_end = items.end();
-  const isize new_size = this->chunks_.back().offset + items.size();
+  std::vector<EditView> tmp_buffer;
+  std::vector<EditView>* p_buffer = &buffer;
 
-  this->buffers_.emplace_back(std::make_shared<std::vector<EditView>>(std::move(buffer)));
+  const usize item_count = items.size();
+  BATT_CHECK_GE(buffer.capacity(), item_count);
+
+  const usize wasted_space = (buffer.capacity() - item_count);
+
+  MergeCompactor::metrics().output_buffer_waste.update((i64)wasted_space);
+
+  // If over half of the merge output buffer is empty, then compact to save memory.
+  //
+  if (wasted_space > buffer.capacity() / 2) {
+    const usize compacted_size = MergeCompactor::buffer_size_for_item_count(item_count);
+    tmp_buffer.reserve(compacted_size);
+
+    // EditView is byte-wise copyable, so just memcpy.
+    //
+    std::memcpy(tmp_buffer.data(), buffer.data(), sizeof(EditView) * item_count);
+
+    // Store the compacted buffer instead of consuming the active buffer.
+    //
+    p_buffer = &tmp_buffer;
+    items = as_slice((const value_type*)tmp_buffer.data(), item_count);
+  }
+  MergeCompactor::metrics().result_set_waste.update((i64)(p_buffer->capacity() - item_count));
+
+  const auto new_inner_end = items.end();
+  const isize new_size = this->chunks_.back().offset + item_count;
+
+  this->footprint_ += p_buffer->capacity();
+  this->buffers_.emplace_back(std::make_shared<std::vector<EditView>>(std::move(*p_buffer)));
   this->chunks_.back().items = items;
   this->chunks_.emplace_back(make_end_chunk(new_size, new_inner_end));
 }
