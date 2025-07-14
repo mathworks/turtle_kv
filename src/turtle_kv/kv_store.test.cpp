@@ -50,7 +50,7 @@ TEST(KVStoreTest, CreateAndOpen)
       KVStore::Config kv_store_config;
 
       kv_store_config.initial_capacity_bytes = 512 * kMiB;
-      kv_store_config.change_log_size_bytes = 64 * kMiB;
+      kv_store_config.change_log_size_bytes = 64 * kMiB * 100;
 
       LOG(INFO) << BATT_INSPECT(kv_store_config.tree_options.filter_bits_per_key());
 
@@ -189,7 +189,7 @@ TEST(KVStoreTest, ScanStressTest)
   KVStore::Config kv_store_config;
 
   kv_store_config.initial_capacity_bytes = 512 * kMiB;
-  kv_store_config.change_log_size_bytes = 512 * kMiB;
+  kv_store_config.change_log_size_bytes = 512 * kMiB * 10;
 
   TreeOptions& tree_options = kv_store_config.tree_options;
 

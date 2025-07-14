@@ -20,6 +20,7 @@
 #include <llfs/bloom_filter_page_view.hpp>
 #include <llfs/page_device_metrics.hpp>
 
+#include <gperftools/heap-profiler.h>
 #include <gperftools/malloc_extension.h>
 #include <gperftools/malloc_hook.h>
 
@@ -317,12 +318,27 @@ u64 query_page_loader_reset_every_n()
 
     const char* turtlekv_heap_profile = std::getenv("turtlekv_heap_profile");
     if (turtlekv_heap_profile) {
-      MemoryProfiler::set_enabled(true);
+      // MemoryProfiler::set_enabled(true);
 
+#if 1
+      HeapProfilerStart(turtlekv_heap_profile);
+      BATT_CHECK_NE(IsHeapProfilerRunning(), 0);
+      LOG(INFO) << BATT_INSPECT_STR(turtlekv_heap_profile) << "; heap profiling enabled";
+#endif
 #if 0
-    HeapProfilerStart(turtlekv_heap_profile);
-    BATT_CHECK_NE(IsHeapProfilerRunning(), 0);
-    LOG(INFO) << BATT_INSPECT_STR(turtlekv_heap_profile) << "; heap profiling enabled";
+      new std::thread{[&] {
+        int n_blocks = 0;
+        usize total = 0;
+        int hist[kMallocHistogramSize];
+
+        for (;;) {
+          std::this_thread::sleep_for(std::chrono::milliseconds{1111});
+          const bool ok = MallocExtension::instance()->MallocMemoryStats(&n_blocks, &total, hist);
+          BATT_CHECK(ok);
+
+          std::cerr << BATT_INSPECT(n_blocks) << BATT_INSPECT(total) << std::endl;
+        }
+      }};
 #endif
     }
 
@@ -1054,7 +1070,7 @@ Status KVStore::commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_jo
 //
 void KVStore::add_obsolete_state(const State* old_state)
 {
-  const i64 expires_at_epoch = this->current_epoch_.load() + 2;  // 3;
+  const i64 expires_at_epoch = this->current_epoch_.load() + 10;  // 3;
 
   BATT_CHECK(!old_state->last_epoch_);
   //----- --- -- -  -  -   -
@@ -1074,8 +1090,8 @@ void KVStore::add_obsolete_state(const State* old_state)
 //
 void KVStore::epoch_thread_main()
 {
-  constexpr i64 kMinEpochUsec = 25;  // 12500;
-  constexpr i64 kMaxEpochUsec = 50;  // 15000;
+  constexpr i64 kMinEpochUsec = 15;  // 12500;
+  constexpr i64 kMaxEpochUsec = 20;  // 15000;
 
   std::default_random_engine rng{std::random_device{}()};
   std::uniform_int_distribution<i64> pick_delay_usec{kMinEpochUsec, kMaxEpochUsec};
