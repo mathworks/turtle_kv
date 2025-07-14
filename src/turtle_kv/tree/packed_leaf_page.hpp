@@ -65,6 +65,8 @@ struct PackedLeafPage {
     LatencyMetric find_key_latency;
     FastCountMetric<u64> find_key_success_count;
     FastCountMetric<u64> find_key_failure_count;
+    StatsMetric<u64> page_utilization_pct_stats;
+    StatsMetric<u64> packed_size_stats;
   };
 
   static Metrics& metrics()
@@ -608,6 +610,11 @@ inline PackedLeafPage* build_leaf_page(MutableBuffer buffer,
   p_header->magic = PackedLeafPage::kMagic;
   p_header->key_count = plan.key_count;
   p_header->total_packed_size = plan.value_data_end - plan.leaf_header_begin;
+
+  PackedLeafPage::Metrics& metrics = PackedLeafPage::metrics();
+
+  metrics.packed_size_stats.update(p_header->total_packed_size);
+  metrics.page_utilization_pct_stats.update(p_header->total_packed_size * 100 / buffer.size());
 
   auto* const p_keys = plan.place<llfs::PackedArray<PackedKeyValue>>(buffer,  //
                                                                      plan.key_array_header_begin);

@@ -477,6 +477,15 @@ KVStore::~KVStore() noexcept
     auto& kv_store = this->metrics();
     LOG(INFO) << BATT_INSPECT(kv_store.obsolete_state_count_stats);
   }
+  {
+    auto& art = ART::metrics();
+    LOG(INFO) << BATT_INSPECT(art.byte_alloc_count);
+  }
+  {
+    auto& leaf = PackedLeafPage::metrics();
+    LOG(INFO) << BATT_INSPECT(leaf.page_utilization_pct_stats)
+              << BATT_INSPECT(leaf.packed_size_stats);
+  }
 
   this->halt();
   this->join();

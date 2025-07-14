@@ -4,7 +4,9 @@
 #include <turtle_kv/util/seq_mutex.hpp>
 
 #include <turtle_kv/import/bit_ops.hpp>
+#include <turtle_kv/import/constants.hpp>
 #include <turtle_kv/import/int_types.hpp>
+#include <turtle_kv/import/metrics.hpp>
 #include <turtle_kv/import/optional.hpp>
 #include <turtle_kv/import/small_vec.hpp>
 
@@ -67,6 +69,17 @@ class ART
   using Self = ART;
 
   static constexpr usize kMaxKeyLen = 64;
+
+  struct Metrics {
+    FastCountMetric<u64> byte_alloc_count;
+    FastCountMetric<u64> byte_free_count;
+  };
+
+  static Metrics& metrics()
+  {
+    static Metrics m_;
+    return m_;
+  }
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -696,7 +709,11 @@ class ART
   static_assert(sizeof(Node256) % 8 == 0);
   static_assert(alignof(Node256) >= 8);
 
-  using ExtentStorageT = std::aligned_storage_t<(64 * 1024), 64>;
+  static constexpr usize kExtentSize = 64 * kKiB;
+
+  using ExtentStorageT = std::aligned_storage_t<kExtentSize, 64>;
+
+  static_assert(sizeof(ExtentStorageT) == kExtentSize);
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -749,6 +766,8 @@ class ART
         this->in_use_ += n;
         return this->data_ + in_use_prior;
       }
+
+      ART::metrics().byte_alloc_count.add(sizeof(ExtentStorageT));
 
       this->thread_extents_.emplace_back(std::make_unique<ExtentStorageT>());
       this->data_ = reinterpret_cast<u8*>(this->thread_extents_.back().get());
