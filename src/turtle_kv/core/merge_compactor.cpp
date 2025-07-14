@@ -23,43 +23,7 @@ MergeCompactor::MergeCompactor(batt::WorkerPool& worker_pool) noexcept : worker_
 MergeCompactor::~MergeCompactor() noexcept
 {
   this->stop();
-
-#if 0
-  BATT_CHECK(!this->outside_);
-  BATT_CHECK(!this->inside_);
-#endif
 }
-
-#if 0
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-void MergeCompactor::set_generator(GeneratorFn&& fn)
-{
-  this->inside_ = callcc(batt::StackSize{512 * kKiB},
-                         batt::StackType::kFixedSize,
-                         [this, fn = std::move(fn)](batt::Continuation&& origin) {
-                           this->outside_ = origin.resume();
-                           {
-                             GeneratorContext context{this};
-                             this->generator_status_ = fn(context);
-                           }
-                           return std::move(this->outside_);
-                         });
-}
-#else
-
-#if 0
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-void MergeCompactor::set_levels(const Slice<BoxedSeq<EditSlice>>& levels)
-{
-  this->start_push_levels();
-  for (BoxedSeq<EditSlice>& level : levels) {
-    this->push_level(std::move(level));
-  }
-  this->finish_push_levels();
-}
-#endif
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
@@ -93,8 +57,6 @@ void MergeCompactor::finish_push_levels()
   }
 }
 
-#endif
-
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 Status MergeCompactor::read_some(EditBuffer& buffer, const KeyView& max_key)
@@ -119,22 +81,10 @@ Status MergeCompactor::read_some_impl(OutputBuffer<kDecayToItems>& output,
   for (;;) {
     LOG_IF(INFO, debug_log_on()) << "(top of read_some loop)";
 
-#if 0
-    // If the visitation coroutine is still active, then resume it to gather more data.  If it has
-    // finished, then just continue on.
-    //
-    if (this->inside_) {
-      this->inside_ = this->inside_.resume();
-      BATT_REQUIRE_OK(this->generator_status_);
-    }
-#else
-
     // TODO [tastolfi 2025-07-14] Is this even needed?  whether this loop continues depends on
     // whether anything is present in the by_front_key_/by_back_key_ heaps...
     //
     this->pop_consumed_frames();
-
-#endif
 
     // If we are out of segments to merge, then return.
     //
@@ -385,8 +335,6 @@ void MergeCompactor::collect_edits(const Slice<const EditSlice>& src_slices,
   }
 }
 
-#if 0
-#else
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 void MergeCompactor::consume_all_frames()
@@ -410,7 +358,6 @@ void MergeCompactor::pop_consumed_frames()
     this->frames_.pop_back();
   }
 }
-#endif
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
@@ -418,18 +365,10 @@ void MergeCompactor::stop()
 {
   this->stop_requested_ = true;
 
-#if 0
-  if (this->inside_) {
-    this->inside_ = this->inside_.resume();
-  }
-#else
-
   this->consume_all_frames();
   this->pop_consumed_frames();
 
   BATT_CHECK(this->frames_.empty());
-
-#endif
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -464,34 +403,6 @@ void MergeCompactor::push_frame_impl(MergeFrame* frame)
   }
   VLOG(1) << "push_frame() finished " << BATT_INSPECT(this->depth_);
 }
-
-#if 0
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-Status MergeCompactor::await_frame_consumed_impl(MergeFrame* frame)
-{
-  BATT_CHECK_EQ(frame->pushed_to_, this) << "The passed frame was never pushed to this compactor";
-
-  while (!frame->is_consumed()) {
-    if (!this->generator_status_.ok() || this->stop_requested_) {
-      VLOG(1) << "await_frame_consumed() - compaction cancelled; unwinding...";
-      return Status{batt::StatusCode::kCancelled};
-    }
-
-    BATT_CHECK(this->outside_);
-    this->outside_ = this->outside_.resume();
-  }
-  const usize old_depth = this->depth_;
-  this->depth_ -= frame->line_count();
-  BATT_CHECK_LE(this->depth_, old_depth);
-
-  frame->pushed_to_ = nullptr;
-
-  VLOG(1) << "await_frame_consumed()... depth -> " << this->depth_;
-
-  return OkStatus();
-}
-#endif
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //

@@ -290,21 +290,6 @@ Status InMemoryNode::update_buffer_insert(BatchUpdate& update)
       new_merged_level.result_set,
       update.context.merge_compact_edits(  //
           global_max_key(),
-#if 0
-          [&](MergeCompactor::GeneratorContext& generator_context) -> Status {
-            MergeFrame frame;
-            frame.push_line(update.result_set.live_edit_slices());
-            this->push_levels_to_merge(frame,
-                                       update.context.page_loader,
-                                       segment_load_status,
-                                       has_page_refs,
-                                       levels_to_merge,
-                                       /*min_pivot_i=*/0,
-                                       /*only_pivot=*/false);
-            generator_context.push_frame(&frame);
-            return generator_context.await_frame_consumed(&frame);
-          }
-#else
           [&](MergeCompactor& compactor) -> Status {
             compactor.push_level(update.result_set.live_edit_slices());
             this->push_levels_to_merge(compactor,
@@ -315,9 +300,7 @@ Status InMemoryNode::update_buffer_insert(BatchUpdate& update)
                                        /*min_pivot_i=*/0,
                                        /*only_pivot=*/false);
             return OkStatus();
-          }
-#endif
-          ));
+          }));
 
   // Make sure there were no segment leaf page load failures that may have prematurely
   // terminated a merge line.
@@ -421,20 +404,6 @@ Status InMemoryNode::compact_update_buffer_levels(BatchUpdateContext& update_con
   BATT_ASSIGN_OK_RESULT(new_merged_level.result_set,
                         update_context.merge_compact_edits(
                             global_max_key(),
-#if 0
-                            [&](MergeCompactor::GeneratorContext& generator_context) -> Status {
-                              MergeFrame frame;
-                              this->push_levels_to_merge(frame,
-                                                         update_context.page_loader,
-                                                         segment_load_status,
-                                                         has_page_refs,
-                                                         as_slice(this->update_buffer.levels),
-                                                         /*min_pivot_i=*/0,
-                                                         /*only_pivot=*/false);
-                              generator_context.push_frame(&frame);
-                              return generator_context.await_frame_consumed(&frame);
-                            }
-#else
                             [&](MergeCompactor& compactor) -> Status {
                               this->push_levels_to_merge(compactor,
                                                          update_context.page_loader,
@@ -444,9 +413,7 @@ Status InMemoryNode::compact_update_buffer_levels(BatchUpdateContext& update_con
                                                          /*min_pivot_i=*/0,
                                                          /*only_pivot=*/false);
                               return OkStatus();
-                            }
-#endif
-                            ));
+                            }));
 
   BATT_REQUIRE_OK(segment_load_status);
 
@@ -484,20 +451,6 @@ StatusOr<BatchUpdate> InMemoryNode::collect_pivot_batch(BatchUpdateContext& upda
       pivot_batch.result_set,                       //
       update_context.merge_compact_edits(           //
           /*max_key=*/pivot_key_range.upper_bound,  //
-#if 0
-          [&](MergeCompactor::GeneratorContext& context) -> Status {
-            MergeFrame frame;
-            this->push_levels_to_merge(frame,
-                                       update_context.page_loader,
-                                       segment_load_status,
-                                       has_page_refs,
-                                       as_slice(this->update_buffer.levels),
-                                       /*min_pivot_i=*/pivot_i,
-                                       /*only_pivot=*/true);
-            context.push_frame(&frame);
-            return context.await_frame_consumed(&frame);
-          }
-#else
           [&](MergeCompactor& compactor) -> Status {
             this->push_levels_to_merge(compactor,
                                        update_context.page_loader,
@@ -507,9 +460,7 @@ StatusOr<BatchUpdate> InMemoryNode::collect_pivot_batch(BatchUpdateContext& upda
                                        /*min_pivot_i=*/pivot_i,
                                        /*only_pivot=*/true);
             return OkStatus();
-          }
-#endif
-          ));
+          }));
 
   BATT_REQUIRE_OK(segment_load_status);
 
@@ -873,55 +824,44 @@ MaxPendingBytes InMemoryNode::find_max_pending() const
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-void InMemoryNode::push_levels_to_merge(
-#if 0
-    MergeFrame& frame,
-#else
-    MergeCompactor& compactor,
-#endif
-    llfs::PageLoader& page_loader,
-    Status& segment_load_status,
-    HasPageRefs& has_page_refs,
-    const Slice<Level>& levels_to_merge,
-    i32 min_pivot_i,
-    bool only_pivot,
-    Optional<KeyView> min_key)
+void InMemoryNode::push_levels_to_merge(MergeCompactor& compactor,
+                                        llfs::PageLoader& page_loader,
+                                        Status& segment_load_status,
+                                        HasPageRefs& has_page_refs,
+                                        const Slice<Level>& levels_to_merge,
+                                        i32 min_pivot_i,
+                                        bool only_pivot,
+                                        Optional<KeyView> min_key)
 {
   for (Level& level : levels_to_merge) {
-#if 0
-    frame.push_line(
-#else
-    compactor.push_level(
-#endif
-        batt::case_of(  //
-            level,      //
-            [](const EmptyLevel&) -> BoxedSeq<EditSlice> {
-              return seq::Empty<EditSlice>{}  //
-                     | seq::boxed();
-            },
-            [&](const MergedLevel& merged_level) -> BoxedSeq<EditSlice> {
-              has_page_refs = HasPageRefs{has_page_refs || merged_level.result_set.has_page_refs()};
-              return merged_level.result_set.live_edit_slices(this->get_pivot_key(min_pivot_i));
-            },
-            [&](const SegmentedLevel& segmented_level) -> BoxedSeq<EditSlice> {
-              //----- --- -- -  -  -   -
-              // TODO [tastolfi 2025-03-14] update has_page_refs here!
-              //----- --- -- -  -  -   -
-              if (only_pivot && !segmented_level.is_pivot_active(min_pivot_i)) {
-                return seq::Empty<EditSlice>{}  //
-                       | seq::boxed();
-              }
-              return SegmentedLevelScanner<const InMemoryNode,
-                                           const SegmentedLevel,
-                                           llfs::PageLoader>{*this,
-                                                             segmented_level,
-                                                             page_loader,
-                                                             llfs::PinPageToJob::kDefault,
-                                                             segment_load_status,
-                                                             min_pivot_i,
-                                                             min_key}  //
-                     | seq::boxed();
-            }));
+    compactor.push_level(batt::case_of(  //
+        level,                           //
+        [](const EmptyLevel&) -> BoxedSeq<EditSlice> {
+          return seq::Empty<EditSlice>{}  //
+                 | seq::boxed();
+        },
+        [&](const MergedLevel& merged_level) -> BoxedSeq<EditSlice> {
+          has_page_refs = HasPageRefs{has_page_refs || merged_level.result_set.has_page_refs()};
+          return merged_level.result_set.live_edit_slices(this->get_pivot_key(min_pivot_i));
+        },
+        [&](const SegmentedLevel& segmented_level) -> BoxedSeq<EditSlice> {
+          //----- --- -- -  -  -   -
+          // TODO [tastolfi 2025-03-14] update has_page_refs here!
+          //----- --- -- -  -  -   -
+          if (only_pivot && !segmented_level.is_pivot_active(min_pivot_i)) {
+            return seq::Empty<EditSlice>{}  //
+                   | seq::boxed();
+          }
+          return SegmentedLevelScanner<const InMemoryNode, const SegmentedLevel, llfs::PageLoader>{
+                     *this,
+                     segmented_level,
+                     page_loader,
+                     llfs::PinPageToJob::kDefault,
+                     segment_load_status,
+                     min_pivot_i,
+                     min_key}  //
+                 | seq::boxed();
+        }));
   }
 }
 

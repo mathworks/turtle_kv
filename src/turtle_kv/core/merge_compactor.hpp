@@ -45,51 +45,6 @@ class MergeCompactor : public MergeCompactorBase
 
   static constexpr usize kMaxFrames = 20;
 
-#if 0    
-  //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-  // A function that produces stratified lines of edits to merge.
-  //
-  // This function may recursively traverse some structure (e.g., a tree), threading the
-  // GeneratorContext down the stack and calling `push_frame` as it descends. `await_frame_consumed`
-  // should be called on the way back out of this recursive call path, to guarantee that no
-  // MergeFrames are scope-destroyed while still in use by the consumer!
-  //
-  using GeneratorFn = std::function<Status(GeneratorContext& context)>;
-
-  //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-  // Passed to the GeneratorFn to allow it to emit frames for merge/compaction.  MergeFrames pushed
-  // `first` are assumed to contain more recent Edits that should take priority over MergeFrames
-  // pushed later.
-  //
-  class GeneratorContext
-  {
-   public:
-    friend class MergeCompactor;
-
-    void push_frame(MergeFrame* frame)
-    {
-      this->compactor_->push_frame_impl(frame);
-    }
-
-    Status await_frame_consumed(MergeFrame* frame)
-    {
-      return this->compactor_->await_frame_consumed_impl(frame);
-    }
-
-    bool is_stop_requested() const
-    {
-      return this->compactor_->is_stop_requested_impl();
-    }
-
-   private:
-    explicit GeneratorContext(MergeCompactor* compactor) noexcept : compactor_{compactor}
-    {
-    }
-
-    MergeCompactor* compactor_;
-  };
-#endif
-
   template <bool kDecayToItems>
   class ResultSet;
 
@@ -296,17 +251,13 @@ class MergeCompactor : public MergeCompactorBase
 
   ~MergeCompactor() noexcept;
 
-#if 0
-  void set_generator(GeneratorFn&& fn);
-#else
-  // void set_levels(const Slice<BoxedSeq<EditSlice>>& levels);
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   void start_push_levels();
 
   void push_level(BoxedSeq<EditSlice>&& level);
 
   void finish_push_levels();
-#endif
 
   Status read_some(EditBuffer& output, const KeyView& max_key);
 
@@ -331,6 +282,7 @@ class MergeCompactor : public MergeCompactorBase
 
   void stop();
 
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
   template <bool kDecayToItems>
   Status read_some_impl(OutputBuffer<kDecayToItems>& buffer, const KeyView& max_key_limit);
@@ -371,30 +323,14 @@ class MergeCompactor : public MergeCompactorBase
                      const Slice<T>& dst_edit_buffer,
                      SmallVecBase<Slice<const T>>& dst_slices);
 
-#if 0
-#else
   void consume_all_frames();
   void pop_consumed_frames();
-#endif
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 
   batt::WorkerPool& worker_pool_;
 
-#if 0
-  // The visitor coroutine; the code that runs on this stack recursively traverses the tree, calling
-  // push_frame and await_frame_consumed as it goes.
-  //
-  batt::Continuation inside_;
-
-  // The outer coroutine.
-  //
-  batt::Continuation outside_;
-#else
-
   boost::container::static_vector<MergeFrame, kMaxFrames> frames_;
-
-#endif
 
   // A binary heap storing all the active frame lines by front (min) key of the first slice.
   //
