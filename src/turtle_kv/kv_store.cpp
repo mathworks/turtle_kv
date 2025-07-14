@@ -1050,7 +1050,7 @@ Status KVStore::commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_jo
 //
 void KVStore::add_obsolete_state(const State* old_state)
 {
-  const i64 expires_at_epoch = this->current_epoch_.load() + 3;
+  const i64 expires_at_epoch = this->current_epoch_.load() + 2;  // 3;
 
   BATT_CHECK(!old_state->last_epoch_);
   //----- --- -- -  -  -   -
@@ -1070,8 +1070,8 @@ void KVStore::add_obsolete_state(const State* old_state)
 //
 void KVStore::epoch_thread_main()
 {
-  constexpr i64 kMinEpochUsec = 12500;
-  constexpr i64 kMaxEpochUsec = 15000;
+  constexpr i64 kMinEpochUsec = 200;  // 12500;
+  constexpr i64 kMaxEpochUsec = 400;  // 15000;
 
   std::default_random_engine rng{std::random_device{}()};
   std::uniform_int_distribution<i64> pick_delay_usec{kMinEpochUsec, kMaxEpochUsec};
