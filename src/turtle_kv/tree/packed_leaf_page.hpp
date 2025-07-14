@@ -67,6 +67,7 @@ struct PackedLeafPage {
     FastCountMetric<u64> find_key_failure_count;
     StatsMetric<u64> page_utilization_pct_stats;
     StatsMetric<u64> packed_size_stats;
+    StatsMetric<u64> packed_trie_wasted_stats;
   };
 
   static Metrics& metrics()
@@ -752,6 +753,10 @@ inline PackedLeafPage* build_leaf_page(MutableBuffer buffer,
       p_header->trie_index_size = BATT_CHECKED_CAST(u32, packed_trie_size);
       break;
     }
+
+    BATT_CHECK_LE(p_header->trie_index_size, trie_buffer.size());
+
+    metrics.packed_trie_wasted_stats.update(trie_buffer.size() - p_header->trie_index_size);
   }
 
   return p_header;

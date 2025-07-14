@@ -486,7 +486,8 @@ KVStore::~KVStore() noexcept
   {
     auto& leaf = PackedLeafPage::metrics();
     LOG(INFO) << BATT_INSPECT(leaf.page_utilization_pct_stats)
-              << BATT_INSPECT(leaf.packed_size_stats);
+              << BATT_INSPECT(leaf.packed_size_stats)
+              << BATT_INSPECT(leaf.packed_trie_wasted_stats);
   }
 
   this->halt();
