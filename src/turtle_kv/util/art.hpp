@@ -71,8 +71,28 @@ class ART
   static constexpr usize kMaxKeyLen = 64;
 
   struct Metrics {
+    CountMetric<u64> create_count;
+    CountMetric<u64> destroy_count;
+    FastCountMetric<u64> insert_count;
     FastCountMetric<u64> byte_alloc_count;
     FastCountMetric<u64> byte_free_count;
+
+    //----- --- -- -  -  -   -
+
+    double bytes_per_instance() const
+    {
+      return (double)this->byte_alloc_count.get() / (double)this->create_count.get();
+    }
+
+    double average_item_count() const
+    {
+      return (double)this->insert_count.get() / (double)this->create_count.get();
+    }
+
+    double bytes_per_insert() const
+    {
+      return (double)this->byte_alloc_count.get() / (double)this->insert_count.get();
+    }
   };
 
   static Metrics& metrics()
@@ -728,7 +748,15 @@ class ART
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  ART() = default;
+  ART() noexcept
+  {
+    ART::metrics().create_count.add(1);
+  }
+
+  ~ART() noexcept
+  {
+    ART::metrics().destroy_count.add(1);
+  }
 
   void insert(std::string_view key);
 

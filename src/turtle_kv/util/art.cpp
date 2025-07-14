@@ -33,6 +33,8 @@ void ART::insert(std::string_view key)
   BranchView branch;
   NodeBase* parent = nullptr;
 
+  ART::metrics().insert_count.add(1);
+
   for (;;) {
     if (reset) {
       reset = false;

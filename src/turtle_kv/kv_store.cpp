@@ -479,7 +479,9 @@ KVStore::~KVStore() noexcept
   }
   {
     auto& art = ART::metrics();
-    LOG(INFO) << BATT_INSPECT(art.byte_alloc_count);
+    LOG(INFO) << BATT_INSPECT(art.byte_alloc_count) << BATT_INSPECT(art.create_count)
+              << BATT_INSPECT(art.bytes_per_instance()) << BATT_INSPECT(art.insert_count)
+              << BATT_INSPECT(art.average_item_count()) << BATT_INSPECT(art.bytes_per_insert());
   }
   {
     auto& leaf = PackedLeafPage::metrics();
