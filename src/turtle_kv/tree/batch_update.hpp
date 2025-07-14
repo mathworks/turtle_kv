@@ -34,6 +34,7 @@ struct BatchUpdateContext {
       const KeyView& max_key,
       GeneratorFn&& generator_fn);
 
+#if 0
   /** \brief Does the same as `this->merge_compact_edits`, but pushes a single MergeFrame first and
    * passes that to `frame_push_fn`.
    */
@@ -41,6 +42,7 @@ struct BatchUpdateContext {
   StatusOr<MergeCompactor::ResultSet</*decay_to_items=*/false>> merge_compact_edits_in_frame(
       const KeyView& max_key,
       FramePushFn&& frame_push_fn);
+#endif
 
   /** \brief Computes and returns the running total (prefix sum) of the edit sizes in result_set.
    */
@@ -103,7 +105,13 @@ inline StatusOr<MergeCompactor::ResultSet</*decay_to_items=*/false>>
 BatchUpdateContext::merge_compact_edits(const KeyView& max_key, GeneratorFn&& generator_fn)
 {
   MergeCompactor compactor{this->worker_pool};
+#if 0
   compactor.set_generator(BATT_FORWARD(generator_fn));
+#else
+  compactor.start_push_levels();
+  BATT_REQUIRE_OK(BATT_FORWARD(generator_fn)(compactor));
+  compactor.finish_push_levels();
+#endif
 
   MergeCompactor::EditBuffer edit_buffer;
 
@@ -111,6 +119,7 @@ BatchUpdateContext::merge_compact_edits(const KeyView& max_key, GeneratorFn&& ge
   return compactor.read(edit_buffer, max_key);
 }
 
+#if 0
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename FramePushFn>
@@ -127,7 +136,8 @@ BatchUpdateContext::merge_compact_edits_in_frame(const KeyView& max_key,
         //----- --- -- -  -  -   -
         context.push_frame(&frame);
         return context.await_frame_consumed(&frame);
-      });
+      });  
 }
+#endif
 
 }  // namespace turtle_kv

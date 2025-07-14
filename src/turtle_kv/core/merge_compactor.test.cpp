@@ -178,6 +178,7 @@ TEST(MergeCompactor, Test)
       EditView::terse_printing_enabled() = true;
       MergeCompactor compactor{WorkerPool::default_pool()};
 
+#if 0
       compactor.set_generator([&](MergeCompactor::GeneratorContext& context) -> Status {
         MergeFrame frame;
         for (std::vector<Slice<EditView>>& line : levels) {
@@ -189,6 +190,16 @@ TEST(MergeCompactor, Test)
         context.push_frame(&frame);
         return context.await_frame_consumed(&frame);
       });
+#else
+      compactor.start_push_levels();
+      for (std::vector<Slice<EditView>>& line : levels) {
+        compactor.push_level(as_seq(line) | seq::map([](const Slice<EditView>& slice) {
+                               return EditSlice{slice};
+                             }) |
+                             seq::boxed());
+      }
+      compactor.finish_push_levels();
+#endif
 
       if (i % 2 == 1) {
         auto iter = expected.begin();

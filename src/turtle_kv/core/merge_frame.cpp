@@ -20,6 +20,8 @@ MergeFrame::~MergeFrame() noexcept
 //
 void MergeFrame::push_line(BoxedSeq<EditSlice>&& line_slices)
 {
+  BATT_CHECK_LT(this->line_count_, MergeFrame::kMaxLines);
+
   new (this->get_line(this->line_count_)) MergeLine{this, std::move(line_slices)};
   ++this->line_count_;
 }

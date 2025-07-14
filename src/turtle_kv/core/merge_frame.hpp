@@ -40,6 +40,22 @@ class MergeFrame
     return this->line_count_;
   }
 
+  bool is_pushed() const
+  {
+    return this->pushed_to_ != nullptr;
+  }
+
+  bool is_full() const
+  {
+    BATT_CHECK_LE(this->line_count_, MergeFrame::kMaxLines);
+    return this->line_count_ == MergeFrame::kMaxLines;
+  }
+
+  bool is_consumed() const
+  {
+    return this->active_mask_ == 0;
+  }
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
   //+++++++++++-+-+--+----- --- -- -  -  -   -

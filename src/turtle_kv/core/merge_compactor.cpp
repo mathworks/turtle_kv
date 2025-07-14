@@ -24,10 +24,13 @@ MergeCompactor::~MergeCompactor() noexcept
 {
   this->stop();
 
+#if 0
   BATT_CHECK(!this->outside_);
   BATT_CHECK(!this->inside_);
+#endif
 }
 
+#if 0
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 void MergeCompactor::set_generator(GeneratorFn&& fn)
@@ -43,6 +46,54 @@ void MergeCompactor::set_generator(GeneratorFn&& fn)
                            return std::move(this->outside_);
                          });
 }
+#else
+
+#if 0
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void MergeCompactor::set_levels(const Slice<BoxedSeq<EditSlice>>& levels)
+{
+  this->start_push_levels();
+  for (BoxedSeq<EditSlice>& level : levels) {
+    this->push_level(std::move(level));
+  }
+  this->finish_push_levels();
+}
+#endif
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void MergeCompactor::start_push_levels()
+{
+  this->frames_.clear();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void MergeCompactor::push_level(BoxedSeq<EditSlice>&& level)
+{
+  if (this->frames_.empty() || this->frames_.back().is_full()) {
+    if (!this->frames_.empty()) {
+      this->push_frame_impl(std::addressof(this->frames_.back()));
+    }
+    this->frames_.emplace_back();
+  }
+  BATT_CHECK(!this->frames_.empty());
+  BATT_CHECK(!this->frames_.back().is_full());
+
+  this->frames_.back().push_line(std::move(level));
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void MergeCompactor::finish_push_levels()
+{
+  if (!this->frames_.empty() && !this->frames_.back().is_pushed()) {
+    this->push_frame_impl(std::addressof(this->frames_.back()));
+  }
+}
+
+#endif
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
@@ -68,6 +119,7 @@ Status MergeCompactor::read_some_impl(OutputBuffer<kDecayToItems>& output,
   for (;;) {
     LOG_IF(INFO, debug_log_on()) << "(top of read_some loop)";
 
+#if 0
     // If the visitation coroutine is still active, then resume it to gather more data.  If it has
     // finished, then just continue on.
     //
@@ -75,6 +127,14 @@ Status MergeCompactor::read_some_impl(OutputBuffer<kDecayToItems>& output,
       this->inside_ = this->inside_.resume();
       BATT_REQUIRE_OK(this->generator_status_);
     }
+#else
+
+    // TODO [tastolfi 2025-07-14] Is this even needed?  whether this loop continues depends on
+    // whether anything is present in the by_front_key_/by_back_key_ heaps...
+    //
+    this->pop_consumed_frames();
+
+#endif
 
     // If we are out of segments to merge, then return.
     //
@@ -325,15 +385,51 @@ void MergeCompactor::collect_edits(const Slice<const EditSlice>& src_slices,
   }
 }
 
+#if 0
+#else
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void MergeCompactor::consume_all_frames()
+{
+  this->by_front_key_.clear();
+  this->by_back_key_.clear();
+
+  for (MergeFrame& frame : this->frames_) {
+    frame.active_mask_ = 0;
+  }
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void MergeCompactor::pop_consumed_frames()
+{
+  while (!this->frames_.empty()) {
+    if (!this->frames_.back().is_consumed()) {
+      break;
+    }
+    this->frames_.pop_back();
+  }
+}
+#endif
+
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 void MergeCompactor::stop()
 {
   this->stop_requested_ = true;
 
+#if 0
   if (this->inside_) {
     this->inside_ = this->inside_.resume();
   }
+#else
+
+  this->consume_all_frames();
+  this->pop_consumed_frames();
+
+  BATT_CHECK(this->frames_.empty());
+
+#endif
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -369,13 +465,14 @@ void MergeCompactor::push_frame_impl(MergeFrame* frame)
   VLOG(1) << "push_frame() finished " << BATT_INSPECT(this->depth_);
 }
 
+#if 0
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 Status MergeCompactor::await_frame_consumed_impl(MergeFrame* frame)
 {
   BATT_CHECK_EQ(frame->pushed_to_, this) << "The passed frame was never pushed to this compactor";
 
-  while (frame->active_mask_ != 0) {
+  while (!frame->is_consumed()) {
     if (!this->generator_status_.ok() || this->stop_requested_) {
       VLOG(1) << "await_frame_consumed() - compaction cancelled; unwinding...";
       return Status{batt::StatusCode::kCancelled};
@@ -394,6 +491,7 @@ Status MergeCompactor::await_frame_consumed_impl(MergeFrame* frame)
 
   return OkStatus();
 }
+#endif
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //

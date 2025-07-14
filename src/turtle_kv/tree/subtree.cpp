@@ -179,13 +179,22 @@ Status Subtree::apply_batch_update(const TreeOptions& tree_options,
               new_leaf->result_set,
               update.context.merge_compact_edits(  //
                   global_max_key(),
+#if 0
                   [&](MergeCompactor::GeneratorContext& context) -> Status {
                     MergeFrame frame;
                     frame.push_line(update.result_set.live_edit_slices());
                     frame.push_line(packed_leaf.as_edit_slice_seq());
                     context.push_frame(&frame);
                     return context.await_frame_consumed(&frame);
-                  }));
+                  }
+#else
+                  [&](MergeCompactor& compactor) -> Status {
+                    compactor.push_level(update.result_set.live_edit_slices());
+                    compactor.push_level(packed_leaf.as_edit_slice_seq());
+                    return OkStatus();
+                  }
+#endif
+                  ));
 
           new_leaf->set_edit_size_totals(
               update.context.compute_running_total(new_leaf->result_set));
@@ -220,13 +229,22 @@ Status Subtree::apply_batch_update(const TreeOptions& tree_options,
             in_memory_leaf->result_set,
             update.context.merge_compact_edits(
                 global_max_key(),
+#if 0
                 [&](MergeCompactor::GeneratorContext& generator_context) -> Status {
                   MergeFrame frame;
                   frame.push_line(update.result_set.live_edit_slices());
                   frame.push_line(in_memory_leaf->result_set.live_edit_slices());
                   generator_context.push_frame(&frame);
                   return generator_context.await_frame_consumed(&frame);
-                }));
+                }
+#else
+                [&](MergeCompactor& compactor) -> Status {
+                  compactor.push_level(update.result_set.live_edit_slices());
+                  compactor.push_level(in_memory_leaf->result_set.live_edit_slices());
+                  return OkStatus();
+                }
+#endif
+                ));
 
         in_memory_leaf->result_set.update_has_page_refs(update.result_set.has_page_refs());
         in_memory_leaf->set_edit_size_totals(

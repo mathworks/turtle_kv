@@ -13,10 +13,12 @@
 #include <turtle_kv/import/small_fn.hpp>
 #include <turtle_kv/import/small_vec.hpp>
 
-#include <batteries/async/continuation.hpp>
+// #include <batteries/async/continuation.hpp>
 #include <batteries/async/worker_pool.hpp>
 #include <batteries/small_vec.hpp>
 #include <batteries/status.hpp>
+
+#include <boost/container/static_vector.hpp>
 
 #include <array>
 #include <atomic>
@@ -41,6 +43,9 @@ class MergeCompactor : public MergeCompactorBase
 
   class GeneratorContext;
 
+  static constexpr usize kMaxFrames = 20;
+
+#if 0    
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
   // A function that produces stratified lines of edits to merge.
   //
@@ -83,6 +88,7 @@ class MergeCompactor : public MergeCompactorBase
 
     MergeCompactor* compactor_;
   };
+#endif
 
   template <bool kDecayToItems>
   class ResultSet;
@@ -290,7 +296,17 @@ class MergeCompactor : public MergeCompactorBase
 
   ~MergeCompactor() noexcept;
 
+#if 0
   void set_generator(GeneratorFn&& fn);
+#else
+  // void set_levels(const Slice<BoxedSeq<EditSlice>>& levels);
+
+  void start_push_levels();
+
+  void push_level(BoxedSeq<EditSlice>&& level);
+
+  void finish_push_levels();
+#endif
 
   Status read_some(EditBuffer& output, const KeyView& max_key);
 
@@ -355,10 +371,17 @@ class MergeCompactor : public MergeCompactorBase
                      const Slice<T>& dst_edit_buffer,
                      SmallVecBase<Slice<const T>>& dst_slices);
 
+#if 0
+#else
+  void consume_all_frames();
+  void pop_consumed_frames();
+#endif
+
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 
   batt::WorkerPool& worker_pool_;
 
+#if 0
   // The visitor coroutine; the code that runs on this stack recursively traverses the tree, calling
   // push_frame and await_frame_consumed as it goes.
   //
@@ -367,6 +390,11 @@ class MergeCompactor : public MergeCompactorBase
   // The outer coroutine.
   //
   batt::Continuation outside_;
+#else
+
+  boost::container::static_vector<MergeFrame, kMaxFrames> frames_;
+
+#endif
 
   // A binary heap storing all the active frame lines by front (min) key of the first slice.
   //
