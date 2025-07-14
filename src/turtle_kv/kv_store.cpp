@@ -11,6 +11,7 @@
 #include <turtle_kv/tree/leaf_page_view.hpp>
 #include <turtle_kv/tree/node_page_view.hpp>
 
+#include <turtle_kv/util/memory_profiler.hpp>
 #include <turtle_kv/util/memory_stats.hpp>
 
 #include <turtle_kv/import/constants.hpp>
@@ -20,6 +21,7 @@
 #include <llfs/page_device_metrics.hpp>
 
 #include <gperftools/malloc_extension.h>
+#include <gperftools/malloc_hook.h>
 
 #include <set>
 
@@ -293,26 +295,41 @@ u64 query_page_loader_reset_every_n()
 //
 /*static*/ Status KVStore::global_init()
 {
-  const bool tune_tcmalloc = getenv_as<bool>("turtlekv_tune_tcmalloc").value_or(false);
-  if (tune_tcmalloc) {
-    MallocExtension* m_ext = MallocExtension::instance();
-    BATT_CHECK_NOT_NULLPTR(m_ext);
+  const static Status status = []() -> Status {
+    const bool tune_tcmalloc = getenv_as<bool>("turtlekv_tune_tcmalloc").value_or(false);
+    if (tune_tcmalloc) {
+      MallocExtension* m_ext = MallocExtension::instance();
+      BATT_CHECK_NOT_NULLPTR(m_ext);
 
-    const double release_rate = getenv_as<double>("turtlekv_memory_release_rate").value_or(0);
-    const usize thread_cache_mb = getenv_as<usize>("turtlekv_memory_cache_mb").value_or(65536);
+      const double release_rate = getenv_as<double>("turtlekv_memory_release_rate").value_or(0);
+      const usize thread_cache_mb = getenv_as<usize>("turtlekv_memory_cache_mb").value_or(65536);
 
-    m_ext->SetMemoryReleaseRate(release_rate);
-    m_ext->SetNumericProperty("tcmalloc.max_total_thread_cache_bytes", thread_cache_mb * kMiB);
+      m_ext->SetMemoryReleaseRate(release_rate);
+      m_ext->SetNumericProperty("tcmalloc.max_total_thread_cache_bytes", thread_cache_mb * kMiB);
 
-    // Verify/report the properties we just configured.
-    //
-    usize value = 0;
-    BATT_CHECK(m_ext->GetNumericProperty("tcmalloc.max_total_thread_cache_bytes", &value));
-    LOG(INFO) << "tcmalloc.max_total_thread_cache_bytes " << value;
-    LOG(INFO) << "tcmalloc.memory_release_rate " << m_ext->GetMemoryReleaseRate();
-  }
+      // Verify/report the properties we just configured.
+      //
+      usize value = 0;
+      BATT_CHECK(m_ext->GetNumericProperty("tcmalloc.max_total_thread_cache_bytes", &value));
+      LOG(INFO) << "tcmalloc.max_total_thread_cache_bytes " << value;
+      LOG(INFO) << "tcmalloc.memory_release_rate " << m_ext->GetMemoryReleaseRate();
+    }
 
-  return OkStatus();
+    const char* turtlekv_heap_profile = std::getenv("turtlekv_heap_profile");
+    if (turtlekv_heap_profile) {
+      MemoryProfiler::set_enabled(true);
+
+#if 0
+    HeapProfilerStart(turtlekv_heap_profile);
+    BATT_CHECK_NE(IsHeapProfilerRunning(), 0);
+    LOG(INFO) << BATT_INSPECT_STR(turtlekv_heap_profile) << "; heap profiling enabled";
+#endif
+    }
+
+    return OkStatus();
+  }();
+
+  return status;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -424,6 +441,14 @@ u64 query_page_loader_reset_every_n()
 //
 KVStore::~KVStore() noexcept
 {
+#if 0
+  {
+    HeapMetrics& heap = HeapMetrics::instance();
+    LOG(INFO) << BATT_INSPECT(heap.active_stats) << BATT_INSPECT(heap.active_count())
+              << BATT_INSPECT(heap.new_count) << BATT_INSPECT(heap.large_count);
+  }
+#endif
+
   this->halt();
   this->join();
 

@@ -35,6 +35,10 @@
  */
 #define TURTLE_KV_ENABLE_LEAF_FILTERS 1
 
+/** \brief Enable/disable explicit support for gperftools/tcmalloc.
+ */
+#define TURTLE_KV_ENABLE_TCMALLOC 1
+
 namespace turtle_kv {
 
 constexpr i64 kNodeLruPriority = 800;
