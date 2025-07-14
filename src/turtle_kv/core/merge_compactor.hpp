@@ -53,6 +53,14 @@ class MergeCompactor : public MergeCompactorBase
   struct Metrics {
     StatsMetric<i64> output_buffer_waste;
     StatsMetric<i64> result_set_waste;
+    CountMetric<usize> result_set_compact_count;
+    CountMetric<usize> result_set_compact_byte_count;
+
+    double average_bytes_per_compaction() const
+    {
+      return (double)this->result_set_compact_byte_count.get() /
+             (double)this->result_set_compact_count.get();
+    }
   };
 
   static Metrics& metrics()

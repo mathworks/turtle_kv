@@ -449,8 +449,14 @@ KVStore::~KVStore() noexcept
   }
 #endif
 
-  LOG(INFO) << BATT_INSPECT(MergeCompactor::metrics().output_buffer_waste);
-  LOG(INFO) << BATT_INSPECT(MergeCompactor::metrics().result_set_waste);
+  {
+    auto& merge_compactor = MergeCompactor::metrics();
+    LOG(INFO) << BATT_INSPECT(merge_compactor.output_buffer_waste);
+    LOG(INFO) << BATT_INSPECT(merge_compactor.result_set_waste);
+    LOG(INFO) << BATT_INSPECT(merge_compactor.result_set_compact_count);
+    LOG(INFO) << BATT_INSPECT(merge_compactor.result_set_compact_byte_count);
+    LOG(INFO) << BATT_INSPECT(merge_compactor.average_bytes_per_compaction());
+  }
 
   this->halt();
   this->join();

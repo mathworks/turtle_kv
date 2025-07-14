@@ -614,6 +614,14 @@ void MergeCompactor::ResultSet<kDecayToItems>::compact_buffers()
   static_assert(std::is_same_v<EditView, value_type> || std::is_same_v<ItemView, value_type>);
 
   const usize item_count = this->size();
+  const usize footprint_before = this->footprint_;
+
+  auto on_scope_exit = batt::finally([&] {
+    auto& m = MergeCompactor::metrics();
+    BATT_CHECK_LE(this->footprint_, footprint_before);
+    m.result_set_compact_count.add(1);
+    m.result_set_compact_byte_count.add(sizeof(EditView) * (footprint_before - this->footprint_));
+  });
 
   // Special case: no items.
   //
