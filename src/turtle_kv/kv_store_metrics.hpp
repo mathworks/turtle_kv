@@ -28,6 +28,8 @@ struct KVStoreMetrics {
 
   StatsMetric<u64> checkpoint_pinned_pages_stats;
 
+  StatsMetric<u64> obsolete_state_count_stats;
+
   FastCountMetric<u64> mem_table_alloc{0};
   FastCountMetric<u64> mem_table_free{0};
 

@@ -457,6 +457,10 @@ KVStore::~KVStore() noexcept
     LOG(INFO) << BATT_INSPECT(merge_compactor.result_set_compact_byte_count);
     LOG(INFO) << BATT_INSPECT(merge_compactor.average_bytes_per_compaction());
   }
+  {
+    auto& kv_store = this->metrics();
+    LOG(INFO) << BATT_INSPECT(kv_store.obsolete_state_count_stats);
+  }
 
   this->halt();
   this->join();
@@ -1070,8 +1074,8 @@ void KVStore::add_obsolete_state(const State* old_state)
 //
 void KVStore::epoch_thread_main()
 {
-  constexpr i64 kMinEpochUsec = 200;  // 12500;
-  constexpr i64 kMaxEpochUsec = 400;  // 15000;
+  constexpr i64 kMinEpochUsec = 25;  // 12500;
+  constexpr i64 kMaxEpochUsec = 50;  // 15000;
 
   std::default_random_engine rng{std::random_device{}()};
   std::uniform_int_distribution<i64> pick_delay_usec{kMinEpochUsec, kMaxEpochUsec};
@@ -1083,6 +1087,8 @@ void KVStore::epoch_thread_main()
     std::vector<boost::intrusive_ptr<const State>> to_delete;
     {
       absl::MutexLock lock{&this->obsolete_states_mutex_};
+
+      this->metrics().obsolete_state_count_stats.update(this->obsolete_states_.size());
 
       for (usize i = 0; i < this->obsolete_states_.size();) {
         BATT_CHECK(this->obsolete_states_[i]->last_epoch_);
