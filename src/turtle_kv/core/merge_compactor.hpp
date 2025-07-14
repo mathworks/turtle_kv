@@ -248,6 +248,16 @@ class MergeCompactor : public MergeCompactorBase
     template <typename IntervalT>
     void drop_key_range_impl(const IntervalT& dropped_key_range);
 
+    /** \brief Copies the live items to a newly allocated, unfragmented buffer and release existing
+     * buffers.
+     */
+    void compact_buffers();
+
+    /** \brief Checks to see whether the number of items has fallen too far below the footprint; if
+     * so, then calls this->compact_buffers().
+     */
+    void compact_buffers_if_necessary();
+
     //+++++++++++-+-+--+----- --- -- -  -  -   -
 
     SmallVec<std::shared_ptr<const std::vector<EditView>>, kDefaultChunkCount> buffers_;

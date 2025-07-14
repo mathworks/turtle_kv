@@ -608,6 +608,76 @@ void MergeCompactor::ResultSet<kDecayToItems>::append(std::vector<EditView>&& bu
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <bool kDecayToItems>
+void MergeCompactor::ResultSet<kDecayToItems>::compact_buffers()
+{
+  static_assert(sizeof(EditView) == sizeof(value_type));
+  static_assert(std::is_same_v<EditView, value_type> || std::is_same_v<ItemView, value_type>);
+
+  const usize item_count = this->size();
+
+  // Special case: no items.
+  //
+  if (item_count == 0) {
+    this->footprint_ = 0;
+    this->buffers_.clear();
+    this->chunks_.clear();
+    this->chunks_.emplace_back(make_end_chunk<const value_type*>());
+    return;
+  }
+
+  // Round the new size needed, to reduce memory fragmentation.
+  //
+  const usize new_buffer_size = MergeCompactor::buffer_size_for_item_count(item_count);
+
+  // Allocate a single buffer to hold the compacted items.
+  //
+  auto new_buffer = std::make_shared<std::vector<EditView>>();
+  new_buffer->reserve(new_buffer_size);
+
+  value_type* const new_items_begin = (value_type*)new_buffer->data();
+  value_type* const new_items_end = new_items_begin + item_count;
+  value_type* dst = new_items_begin;
+
+  // Copy each chunk to the new buffer.
+  //
+  for (const Chunk<const value_type*>& chunk : this->chunks_) {
+    const usize items_this_chunk = chunk.size();
+    std::memcpy(dst, chunk.items.begin(), sizeof(EditView) * items_this_chunk);
+    dst += items_this_chunk;
+  }
+
+  BATT_CHECK_EQ(dst, new_items_end);
+
+  // Update footprint_, chunks_, and buffers_; packed_size_ hasn't changed, since we have changed
+  // the set of live items.
+  //
+  this->footprint_ = new_buffer_size;
+  this->chunks_.clear();
+  this->chunks_.emplace_back(Chunk{
+      .offset = 0,
+      .items = boost::iterator_range<const value_type*>(new_items_begin, new_items_end),
+  });
+  this->chunks_.emplace_back(Chunk{
+      .offset = BATT_CHECKED_CAST(isize, item_count),
+      .items = boost::iterator_range<const value_type*>(new_items_end, new_items_end),
+  });
+  this->buffers_.clear();
+  this->buffers_.emplace_back(std::move(new_buffer));
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <bool kDecayToItems>
+void MergeCompactor::ResultSet<kDecayToItems>::compact_buffers_if_necessary()
+{
+  if (this->size() * 2 < this->footprint_) {
+    this->compact_buffers();
+  }
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <bool kDecayToItems>
 void MergeCompactor::ResultSet<kDecayToItems>::check_items_sorted() const
 {
   const auto items_slice = this->get();
@@ -688,6 +758,10 @@ void MergeCompactor::ResultSet<kDecayToItems>::drop_key_range_impl(
   if (outer_first == outer_last) {
     return;
   }
+
+  auto maybe_compact_on_return = batt::finally([&] {
+    this->compact_buffers_if_necessary();
+  });
 
   // TODO [tastolfi 2024-11-04] incrementally recalculate
   //
@@ -849,6 +923,10 @@ void MergeCompactor::ResultSet<kDecayToItems>::drop_key_range_half_open(
 template <bool kDecayToItems>
 void MergeCompactor::ResultSet<kDecayToItems>::drop_after_n(usize n_to_take)
 {
+  auto maybe_compact_on_return = batt::finally([&] {
+    this->compact_buffers_if_necessary();
+  });
+
   this->invalidate_packed_size();
 
   const isize new_end_offset = n_to_take;
@@ -872,6 +950,10 @@ void MergeCompactor::ResultSet<kDecayToItems>::drop_after_n(usize n_to_take)
 template <bool kDecayToItems>
 void MergeCompactor::ResultSet<kDecayToItems>::drop_before_n(usize n_to_drop)
 {
+  auto maybe_compact_on_return = batt::finally([&] {
+    this->compact_buffers_if_necessary();
+  });
+
   this->invalidate_packed_size();
 
   auto first_chunk = this->chunks_.begin();
