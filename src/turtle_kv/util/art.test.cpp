@@ -331,6 +331,13 @@ TEST(ArtTest, SimdSearch)
 TEST(ArtTest, MultiThreadTest)
 {
   const int n_rounds = 3;
+  const int n_stages_per_round = 2;  // insert and query
+
+  const std::array<usize, 3> data_set_sizes = {
+      300 * 1000,
+      200 * 1000,
+      100 * 1000,
+  };
 
   for (usize n_threads = 1; n_threads <= std::thread::hardware_concurrency(); ++n_threads) {
     std::atomic<int> round{-1};
@@ -339,9 +346,14 @@ TEST(ArtTest, MultiThreadTest)
     std::atomic<const std::string*> p_keys{nullptr};
     std::atomic<usize> n_keys{0};
     std::vector<std::thread> threads;
+
     for (usize i = 0; i < n_threads; ++i) {
       threads.emplace_back([&, i] {
-        for (int r = 0; r < n_rounds * 3; ++r) {
+        std::default_random_engine rng{std::random_device{}()};
+
+        const int n_loops = n_rounds * (int)data_set_sizes.size() * n_stages_per_round;
+
+        for (int r = 0; r < n_loops; ++r) {
           VLOG(1) << "thread " << i << " waiting for round " << r;
           while (round.load() < r) {
             continue;
@@ -351,9 +363,18 @@ TEST(ArtTest, MultiThreadTest)
           VLOG(1) << "thread " << i << " starting round " << r;
           ART& index = *p_index.load();
           const std::string* keys = p_keys.load();
+          const usize n = n_keys.load();
 
-          for (usize j = i; j < n_keys; j += n_threads) {
-            index.insert(keys[j]);
+          if ((r % 2) == 0) {
+            for (usize j = i; j < n; j += n_threads) {
+              index.insert(keys[j]);
+            }
+          } else {
+            std::uniform_int_distribution<usize> pick_i{0, n - 1};
+            for (usize j = i; j < n; j += n_threads) {
+              const usize k = pick_i(rng);
+              BATT_CHECK(index.contains(keys[k]));
+            }
           }
 
           pending.fetch_sub(1);
@@ -361,6 +382,7 @@ TEST(ArtTest, MultiThreadTest)
         }
       });
     }
+
     auto on_scope_exit = batt::finally([&] {
       for (std::thread& t : threads) {
         t.join();
@@ -369,7 +391,7 @@ TEST(ArtTest, MultiThreadTest)
     });
 
     usize size_i = 0;
-    for (const usize num_keys : {3e5, 2e5, 1e5}) {
+    for (const usize num_keys : data_set_sizes) {
       std::vector<std::string> keys;
       {
         std::default_random_engine rng{/*seed=*/1};
@@ -388,6 +410,9 @@ TEST(ArtTest, MultiThreadTest)
       });
 
       LatencyMetric insert_latency;
+      LatencyMetric st_query_latency;
+      LatencyMetric mt_query_latency;
+
       for (int r = 0; r < n_rounds; ++r) {
         ART index;
 
@@ -397,24 +422,46 @@ TEST(ArtTest, MultiThreadTest)
           p_index.store(nullptr);
         });
 
+        // Stage 0: inserts
         {
           LatencyTimer timer{insert_latency, num_keys};
 
-          const int next_round = r + size_i * n_rounds;
-          VLOG(1) << "starting round: " << next_round;
+          const int next_round = (r + size_i * n_rounds) * 2;
           round.store(next_round);
           while (pending.load() > 0) {
             std::this_thread::yield();
           }
         }
 
+        pending.store(n_threads);
+
+        // Stage 1: queries
+        {
+          LatencyTimer timer{mt_query_latency, num_keys};
+
+          const int next_round = (r + size_i * n_rounds) * 2 + 1;
+          round.store(next_round);
+          while (pending.load() > 0) {
+            std::this_thread::yield();
+          }
+        }
+
+        //----- --- -- -  -  -   -
+        // After multi-threaded part of this round is done
+
         usize found_count = 0;
+        auto start_time = std::chrono::steady_clock::now();
         for (const std::string& key : keys) {
           ASSERT_TRUE(index.contains(key)) << BATT_INSPECT_STR(key) << BATT_INSPECT(found_count);
           ++found_count;
         }
+        st_query_latency.update(start_time, found_count);
+        ASSERT_EQ(found_count, keys.size());
       }
-      std::cerr << BATT_INSPECT(n_threads) << BATT_INSPECT(insert_latency) << std::endl;
+      std::cerr << "threads: " << n_threads << " N=" << num_keys << std::endl
+                << "      put: " << insert_latency << std::endl
+                << "   st_get: " << st_query_latency << std::endl
+                << "   mt_get: " << mt_query_latency << std::endl;
       ++size_i;
     }
 
