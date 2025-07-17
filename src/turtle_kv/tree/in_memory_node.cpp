@@ -1362,6 +1362,7 @@ StatusOr<llfs::PageId> InMemoryNode::finish_serialize(TreeSerializeContext& cont
       context.page_job().new_page(this->tree_options.node_size(),
                                   batt::WaitForResource::kTrue,
                                   NodePageView::page_layout_id(),
+                                  llfs::LruPriority{kNewNodeLruPriority},
                                   /*callers=*/0,
                                   context.cancel_token());
 
@@ -1421,6 +1422,7 @@ StatusOr<usize> MergedLevel::start_serialize(const InMemoryNode& node,
         context.async_build_page(
             context.tree_options().leaf_size(),
             packed_leaf_page_layout_id(),
+            llfs::LruPriority{kNewLeafLruPriority},
             /*task_count=*/2,
             [this, &node, part_extents, filter_bits_per_key](
                 usize task_i,

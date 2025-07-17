@@ -21,6 +21,7 @@ using BuildPageJobId = TreeSerializeContext::BuildPageJobId;
 StatusOr<BuildPageJobId> TreeSerializeContext::async_build_page(
     usize page_size,
     const llfs::PageLayoutId& page_layout_id,
+    llfs::LruPriority cache_priority,
     usize task_count,
     BuildPageFn&& build_page_fn)
 {
@@ -31,11 +32,13 @@ StatusOr<BuildPageJobId> TreeSerializeContext::async_build_page(
   if (task_count == 1) {
     this->queue_.emplace_back(llfs::PageSize{BATT_CHECKED_CAST(u32, page_size)},
                               page_layout_id,
+                              cache_priority,
                               std::move(build_page_fn),
                               /*task_i=*/0);
   } else {
     this->queue_.emplace_back(llfs::PageSize{BATT_CHECKED_CAST(u32, page_size)},
                               page_layout_id,
+                              cache_priority,
                               batt::make_copy(build_page_fn),
                               /*task_i=*/0);
 
@@ -44,6 +47,7 @@ StatusOr<BuildPageJobId> TreeSerializeContext::async_build_page(
     for (usize task_i = 1; task_i < task_count; ++task_i) {
       this->queue_.emplace_back(llfs::PageSize{BATT_CHECKED_CAST(u32, page_size)},
                                 page_layout_id,
+                                cache_priority,
                                 batt::make_copy(build_page_fn),
                                 task_i,
                                 promise);
@@ -80,6 +84,7 @@ Status TreeSerializeContext::build_all_pages()
           this->page_job_.new_page(build.page_size,
                                    batt::WaitForResource::kTrue,
                                    build.page_layout_id,
+                                   build.lru_priority,
                                    /*callers=*/0,
                                    this->cancel_token_);
 

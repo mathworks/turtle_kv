@@ -37,6 +37,7 @@ class TreeSerializeContext
   struct BuildPageJob {
     llfs::PageSize page_size;
     llfs::PageLayoutId page_layout_id;
+    llfs::LruPriority lru_priority;
     BuildPageFn build_page_fn;
     usize task_i;
     batt::Promise<std::shared_ptr<llfs::PageBuffer>> new_page_promise;
@@ -53,10 +54,12 @@ class TreeSerializeContext
 
     explicit BuildPageJob(llfs::PageSize size,
                           const llfs::PageLayoutId layout,
+                          llfs::LruPriority cache_priority,
                           BuildPageFn&& build_fn,
                           usize task_i_arg) noexcept
         : page_size{size}
         , page_layout_id{layout}
+        , lru_priority{cache_priority}
         , build_page_fn{std::move(build_fn)}
         , task_i{task_i_arg}
     {
@@ -64,11 +67,13 @@ class TreeSerializeContext
 
     explicit BuildPageJob(llfs::PageSize size,
                           const llfs::PageLayoutId layout,
+                          llfs::LruPriority cache_priority,
                           BuildPageFn&& build_fn,
                           usize task_i_arg,
                           const batt::Promise<std::shared_ptr<llfs::PageBuffer>>& promise) noexcept
         : page_size{size}
         , page_layout_id{layout}
+        , lru_priority{cache_priority}
         , build_page_fn{std::move(build_fn)}
         , task_i{task_i_arg}
         , new_page_promise{promise}
@@ -109,6 +114,7 @@ class TreeSerializeContext
 
   StatusOr<BuildPageJobId> async_build_page(usize page_size,
                                             const llfs::PageLayoutId& page_layout_id,
+                                            llfs::LruPriority cache_priority,
                                             usize task_count,
                                             BuildPageFn&& build_page_fn);
 

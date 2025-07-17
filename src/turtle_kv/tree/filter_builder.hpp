@@ -56,6 +56,7 @@ struct FilterPageAlloc {
   llfs::PageCache& page_cache_;
   llfs::PageId leaf_page_id_;
   Status status;
+  llfs::PinnedPage pinned_filter_page;
   Optional<llfs::PageId> filter_page_id;
   llfs::PageDeviceEntry* filter_device_entry = nullptr;
   llfs::PageDevice* filter_page_device = nullptr;
@@ -68,28 +69,32 @@ struct FilterPageAlloc {
       , leaf_page_id_{leaf_page_id}
   {
     this->status = [&]() -> Status {
-      this->filter_page_id = page_cache.filter_page_id_for(leaf_page_id);
-      if (!this->filter_page_id) {
-        return batt::StatusCode::kUnavailable;
-      }
+      BATT_ASSIGN_OK_RESULT(
+          this->pinned_filter_page,
+          page_cache.allocate_filter_page_for(leaf_page_id,
+                                              llfs::LruPriority{kNewFilterLruPriority}));
 
-      this->filter_device_entry = page_cache.get_device_for_page(*filter_page_id);
-      BATT_CHECK_NOT_NULLPTR(this->filter_device_entry);
+      this->filter_page_id = this->pinned_filter_page.page_id();
+      BATT_CHECK(this->filter_page_id);
 
-      this->filter_page_device = std::addressof(this->filter_device_entry->arena.device());
-
-      BATT_ASSIGN_OK_RESULT(this->filter_buffer,
-                            this->filter_page_device->prepare(*this->filter_page_id));
+      BATT_ASSIGN_OK_RESULT(this->filter_buffer, this->pinned_filter_page->get_new_page_buffer());
 
       return OkStatus();
     }();
   }
 
-  void start_write()
+  template <typename ViewT, typename... ExtraViewArgs>
+  Status commit_page(batt::StaticType<ViewT>, ExtraViewArgs&&... extra_args)
   {
-    this->filter_page_device->write(std::move(this->filter_buffer),
-                                    [](batt::Status /*ignored_for_now*/) mutable {
-                                    });
+    BATT_REQUIRE_OK(this->pinned_filter_page->set_new_page_view(
+        std::make_shared<ViewT>(batt::make_copy(this->filter_buffer),
+                                BATT_FORWARD(extra_args)...)));
+
+    this->page_cache_.async_write_filter_page(this->pinned_filter_page,
+                                              [](batt::Status /*ignored_for_now*/) mutable {
+                                              });
+
+    return OkStatus();
   }
 };
 
@@ -129,15 +134,7 @@ Status build_bloom_filter_for_leaf(llfs::PageCache& page_cache,
     metrics.item_count_stats.update(item_count);
   }
 
-  BATT_REQUIRE_OK(page_cache.put_view(
-      std::make_shared<llfs::BloomFilterPageView>(batt::make_copy(alloc.filter_buffer)),
-      llfs::LruPriority{kNewFilterLruPriority},
-      /*callers=*/0,
-      /*job_id=*/0));
-
-  // Start writing the page asynchronously.
-  //
-  alloc.start_write();
+  BATT_REQUIRE_OK(alloc.commit_page(batt::StaticType<llfs::BloomFilterPageView>{}));
 
   return OkStatus();
 }
@@ -282,13 +279,7 @@ Status build_quotient_filter_for_leaf(llfs::PageCache& page_cache,
 
   filter_page_header->unused_end = filter_page_header->size;
 
-  BATT_REQUIRE_OK(
-      page_cache.put_view(std::make_shared<VqfFilterPageView>(batt::make_copy(alloc.filter_buffer)),
-                          llfs::LruPriority{kNewFilterLruPriority},
-                          /*callers=*/0,
-                          /*job_id=*/0));
-
-  alloc.start_write();
+  BATT_REQUIRE_OK(alloc.commit_page(batt::StaticType<VqfFilterPageView>{}));
 
   return OkStatus();
 }

@@ -1292,12 +1292,15 @@ std::function<void(std::ostream&)> KVStore::debug_info() noexcept
         << BATT_INSPECT(cache_slot_pool.hit_rate()) << "\n"                            //
         << BATT_INSPECT(cache_slot_pool.admit_byte_count) << "\n"                      //
         << BATT_INSPECT(cache_slot_pool.evict_byte_count) << "\n"                      //
-        << BATT_INSPECT(cache_slot_pool.evict_lru_count) << "\n"                       //
-        << BATT_INSPECT(cache_slot_pool.background_evict_count) << "\n"                //
-        << BATT_INSPECT(cache_slot_pool.background_evict_fail_count) << "\n"           //
-        << BATT_INSPECT(cache_slot_pool.background_evict_byte_count) << "\n"           //
-        << BATT_INSPECT(cache_slot_pool.background_evict_latency) << "\n"              //
-        << BATT_INSPECT(cache_slot_pool.background_evict_byte_latency) << "\n"         //
+        << BATT_INSPECT(cache_slot_pool.allocate_count) << "\n"                        //
+        << BATT_INSPECT(cache_slot_pool.allocate_free_queue_count) << "\n"             //
+        << BATT_INSPECT(cache_slot_pool.allocate_construct_count) << "\n"              //
+        << BATT_INSPECT(cache_slot_pool.allocate_evict_count) << "\n"                  //
+        << BATT_INSPECT(cache_slot_pool.construct_count) << "\n"                       //
+        << BATT_INSPECT(cache_slot_pool.free_queue_insert_count) << "\n"               //
+        << BATT_INSPECT(cache_slot_pool.free_queue_remove_count) << "\n"               //
+        << BATT_INSPECT(cache_slot_pool.evict_count) << "\n"                           //
+        << BATT_INSPECT(cache_slot_pool.evict_prior_generation_count) << "\n"          //
         << "\n"                                                                        //
         << BATT_INSPECT(page_reads_per_get_4k) << "\n"                                 //
         << BATT_INSPECT(page_reads_per_get_8k) << "\n"                                 //

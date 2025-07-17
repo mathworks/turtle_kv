@@ -166,6 +166,7 @@ Status InMemoryLeaf::start_serialize(TreeSerializeContext& context)
       context.async_build_page(
           this->tree_options.leaf_size(),
           packed_leaf_page_layout_id(),
+          llfs::LruPriority{kNewLeafLruPriority},
           /*task_count=*/2,
           [this, filter_bits_per_key](
               usize task_i,

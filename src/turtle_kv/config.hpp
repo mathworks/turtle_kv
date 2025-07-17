@@ -41,15 +41,15 @@
 
 namespace turtle_kv {
 
-constexpr i64 kNodeLruPriority = 800;
-constexpr i64 kFilterLruPriority = 400;
-constexpr i64 kTrieIndexLruPriority = 300;
-constexpr i64 kLeafItemsShardLruPriority = 200;
-constexpr i64 kLeafKeyDataShardLruPriority = 100;
-constexpr i64 kLeafValueDataShardLruPriority = 20;
-constexpr i64 kLeafLruPriority = 0;
+constexpr i64 kNodeLruPriority = 4;
+constexpr i64 kFilterLruPriority = 3;
+constexpr i64 kTrieIndexLruPriority = 2;
+constexpr i64 kLeafItemsShardLruPriority = 1;
+constexpr i64 kLeafKeyDataShardLruPriority = 1;
+constexpr i64 kLeafValueDataShardLruPriority = 1;
+constexpr i64 kLeafLruPriority = 1;
 
-constexpr i64 kNewPagePriorityBoost = 1000;
+constexpr i64 kNewPagePriorityBoost = 0;
 
 constexpr i64 kNewNodeLruPriority = kNodeLruPriority + kNewPagePriorityBoost;
 constexpr i64 kNewFilterLruPriority = kFilterLruPriority + kNewPagePriorityBoost;
