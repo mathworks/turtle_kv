@@ -27,10 +27,12 @@ namespace turtle_kv {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-/*explicit*/ MemTable::MemTable(KVStoreMetrics& metrics,
+/*explicit*/ MemTable::MemTable(llfs::PageCache& page_cache,
+                                KVStoreMetrics& metrics,
                                 usize max_byte_size,
                                 Optional<u64> id) noexcept
-    : metrics_{metrics}
+    : page_cache_{page_cache}
+    , metrics_{metrics}
     , is_finalized_{false}
     , hash_index_{max_byte_size /
                   getenv_as<usize>("turtlekv_memtable_hash_bucket_div").value_or(32)}
@@ -45,6 +47,9 @@ namespace turtle_kv {
     , blocks_{}
 {
   this->metrics_.mem_table_alloc.add(1);
+
+  const usize total_overhead_estimate = max_byte_size * 32 / 10;
+  this->reserve_cache_space(total_overhead_estimate);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

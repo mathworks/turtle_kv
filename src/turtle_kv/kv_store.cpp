@@ -368,12 +368,11 @@ u64 query_page_loader_reset_every_n()
     , log_writer_{std::move(change_log_writer)}
     , checkpoint_distance_{this->runtime_options_.initial_checkpoint_distance}
     , checkpoint_log_{std::move(checkpoint_log)}
-
     , current_epoch_{0}
-
     , state_{[&] {
       State* state = new State{};
       state->mem_table_.reset(new MemTable{
+          this->page_cache(),
           this->metrics_,
           /*max_byte_size=*/this->tree_options_.leaf_data_size(),
           DeltaBatchId{1}.to_mem_table_id(),
@@ -767,6 +766,7 @@ Status KVStore::update_checkpoint(const State* observed_state)
   BATT_CHECK_EQ(new_state->use_count(), 1);
 
   new_state->mem_table_.reset(new MemTable{
+      this->page_cache(),
       this->metrics_,
       /*max_byte_size=*/this->tree_options_.flush_size(),
       next_batch_id.to_mem_table_id(),

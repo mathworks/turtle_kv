@@ -18,6 +18,8 @@
 #include <turtle_kv/import/slice.hpp>
 #include <turtle_kv/import/status.hpp>
 
+#include <llfs/page_cache.hpp>
+
 #include <absl/synchronization/mutex.h>
 
 #include <batteries/async/worker_pool.hpp>
@@ -111,7 +113,10 @@ class MemTable : public batt::RefCounted<MemTable>
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  explicit MemTable(KVStoreMetrics& metrics, usize max_byte_size, Optional<u64> id = None) noexcept;
+  explicit MemTable(llfs::PageCache& page_cache,
+                    KVStoreMetrics& metrics,
+                    usize max_byte_size,
+                    Optional<u64> id = None) noexcept;
 
   MemTable(const MemTable&) = delete;
   MemTable& operator=(const MemTable&) = delete;
@@ -199,7 +204,14 @@ class MemTable : public batt::RefCounted<MemTable>
 
   Slice<const EditView> compacted_edits_slice_impl() const;
 
+  void reserve_cache_space(usize byte_count)
+  {
+    this->cache_allocs_.emplace_back(this->page_cache_.allocate_external(byte_count));
+  }
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  llfs::PageCache& page_cache_;
 
   KVStoreMetrics& metrics_;
 
@@ -228,6 +240,8 @@ class MemTable : public batt::RefCounted<MemTable>
   std::atomic<u32> compaction_state_{0};
 
   MergeCompactor::ResultSet</*decay_to_items=*/false> compacted_edits_;
+
+  batt::SmallVec<llfs::PageCache::ExternalAllocation, 16> cache_allocs_;
 };
 
 // #=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
