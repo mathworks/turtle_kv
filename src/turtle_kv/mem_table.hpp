@@ -162,7 +162,7 @@ class MemTable : public batt::RefCounted<MemTable>
     return this->hash_index_;
   }
 
-  ART& ordered_index()
+  ART<void>& ordered_index()
   {
     return this->ordered_index_;
   }
@@ -221,7 +221,7 @@ class MemTable : public batt::RefCounted<MemTable>
 
   ConcurrentHashIndex hash_index_;
 
-  ART ordered_index_;
+  ART<void> ordered_index_;
 
   const i64 max_byte_size_;
 

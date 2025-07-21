@@ -1,30 +1,31 @@
-#include <turtle_kv/util/art.hpp>
-//
+#pragma once
 
 #include <turtle_kv/import/optional.hpp>
 
 namespace turtle_kv {
 
-namespace {
+namespace detail {
 
-usize find_common_prefix_len(const char* data0, usize size0, const char* data1, usize size1)
+inline usize find_common_prefix_len(const char* data0, usize size0, const char* data1, usize size1)
 {
   usize n = 0;
-  while (size0 && size1 && *data0 == *data1) {
+  usize common_size = std::min(size0, size1);
+  while (common_size && *data0 == *data1) {
     ++n;
-    --size0;
-    --size1;
+    --common_size;
     ++data0;
     ++data1;
   }
   return n;
 }
 
-}  // namespace
+}  // namespace detail
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-void ART::insert(std::string_view key)
+template <typename ValueT>
+template <typename InserterT>
+inline Status ART<ValueT>::insert(std::string_view key, InserterT&& inserter)
 {
   bool reset = true;
 
@@ -53,14 +54,16 @@ void ART::insert(std::string_view key)
       if (branch.ptr == nullptr) {
         SeqMutex<u32>::WriteLock root_write_lock{this->super_root_.mutex_};
         if (branch.reload() == nullptr) {
-          branch.store(this->make_node4(key_data, key_len))->set_terminal();
-          return;
+          Node4* new_node = branch.store(this->make_node4(key_data, key_len));
+          new_node->set_terminal();
+          return inserter.insert_at(ARTBase::uninitialized_value(new_node));
         }
       }
 
       parent = &this->super_root_;
     }
 
+    Status status = OkStatus();
     bool done = false;
 
     branch.ptr->visit([&](auto* node) {
@@ -76,7 +79,7 @@ void ART::insert(std::string_view key)
       }
 
       const usize common_len =
-          find_common_prefix_len(node_prefix, node_prefix_len, key_data, key_len);
+          detail::find_common_prefix_len(node_prefix, node_prefix_len, key_data, key_len);
 
       if (common_len != node_prefix_len) {
         //----- --- -- -  -  -   -
@@ -101,13 +104,20 @@ void ART::insert(std::string_view key)
         this->add_child(new_parent, /*key_byte=*/node_prefix[common_len], new_node);
 
         if (common_len < key_len) {
-          this->add_child(new_parent,
-                          /*key_byte=*/key_data[common_len],
-                          key_data + (common_len + 1),
-                          key_len - (common_len + 1))
-              ->set_terminal();
+          auto* new_child = this->add_child(new_parent,
+                                            /*key_byte=*/key_data[common_len],
+                                            key_data + (common_len + 1),
+                                            key_len - (common_len + 1));
+          new_child->set_terminal();
+          status = inserter.insert_at(ARTBase::uninitialized_value(new_child));
+
         } else {
-          new_parent->set_terminal();
+          if (new_parent->is_terminal()) {
+            status = inserter.update_at(ARTBase::mutable_value<ValueT>(new_parent));
+          } else {
+            new_parent->set_terminal();
+            status = inserter.insert_at(ARTBase::uninitialized_value(new_parent));
+          }
         }
 
         node->set_obsolete();
@@ -116,18 +126,32 @@ void ART::insert(std::string_view key)
         return;
       }
 
+      // If the common prefix is exactly the length of this node's prefix, then the search key is
+      // fully consumed exactly at this node; just update the node and we are done!
+      //
       if (key_len == common_len) {
-        if (!node_is_terminal) {
+        if (!node_is_terminal || !std::is_same_v<ValueT, void>) {
           //----- --- -- -  -  -   -
           SeqMutex<u32>::WriteLock node_write_lock{node->mutex_};
 
+          // Now that we are holding the lock, check if anything has changed, and retry if so.
+          //
           if (node->is_obsolete() || node_prefix != node->prefix() ||
               node_prefix_len != node->prefix_len_) {
             reset = true;
             return;
           }
 
-          node->set_terminal();
+          // If the node was already terminal, then update (in the case of ValueT=void, this is a
+          // no-op; we would have short-circuited at the immediately enclosing conditional),
+          // otherwise mark the node as storing a value, and call InserterT::insert_at.
+          //
+          if (!node_is_terminal) {
+            node->set_terminal();
+            status = inserter.insert_at(uninitialized_value(node));
+          } else {
+            status = inserter.update_at(ARTBase::mutable_value<ValueT>(node));
+          }
         }
         done = true;
         return;
@@ -151,6 +175,9 @@ void ART::insert(std::string_view key)
         return;
       }
 
+      // The node has not changed, and there *is* a branch for the current key byte; step into that
+      // subtree and continue in the outer loop.
+      //
       if (next.p_ptr != nullptr && next.ptr != nullptr) {
         parent = node;
         branch = next;
@@ -159,9 +186,14 @@ void ART::insert(std::string_view key)
         return;
       }
 
+      // There is no branch on the current node for the current key byte.
+      //
       Optional<SeqMutex<u32>::WriteLock> parent_write_lock;
       Optional<SeqMutex<u32>::WriteLock> node_write_lock;
 
+      // If we can't add a branch because the observed branch count is the maximum, then grow the
+      // node.  This requires a lock on the current node and its parent.
+      //
       if (next.p_ptr == nullptr && observed_branch_count == node->max_branch_count()) {
         //----- --- -- -  -  -   -
         parent_write_lock.emplace(parent->mutex_);
@@ -180,13 +212,18 @@ void ART::insert(std::string_view key)
         BATT_CHECK_EQ(observed_branch_count, node->branch_count());
 
         auto* new_node = this->grow_node(node);
-        this->add_child(new_node, key_byte, new_key_data, new_key_len)->set_terminal();
+        Node4* new_child = this->add_child(new_node, key_byte, new_key_data, new_key_len);
+        new_child->set_terminal();
+        status = inserter.insert_at(ARTBase::mutable_value<ValueT>(new_child));
 
         node->set_obsolete();
         branch.store(new_node);
 
       } else {
         //----- --- -- -  -  -   -
+        // It looks like there *may* be room for an extra branch on the current node, so try to add
+        // one.  This requires only a lock on the current node.
+        //
         node_write_lock.emplace(node->mutex_);
         if (node->is_obsolete()) {
           reset = true;
@@ -198,14 +235,19 @@ void ART::insert(std::string_view key)
             reset = true;
             return;
           }
-          this->add_child(node, key_byte, new_key_data, new_key_len)->set_terminal();
+          Node4* new_child = this->add_child(node, key_byte, new_key_data, new_key_len);
+          new_child->set_terminal();
+          status = inserter.insert_at(uninitialized_value(new_child));
 
         } else {
           if (next.reload() != nullptr) {
             reset = true;
             return;
           }
-          next.store(this->make_node4(new_key_data, new_key_len))->set_terminal();
+          Node4* new_child = this->make_node4(new_key_data, new_key_len);
+          next.store(new_child);
+          new_child->set_terminal();
+          status = inserter.insert_at(uninitialized_value(new_child));
         }
       }
 
@@ -213,14 +255,15 @@ void ART::insert(std::string_view key)
     });
 
     if (done) {
-      return;
+      return status;
     }
   }
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-bool ART::contains(std::string_view key)
+template <typename ValueT>
+inline bool ART<ValueT>::contains(std::string_view key)
 {
   bool reset = true;
 
@@ -263,7 +306,7 @@ bool ART::contains(std::string_view key)
       }
 
       const usize common_len =
-          find_common_prefix_len(node_prefix, node_prefix_len, key_data, key_len);
+          detail::find_common_prefix_len(node_prefix, node_prefix_len, key_data, key_len);
 
       if (common_len != node_prefix_len) {
         done = true;
@@ -313,8 +356,9 @@ bool ART::contains(std::string_view key)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+template <typename ValueT>
 template <typename NodeT, typename>
-auto ART::add_child(NodeT* node, u8 key_byte, NodeBase* child) -> NodeBase*
+inline auto ART<ValueT>::add_child(NodeT* node, u8 key_byte, NodeBase* child) -> NodeBase*
 {
   const usize i = node->add_branch();
   node->set_branch_index(key_byte, i);
@@ -324,7 +368,8 @@ auto ART::add_child(NodeT* node, u8 key_byte, NodeBase* child) -> NodeBase*
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-auto ART::add_child(Node256* node, u8 key_byte, NodeBase* child) -> NodeBase*
+template <typename ValueT>
+inline auto ART<ValueT>::add_child(Node256* node, u8 key_byte, NodeBase* child) -> NodeBase*
 {
   const usize i = key_byte;
   BATT_CHECK_EQ(node->branches[i], nullptr);
@@ -334,18 +379,25 @@ auto ART::add_child(Node256* node, u8 key_byte, NodeBase* child) -> NodeBase*
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+template <typename ValueT>
 template <typename NodeT>
-auto ART::add_child(NodeT* node, u8 key_byte, const char* new_key_data, usize new_key_len)
-    -> NodeBase*
+inline auto ART<ValueT>::add_child(NodeT* node,
+                                   u8 key_byte,
+                                   const char* new_key_data,
+                                   usize new_key_len) -> Node4*
 {
-  return this->add_child(node, key_byte, this->make_node4(new_key_data, new_key_len));
+  Node4* new_child = this->make_node4(new_key_data, new_key_len);
+  this->add_child(node, key_byte, new_child);
+  return new_child;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-auto ART::make_node4(const char* prefix, usize prefix_len) -> Node4*
+template <typename ValueT>
+inline auto ART<ValueT>::make_node4(const char* prefix, usize prefix_len) -> Node4*
 {
-  Node4* new_node = new (this->alloc_storage(sizeof(Node4), prefix_len)) Node4{};
+  Node4* new_node =
+      new (this->alloc_storage(sizeof(Node4) + kValueStorageSize, prefix_len)) Node4{};
 
   new_node->set_prefix(prefix, prefix_len);
 
@@ -354,9 +406,11 @@ auto ART::make_node4(const char* prefix, usize prefix_len) -> Node4*
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-auto ART::grow_node(Node4* old_node) -> Node16*
+template <typename ValueT>
+inline auto ART<ValueT>::grow_node(Node4* old_node) -> Node16*
 {
-  Node16* new_node = new (this->alloc_storage(sizeof(Node16), old_node->prefix_len_)) Node16{};
+  Node16* new_node =
+      new (this->alloc_storage(sizeof(Node16) + kValueStorageSize, old_node->prefix_len_)) Node16{};
 
   new_node->set_prefix(old_node->prefix(), old_node->prefix_len_);
   new_node->branch_count_ = old_node->branch_count_;
@@ -364,14 +418,20 @@ auto ART::grow_node(Node4* old_node) -> Node16*
   std::copy(old_node->key.begin(), old_node->key.end(), new_node->key.begin());
   std::copy(old_node->branches.begin(), old_node->branches.end(), new_node->branches.begin());
 
+  if (old_node->is_terminal()) {
+    ARTBase::construct_value_copy(old_node, new_node, batt::StaticType<ValueT>{});
+  }
+
   return new_node;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-auto ART::grow_node(Node16* old_node) -> Node48*
+template <typename ValueT>
+inline auto ART<ValueT>::grow_node(Node16* old_node) -> Node48*
 {
-  Node48* new_node = new (this->alloc_storage(sizeof(Node48), old_node->prefix_len_)) Node48{};
+  Node48* new_node =
+      new (this->alloc_storage(sizeof(Node48) + kValueStorageSize, old_node->prefix_len_)) Node48{};
 
   new_node->set_prefix(old_node->prefix(), old_node->prefix_len_);
   new_node->branch_count_ = old_node->branch_count_;
@@ -381,14 +441,21 @@ auto ART::grow_node(Node16* old_node) -> Node48*
     new_node->branches[i] = old_node->branches[i];
   }
 
+  if (old_node->is_terminal()) {
+    ARTBase::construct_value_copy(old_node, new_node, batt::StaticType<ValueT>{});
+  }
+
   return new_node;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-auto ART::grow_node(Node48* old_node) -> Node256*
+template <typename ValueT>
+auto ART<ValueT>::grow_node(Node48* old_node) -> Node256*
 {
-  Node256* new_node = new (this->alloc_storage(sizeof(Node256), old_node->prefix_len_)) Node256{};
+  Node256* new_node =
+      new (this->alloc_storage(sizeof(Node256) + kValueStorageSize, old_node->prefix_len_))
+          Node256{};
 
   new_node->set_prefix(old_node->prefix(), old_node->prefix_len_);
 
@@ -397,12 +464,17 @@ auto ART::grow_node(Node48* old_node) -> Node256*
     new_node->branches[key_byte] = (i == kInvalidBranchIndex) ? nullptr : old_node->branches[i];
   }
 
+  if (old_node->is_terminal()) {
+    ARTBase::construct_value_copy(old_node, new_node, batt::StaticType<ValueT>{});
+  }
+
   return new_node;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-auto ART::grow_node(Node256*) -> Node256*
+template <typename ValueT>
+inline auto ART<ValueT>::grow_node(Node256*) -> Node256*
 {
   BATT_PANIC() << "Node256 can not grow larger!";
   BATT_UNREACHABLE();
@@ -410,52 +482,72 @@ auto ART::grow_node(Node256*) -> Node256*
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-auto ART::clone_node(Node4* orig_node, usize prefix_offset) -> Node4*
+template <typename ValueT>
+inline auto ART<ValueT>::clone_node(Node4* orig_node, usize prefix_offset) -> Node4*
 {
   Node4* new_node =
-      new (this->alloc_storage(sizeof(Node4), (orig_node->prefix_len_ - prefix_offset)))
-          Node4{NodeBase::NoInit{}};
+      new (this->alloc_storage(sizeof(Node4) + kValueStorageSize,
+                               (orig_node->prefix_len_ - prefix_offset))) Node4{ARTBase::NoInit{}};
 
   new_node->assign_from(*orig_node, prefix_offset);
+
+  if (orig_node->is_terminal()) {
+    ARTBase::construct_value_copy(orig_node, new_node, batt::StaticType<ValueT>{});
+  }
 
   return new_node;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-auto ART::clone_node(Node16* orig_node, usize prefix_offset) -> Node16*
+template <typename ValueT>
+inline auto ART<ValueT>::clone_node(Node16* orig_node, usize prefix_offset) -> Node16*
 {
   Node16* new_node =
-      new (this->alloc_storage(sizeof(Node16), (orig_node->prefix_len_ - prefix_offset)))
-          Node16{NodeBase::NoInit{}};
+      new (this->alloc_storage(sizeof(Node16) + kValueStorageSize,
+                               (orig_node->prefix_len_ - prefix_offset))) Node16{ARTBase::NoInit{}};
 
   new_node->assign_from(*orig_node, prefix_offset);
+
+  if (orig_node->is_terminal()) {
+    ARTBase::construct_value_copy(orig_node, new_node, batt::StaticType<ValueT>{});
+  }
 
   return new_node;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-auto ART::clone_node(Node48* orig_node, usize prefix_offset) -> Node48*
+template <typename ValueT>
+inline auto ART<ValueT>::clone_node(Node48* orig_node, usize prefix_offset) -> Node48*
 {
   Node48* new_node =
-      new (this->alloc_storage(sizeof(Node48), (orig_node->prefix_len_ - prefix_offset)))
-          Node48{NodeBase::NoInit{}};
+      new (this->alloc_storage(sizeof(Node48) + kValueStorageSize,
+                               (orig_node->prefix_len_ - prefix_offset))) Node48{ARTBase::NoInit{}};
 
   new_node->assign_from(*orig_node, prefix_offset);
+
+  if (orig_node->is_terminal()) {
+    ARTBase::construct_value_copy(orig_node, new_node, batt::StaticType<ValueT>{});
+  }
 
   return new_node;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-auto ART::clone_node(Node256* orig_node, usize prefix_offset) -> Node256*
+template <typename ValueT>
+inline auto ART<ValueT>::clone_node(Node256* orig_node, usize prefix_offset) -> Node256*
 {
-  Node256* new_node =
-      new (this->alloc_storage(sizeof(Node256), (orig_node->prefix_len_ - prefix_offset)))
-          Node256{NodeBase::NoInit{}};
+  Node256* new_node = new (this->alloc_storage(sizeof(Node256) + kValueStorageSize,
+                                               (orig_node->prefix_len_ - prefix_offset)))
+      Node256{ARTBase::NoInit{}};
 
   new_node->assign_from(*orig_node, prefix_offset);
+
+  if (orig_node->is_terminal()) {
+    ARTBase::construct_value_copy(orig_node, new_node, batt::StaticType<ValueT>{});
+  }
 
   return new_node;
 }

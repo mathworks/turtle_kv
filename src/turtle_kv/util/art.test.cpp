@@ -19,11 +19,12 @@ namespace {
 
 using namespace batt::int_types;
 
-using turtle_kv::ART;
 using turtle_kv::LatencyMetric;
 using turtle_kv::LatencyTimer;
 using turtle_kv::None;
 using turtle_kv::testing::RandomStringGenerator;
+
+using ART = turtle_kv::ART<void>;
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //

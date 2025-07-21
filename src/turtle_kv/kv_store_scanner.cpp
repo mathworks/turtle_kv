@@ -105,7 +105,7 @@ Status KVStoreScanner::start()
           continue;
         }
 
-        auto& art_scanner = *(new (p_mem) ART::Scanner<ART::Synchronized::kFalse>{
+        auto& art_scanner = *(new (p_mem) ART<void>::Scanner<ARTBase::Synchronized::kFalse>{
             delta_mem_table.ordered_index(),
             this->min_key_,
         });
@@ -117,7 +117,7 @@ Status KVStoreScanner::start()
       }
     }
   }
-  // (ART::Scanner::~Scanner() has no side-effects, so just skip calling destructors)
+  // (ART<void>::Scanner::~Scanner() has no side-effects, so just skip calling destructors)
 
   // Initialize a path down the checkpoint tree (unless empty).
   //
@@ -361,9 +361,9 @@ Status KVStoreScanner::set_next_item()
 /*explicit*/ KVStoreScanner::ScanLevel::ScanLevel(
     ActiveMemTableTag,
     MemTable& mem_table,
-    ART::Scanner<ART::Synchronized::kTrue>& art_scanner) noexcept
+    ART<void>::Scanner<ARTBase::Synchronized::kTrue>& art_scanner) noexcept
     : key{art_scanner.get_key()}
-    , state_impl{MemTableScanState<ART::Synchronized::kTrue>{
+    , state_impl{MemTableScanState<ARTBase::Synchronized::kTrue>{
           .mem_table_ = &mem_table,
           .art_scanner_ = &art_scanner,
       }}
@@ -375,9 +375,9 @@ Status KVStoreScanner::set_next_item()
 /*explicit*/ KVStoreScanner::ScanLevel::ScanLevel(
     DeltaMemTableTag,
     MemTable& mem_table,
-    ART::Scanner<ART::Synchronized::kFalse>& art_scanner) noexcept
+    ART<void>::Scanner<ARTBase::Synchronized::kFalse>& art_scanner) noexcept
     : key{art_scanner.get_key()}
-    , state_impl{MemTableScanState<ART::Synchronized::kFalse>{
+    , state_impl{MemTableScanState<ARTBase::Synchronized::kFalse>{
           .mem_table_ = &mem_table,
           .art_scanner_ = &art_scanner,
       }}
@@ -403,14 +403,14 @@ EditView KVStoreScanner::ScanLevel::item() const
         BATT_PANIC() << "illegal state";
         BATT_UNREACHABLE();
       },
-      [this](const MemTableScanState<ART::Synchronized::kTrue>& state) -> EditView {
+      [this](const MemTableScanState<ARTBase::Synchronized::kTrue>& state) -> EditView {
         MemTableEntry entry;
         const bool found = state.mem_table_->hash_index().find_key(this->key, entry);
         BATT_CHECK(found);
 
         return EditView{entry.key_, entry.value_};
       },
-      [this](const MemTableScanState<ART::Synchronized::kFalse>& state) -> EditView {
+      [this](const MemTableScanState<ARTBase::Synchronized::kFalse>& state) -> EditView {
         const MemTableEntry* entry = state.mem_table_->hash_index().unsynchronized_find_key(key);
         BATT_CHECK_NOT_NULLPTR(entry);
 
@@ -434,10 +434,10 @@ ValueView KVStoreScanner::ScanLevel::value() const
         BATT_PANIC() << "illegal state";
         BATT_UNREACHABLE();
       },
-      [this](const MemTableScanState<ART::Synchronized::kTrue>& state) -> ValueView {
+      [this](const MemTableScanState<ARTBase::Synchronized::kTrue>& state) -> ValueView {
         return state.mem_table_->get(this->key).value_or_panic();
       },
-      [this](const MemTableScanState<ART::Synchronized::kFalse>& state) -> ValueView {
+      [this](const MemTableScanState<ARTBase::Synchronized::kFalse>& state) -> ValueView {
         return state.mem_table_->finalized_get(this->key).value_or_panic();
       },
       [](const Slice<const EditView>& state) -> ValueView {
@@ -458,7 +458,7 @@ bool KVStoreScanner::ScanLevel::advance()
         BATT_PANIC() << "illegal state";
         BATT_UNREACHABLE();
       },
-      [this](MemTableScanState<ART::Synchronized::kTrue>& state) -> bool {
+      [this](MemTableScanState<ARTBase::Synchronized::kTrue>& state) -> bool {
         state.art_scanner_->advance();
         if (state.art_scanner_->is_done()) {
           return false;
@@ -466,7 +466,7 @@ bool KVStoreScanner::ScanLevel::advance()
         this->key = state.art_scanner_->get_key();
         return true;
       },
-      [this](MemTableScanState<ART::Synchronized::kFalse>& state) -> bool {
+      [this](MemTableScanState<ARTBase::Synchronized::kFalse>& state) -> bool {
         state.art_scanner_->advance();
         if (state.art_scanner_->is_done()) {
           return false;

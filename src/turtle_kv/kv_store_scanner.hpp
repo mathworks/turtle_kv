@@ -49,10 +49,10 @@ class KVStoreScanner
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
   //
-  template <ART::Synchronized kSync>
+  template <ARTBase::Synchronized kSync>
   struct MemTableScanState {
     MemTable* mem_table_;
-    ART::Scanner<kSync>* art_scanner_;
+    ART<void>::Scanner<kSync>* art_scanner_;
   };
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -75,8 +75,8 @@ class KVStoreScanner
     KeyView key;
 
     std::variant<NoneType,
-                 MemTableScanState<ART::Synchronized::kTrue>,
-                 MemTableScanState<ART::Synchronized::kFalse>,
+                 MemTableScanState<ARTBase::Synchronized::kTrue>,
+                 MemTableScanState<ARTBase::Synchronized::kFalse>,
                  Slice<const EditView>,
                  TreeLevelScanState>
         state_impl;
@@ -87,11 +87,11 @@ class KVStoreScanner
 
     explicit ScanLevel(ActiveMemTableTag,
                        MemTable& mem_table,
-                       ART::Scanner<ART::Synchronized::kTrue>& art_scanner) noexcept;
+                       ART<void>::Scanner<ARTBase::Synchronized::kTrue>& art_scanner) noexcept;
 
     explicit ScanLevel(DeltaMemTableTag,
                        MemTable& mem_table,
-                       ART::Scanner<ART::Synchronized::kFalse>& art_scanner) noexcept;
+                       ART<void>::Scanner<ARTBase::Synchronized::kFalse>& art_scanner) noexcept;
 
     explicit ScanLevel(const Slice<const EditView>& edit_view_slice) noexcept;
 
@@ -203,12 +203,12 @@ class KVStoreScanner
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   using DeltaMemTableScannerStorage =
-      std::aligned_storage_t<sizeof(ART::Scanner<ART::Synchronized::kFalse>),
-                             alignof(ART::Scanner<ART::Synchronized::kFalse>)>;
+      std::aligned_storage_t<sizeof(ART<void>::Scanner<ARTBase::Synchronized::kFalse>),
+                             alignof(ART<void>::Scanner<ARTBase::Synchronized::kFalse>)>;
 
   using ActiveMemTableScannerStorage =
-      std::aligned_storage_t<sizeof(ART::Scanner<ART::Synchronized::kTrue>),
-                             alignof(ART::Scanner<ART::Synchronized::kTrue>)>;
+      std::aligned_storage_t<sizeof(ART<void>::Scanner<ARTBase::Synchronized::kTrue>),
+                             alignof(ART<void>::Scanner<ARTBase::Synchronized::kTrue>)>;
 
   boost::intrusive_ptr<const KVStore::State> pinned_state_;
   llfs::PageLoader& page_loader_;
@@ -218,7 +218,7 @@ class KVStoreScanner
   bool needs_resume_;
   Optional<EditView> next_item_;
   Status status_;
-  Optional<ART::Scanner<ART::Synchronized::kTrue>> mem_table_scanner_;
+  Optional<ART<void>::Scanner<ARTBase::Synchronized::kTrue>> mem_table_scanner_;
   std::array<DeltaMemTableScannerStorage, 32> static_delta_storage_;
   DeltaMemTableScannerStorage* delta_storage_;
   boost::container::static_vector<NodeScanState, kMaxTreeHeight - 1> tree_scan_path_;
