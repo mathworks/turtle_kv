@@ -32,6 +32,21 @@ class SeqMutex
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  class NullLock
+  {
+   public:
+    explicit NullLock(SeqMutex&) noexcept
+    {
+    }
+
+    [[nodiscard]] bool changed() const
+    {
+      return false;
+    }
+  };
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
   class WriteLock
   {
    public:

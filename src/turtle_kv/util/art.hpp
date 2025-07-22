@@ -945,11 +945,11 @@ class ART : public ARTBase
     this->insert(key, detail::DefaultVoidInserter{}).IgnoreError();
   }
 
+  bool contains(std::string_view key);
+
   const ValueT* unsynchronized_find(std::string_view key);
 
   Optional<ValueT> find(std::string_view key);
-
-  bool contains(std::string_view key);
 
   template <typename Fn>
   void scan(std::string_view lower_bound_key, const Fn& fn);
@@ -981,6 +981,9 @@ class ART : public ARTBase
   Node48* clone_node(Node48* orig_node, usize prefix_offset);
 
   Node256* clone_node(Node256* orig_node, usize prefix_offset);
+
+  template <typename NodeLockT, typename NodeCallbackFn /*= void(NodeT*) */>
+  void find_impl(std::string_view key, batt::StaticType<NodeLockT>, NodeCallbackFn&& node_callback);
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -1173,9 +1176,8 @@ void run_destructor(ValueT*& value)
   }
 }
 
-inline void run_destructor(void*& value)
+inline void run_destructor(void*& /*value*/)
 {
-  value = nullptr;
 }
 
 }  // namespace detail
@@ -1228,7 +1230,7 @@ class ART<ValueT>::Scanner : public detail::ValueStorageBase<ValueT, kSynchroniz
   };
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
-
+ private:
   std::aligned_storage_t<sizeof(Frame) * kMaxDepth, /*alignment=*/64> stack_storage_;
   Frame* end_ = reinterpret_cast<Frame*>(&this->stack_storage_);
   usize depth_ = 0;
@@ -1239,6 +1241,7 @@ class ART<ValueT>::Scanner : public detail::ValueStorageBase<ValueT, kSynchroniz
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+ public:
   explicit Scanner(ART& art,
                    std::string_view lower_bound_key,
                    Optional<bool> synchronized = None) noexcept
@@ -1356,11 +1359,9 @@ class ART<ValueT>::Scanner : public detail::ValueStorageBase<ValueT, kSynchroniz
     if (node_view.is_terminal()) {
       this->next_key_.emplace(this->key_buffer_.data(), top->key_prefix_len_);
       if (!std::is_same_v<ValueT, void>) {
-#if 0  // TODO [tastolfi 2025-07-22]  
         detail::run_destructor(this->next_value_);
-        this->next_value_ = reinterpret_cast<ValueT*>(
-            this->value_storage_address(&node_view, this->synchronized_));
-#endif
+        this->next_value_ =
+            reinterpret_cast<ValueT*>(this->value_storage_address(&node_view, this->synchronized_));
       }
     } else {
       this->next_key_ = None;
@@ -1377,6 +1378,15 @@ class ART<ValueT>::Scanner : public detail::ValueStorageBase<ValueT, kSynchroniz
   const std::string_view& get_key() const
   {
     return *this->next_key_;
+  }
+
+  const std::conditional_t<std::is_same_v<ValueT, void>,
+                           struct get_value_Not_Supported_If_ValueT_Is_Void,
+                           ValueT>&
+  get_value() const
+  {
+    static_assert(!std::is_same_v<ValueT, void>);
+    return *this->next_value_;
   }
 
   void advance()

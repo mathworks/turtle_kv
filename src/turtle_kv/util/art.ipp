@@ -263,7 +263,10 @@ inline Status ART<ValueT>::insert(std::string_view key, InserterT&& inserter)
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename ValueT>
-inline bool ART<ValueT>::contains(std::string_view key)
+template <typename NodeLockT, typename NodeCallbackFn /*= void(NodeT*) */>
+void ART<ValueT>::find_impl(std::string_view key,
+                            batt::StaticType<NodeLockT>,
+                            NodeCallbackFn&& node_callback)
 {
   bool reset = true;
 
@@ -279,22 +282,21 @@ inline bool ART<ValueT>::contains(std::string_view key)
       key_len = key.size();
 
       for (;;) {
-        SeqMutex<u32>::ReadLock root_read_lock{this->super_root_.mutex_};
+        NodeLockT root_read_lock{this->super_root_.mutex_};
         branch.load(this->root_);
         if (!root_read_lock.changed()) {
           break;
         }
       }
       if (branch.ptr == nullptr) {
-        return false;
+        return;  // find_impl
       }
     }
 
     bool done = false;
-    bool result = false;
 
     branch.ptr->visit([&](auto* node) {
-      SeqMutex<u32>::ReadLock node_read_lock{node->mutex_};
+      NodeLockT node_read_lock{node->mutex_};
 
       const char* const node_prefix = node->prefix();
       const usize node_prefix_len = node->prefix_len_;
@@ -302,22 +304,36 @@ inline bool ART<ValueT>::contains(std::string_view key)
 
       if (node_read_lock.changed()) {
         reset = true;
-        return;
+        return;  // visit
       }
 
       const usize common_len =
           detail::find_common_prefix_len(node_prefix, node_prefix_len, key_data, key_len);
 
+      // Mismatch in the middle of the prefix means the branch we would have taken isn't there.  Not
+      // found.
+      //
       if (common_len != node_prefix_len) {
         done = true;
-        result = false;
-        return;
+        return;  // visit
       }
 
+      // If the search key is fully consumed, we are done; set `result` if the node is marked as
+      // terminal.
+      //
       if (common_len == key_len) {
-        done = true;
-        result = node_is_terminal;
-        return;
+        if (node_is_terminal) {
+          node_callback(node);
+          if (std::is_same_v<ValueT, void> || !node_read_lock.changed()) {
+            done = true;
+          } else {
+            node_callback((decltype(node))nullptr);
+            reset = true;
+          }
+        } else {
+          done = true;
+        }
+        return;  // visit
       }
 
       const u8 key_byte = key_data[common_len];
@@ -333,13 +349,12 @@ inline bool ART<ValueT>::contains(std::string_view key)
 
       if (node_read_lock.changed()) {
         reset = true;
-        return;
+        return;  // visit
       }
 
       if (next.p_ptr == nullptr || next.ptr == nullptr) {
         done = true;
-        result = false;
-        return;
+        return;  // visit
       }
 
       key_data += (common_len + 1);
@@ -348,10 +363,60 @@ inline bool ART<ValueT>::contains(std::string_view key)
     });
 
     if (done) {
-      return result;
+      return;  // find_impl
     }
   }
   BATT_UNREACHABLE();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <typename ValueT>
+inline bool ART<ValueT>::contains(std::string_view key)
+{
+  bool found = false;
+
+  this->find_impl(key, batt::StaticType<SeqMutex<u32>::ReadLock>{}, [&found](auto* node) {
+    found = (node != nullptr);
+  });
+
+  return found;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <typename ValueT>
+inline auto ART<ValueT>::unsynchronized_find(std::string_view key) -> const ValueT*
+{
+  const ValueT* p_value = nullptr;
+
+  this->find_impl(key, batt::StaticType<SeqMutex<u32>::NullLock>{}, [&p_value](auto* node) {
+    if (node == nullptr) {
+      p_value = nullptr;
+    } else {
+      p_value = ARTBase::const_value<ValueT>(node);
+    }
+  });
+
+  return p_value;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <typename ValueT>
+inline auto ART<ValueT>::find(std::string_view key) -> Optional<ValueT>
+{
+  Optional<ValueT> value_copy;
+
+  this->find_impl(key, batt::StaticType<SeqMutex<u32>::ReadLock>{}, [&value_copy](auto* node) {
+    if (node == nullptr) {
+      value_copy = None;
+    } else {
+      value_copy.emplace(*ARTBase::const_value<ValueT>(node));
+    }
+  });
+
+  return value_copy;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
