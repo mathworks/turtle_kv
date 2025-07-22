@@ -15,7 +15,7 @@ class SeqMutex
         : state_{mutex.state_}
         , before_state_{this->state_.load()}
     {
-      while ((this->before_state_ & 3) != 0) {
+      while ((this->before_state_ & 1) != 0) {
         this->before_state_ = this->state_.load();
       }
     }
@@ -55,7 +55,6 @@ class SeqMutex
       for (;;) {
         const IntT old_state = this->state_.fetch_or(1);
         if ((old_state & 1) == 0) {
-          this->state_.fetch_add(2);
           return;
         }
       }
