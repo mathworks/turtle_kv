@@ -57,11 +57,8 @@ KVStoreScanner::~KVStoreScanner() noexcept
 //
 Status KVStoreScanner::start()
 {
-  // VLOG(1) << "KVStoreScanner::start()" << BATT_INSPECT_STR(this->min_key_);
-
   if (this->pinned_state_) {
     const usize n_deltas = this->pinned_state_->deltas_.size();
-    // VLOG(1) << BATT_INSPECT(n_deltas);
 
     // Reserve space for MemTable (active + deltas) in ScanLevels.
     //
@@ -74,9 +71,6 @@ Status KVStoreScanner::start()
       this->scan_levels_.emplace_back(ActiveMemTableTag{},
                                       *this->pinned_state_->mem_table_,
                                       *this->mem_table_scanner_);
-      // VLOG(1) << "Active MemTable: " << this->scan_levels_.back().key;
-    } else {
-      // VLOG(1) << "Active MemTable: --";
     }
 
     // Reserve space for delta MemTable scanners.
@@ -121,7 +115,6 @@ Status KVStoreScanner::start()
 
   // Initialize a path down the checkpoint tree (unless empty).
   //
-  // VLOG(1) << BATT_INSPECT(this->tree_height_);
   if (this->root_.is_valid()) {
     BATT_REQUIRE_OK(this->enter_subtree(this->tree_height_, this->root_, std::false_type{}));
     BATT_REQUIRE_OK(this->resume());
@@ -265,13 +258,9 @@ Status KVStoreScanner::enter_node(llfs::PinnedPage&& pinned_page, InsertHeapBool
 //
 Status KVStoreScanner::resume()
 {
-  // VLOG(1) << "resume()";
-
   this->needs_resume_ = false;
 
   for (;;) {
-    // VLOG(1) << BATT_INSPECT(this->tree_scan_path_.size());
-
     if (this->tree_scan_path_.empty()) {
       break;
     }
@@ -279,8 +268,6 @@ Status KVStoreScanner::resume()
     NodeScanState& node_state = this->tree_scan_path_.back();
 
     if (node_state.node_) {
-      // VLOG(1) << BATT_INSPECT(node_state.pivot_i_) << "/" <<
-      // (usize)node_state.node_->pivot_count();
       if (node_state.pivot_i_ < node_state.node_->pivot_count()) {
         ++node_state.pivot_i_;
         if (node_state.pivot_i_ != node_state.node_->pivot_count()) {
@@ -510,10 +497,6 @@ template <bool kInsertHeap>
 {
   const i32 n_levels = this->node_->get_level_count();
 
-  // VLOG(1) << "Entering Node;" << BATT_INSPECT(n_levels);
-  // VLOG(1) << "   " << BATT_INSPECT(pivot_i_) << ": " << node.get_pivot_key(pivot_i_) << ".."
-  //         << node.get_pivot_key(pivot_i_ + 1);
-
   for (i32 buffer_level_i = 0; buffer_level_i < n_levels; ++buffer_level_i) {
     PackedLevel& level = this->levels_.emplace_back(this->node_->is_size_tiered()
                                                         ? this->node_->get_tier(buffer_level_i)
@@ -527,11 +510,8 @@ template <bool kInsertHeap>
                                        kv_scanner.min_key_);
 
     KVSlice first_slice = this->pull_next(buffer_level_i);
-    // VLOG(1) << " - " << BATT_INSPECT(buffer_level_i) << BATT_INSPECT(first_slice.size());
 
     if (!first_slice.empty()) {
-      // VLOG(1) << "   " << BATT_INSPECT(first_slice.front());
-      // VLOG(1) << "   " << BATT_INSPECT(first_slice.back());
       this->active_levels_ |= (u64{1} << buffer_level_i);
       ScanLevel& level = kv_scanner.scan_levels_.emplace_back(first_slice, this, buffer_level_i);
       if (kInsertHeap) {
@@ -554,15 +534,10 @@ template <bool kInsertHeap>
     , node_{nullptr}
     , pivot_i_{0}
 {
-  // VLOG(1) << "Entering Leaf;" << BATT_INSPECT(leaf.get_key_crange());
-
   KVSlice first_slice = as_slice(leaf.lower_bound(kv_scanner.min_key_), leaf.items_end());
-  // VLOG(1) << BATT_INSPECT(first_slice.size());
   if (first_slice.empty()) {
     return;
   }
-  // VLOG(1) << BATT_INSPECT(first_slice.front());
-  // VLOG(1) << BATT_INSPECT(first_slice.back());
 
   this->active_levels_ = 1;
   ScanLevel& level = kv_scanner.scan_levels_.emplace_back(first_slice, this, 0);

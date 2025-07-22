@@ -12,6 +12,7 @@
 #include <turtle_kv/import/optional.hpp>
 #include <turtle_kv/import/status.hpp>
 
+#include <llfs/config.hpp>
 #include <llfs/filesystem.hpp>
 #include <llfs/ioring.hpp>
 #include <llfs/ioring_file.hpp>
@@ -73,7 +74,7 @@ class ChangeLogFile
     }
   };
 
-  struct PackedConfig {
+  struct /*alignas(llfs::kDirectIOBlockAlign)*/ PackedConfig {
     static constexpr u64 kMagic = 0x53ee6863bf7a1254ull;
 
     big_u64 magic;

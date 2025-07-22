@@ -124,6 +124,8 @@ class ARTBase
     kNodeBase = 4,
   };
 
+  //----- --- -- -  -  -   -
+
   static constexpr usize sizeof_value(batt::StaticType<void>)
   {
     return 0;
@@ -135,19 +137,7 @@ class ARTBase
     return sizeof(ValueT);
   }
 
-  template <typename FromNodeT, typename ToNodeT>
-  static void* construct_value_copy(FromNodeT*, ToNodeT*, batt::StaticType<void>)
-  {
-    return nullptr;
-  }
-
-  template <typename FromNodeT, typename ToNodeT, typename ValueT>
-  static ValueT* construct_value_copy(FromNodeT* from_node,
-                                      ToNodeT* to_node,
-                                      batt::StaticType<ValueT>)
-  {
-    return new (to_node + 1) ValueT{*reinterpret_cast<const ValueT*>(from_node + 1)};
-  }
+  //----- --- -- -  -  -   -
 
   template <typename NodeT>
   static void* uninitialized_value(NodeT* node)
@@ -165,6 +155,40 @@ class ARTBase
   static const ValueT* const_value(const NodeT* node, batt::StaticType<ValueT> /**/ = {})
   {
     return reinterpret_cast<const ValueT*>(node + 1);
+  }
+
+  //----- --- -- -  -  -   -
+
+  template <typename FromNodeT, typename ToNodeT>
+  static void* construct_value_copy(FromNodeT*, ToNodeT*, batt::StaticType<void>)
+  {
+    return nullptr;
+  }
+
+  template <typename FromNodeT>
+  static void* construct_value_copy(FromNodeT*, void*, batt::StaticType<void>)
+  {
+    return nullptr;
+  }
+
+  //----- --- -- -  -  -   -
+
+  template <typename FromNodeT, typename ToNodeT, typename ValueT>
+  static ValueT* construct_value_copy(FromNodeT* from_node,
+                                      ToNodeT* to_node,
+                                      batt::StaticType<ValueT> type_of_value)
+  {
+    return ARTBase::construct_value_copy(from_node,
+                                         ARTBase::uninitialized_value(to_node),
+                                         type_of_value);
+  }
+
+  template <typename FromNodeT, typename ValueT>
+  static ValueT* construct_value_copy(FromNodeT* from_node,
+                                      void* to_address,
+                                      batt::StaticType<ValueT> type_of_value)
+  {
+    return new (to_address) ValueT{*ARTBase::const_value(from_node, type_of_value)};
   }
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -1003,12 +1027,14 @@ namespace detail {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-template <typename NodeT, typename AlignedStorageT>
+template <typename NodeT, typename AlignedStorageT, typename ValueT>
 NodeT& scanner_view_of(usize node_prefix_len,
                        NodeT* node,
                        AlignedStorageT* storage,
                        std::integral_constant<ARTBase::Synchronized, ARTBase::Synchronized::kTrue>,
-                       const Optional<bool>&)
+                       const Optional<bool>&,
+                       void* value_storage_addr,
+                       batt::StaticType<ValueT> type_of_value)
 {
   NodeT& node_view = *(new (storage) NodeT{ARTBase::NoInit{}});
 
@@ -1017,6 +1043,9 @@ NodeT& scanner_view_of(usize node_prefix_len,
   for (;;) {
     SeqMutex<u32>::ReadLock read_lock{node->mutex_};
     node_view.assign_from(*node, /*prefix_offset=*/node_prefix_len);
+    if (node->is_terminal()) {
+      ARTBase::construct_value_copy(node, value_storage_addr, type_of_value);
+    }
     if (!read_lock.changed()) {
       break;
     }
@@ -1027,25 +1056,29 @@ NodeT& scanner_view_of(usize node_prefix_len,
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-template <typename NodeT, typename AlignedStorageT>
+template <typename NodeT, typename AlignedStorageT, typename ValueT>
 NodeT& scanner_view_of(usize,
                        NodeT* node,
                        AlignedStorageT*,
                        std::integral_constant<ARTBase::Synchronized, ARTBase::Synchronized::kFalse>,
-                       const Optional<bool>&)
+                       const Optional<bool>& /*sync*/,
+                       void* /*value_storage_addr*/,
+                       batt::StaticType<ValueT> /*type_of_value*/)
 {
   return *node;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-template <typename NodeT, typename AlignedStorageT>
+template <typename NodeT, typename AlignedStorageT, typename ValueT>
 NodeT& scanner_view_of(
     usize node_prefix_len,
     NodeT* node,
     AlignedStorageT* storage,
     std::integral_constant<ARTBase::Synchronized, ARTBase::Synchronized::kDynamic>,
-    const Optional<bool>& sync)
+    const Optional<bool>& sync,
+    void* value_storage_addr,
+    batt::StaticType<ValueT> type_of_value)
 {
   if (sync.value_or(true)) {
     return scanner_view_of(
@@ -1053,14 +1086,96 @@ NodeT& scanner_view_of(
         node,
         storage,
         std::integral_constant<ARTBase::Synchronized, ARTBase::Synchronized::kTrue>{},
-        sync);
+        sync,
+        value_storage_addr,
+        type_of_value);
   }
   return scanner_view_of(
       node_prefix_len,
       node,
       storage,
       std::integral_constant<ARTBase::Synchronized, ARTBase::Synchronized::kFalse>{},
-      sync);
+      sync,
+      value_storage_addr,
+      type_of_value);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <typename ValueT, ARTBase::Synchronized kSynchronized>
+struct ValueStorageBase {
+  std::aligned_storage_t<sizeof(ValueT), alignof(ValueT)> value_storage_;
+
+  template <typename NodeT>
+  std::conditional_t<std::is_const_v<NodeT>, const void*, void*> value_storage_address(
+      NodeT* node,
+      const Optional<bool>& sync)
+  {
+    if (kSynchronized == ARTBase::Synchronized::kTrue || sync.value_or(true)) {
+      return &this->value_storage_;
+    }
+    return node + 1;
+  }
+};
+
+//----- --- -- -  -  -   -
+
+template <typename ValueT>
+struct ValueStorageBase<ValueT, ARTBase::Synchronized::kFalse> {
+  template <typename NodeT>
+  const void* value_storage_address(const NodeT* node, const Optional<bool>&) const
+  {
+    return node + 1;
+  }
+};
+
+//----- --- -- -  -  -   -
+
+template <>
+struct ValueStorageBase<void, ARTBase::Synchronized::kFalse> {
+  template <typename NodeT>
+  void* value_storage_address(const NodeT*, const Optional<bool>&) const
+  {
+    return nullptr;
+  }
+};
+
+//----- --- -- -  -  -   -
+
+template <>
+struct ValueStorageBase<void, ARTBase::Synchronized::kTrue> {
+  template <typename NodeT>
+  void* value_storage_address(const NodeT*, const Optional<bool>&) const
+  {
+    return nullptr;
+  }
+};
+
+//----- --- -- -  -  -   -
+
+template <>
+struct ValueStorageBase<void, ARTBase::Synchronized::kDynamic> {
+  template <typename NodeT>
+  void* value_storage_address(const NodeT*, const Optional<bool>&) const
+  {
+    return nullptr;
+  }
+};
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <typename ValueT>
+void run_destructor(ValueT*& value)
+{
+  if (value) {
+    value->~ValueT();
+    value = nullptr;
+  }
+}
+
+inline void run_destructor(void*& value)
+{
+  value = nullptr;
 }
 
 }  // namespace detail
@@ -1069,7 +1184,7 @@ NodeT& scanner_view_of(
 //
 template <typename ValueT>
 template <ARTBase::Synchronized kSynchronized>
-class ART<ValueT>::Scanner
+class ART<ValueT>::Scanner : public detail::ValueStorageBase<ValueT, kSynchronized>
 {
  public:
   using Node4 = ARTBase::Node4;
@@ -1095,7 +1210,7 @@ class ART<ValueT>::Scanner
 
   struct Frame {
     static constexpr usize kStorageSize =
-        (kSynchronized == ARTBase::Synchronized::kFalse) ? 1 : sizeof(Node256);
+        ((kSynchronized == ARTBase::Synchronized::kFalse) ? 1 : sizeof(Node256));
 
     std::aligned_storage_t<kStorageSize, alignof(usize)> node_storage_;
     NodeScanState scan_state_;
@@ -1119,6 +1234,7 @@ class ART<ValueT>::Scanner
   usize depth_ = 0;
   std::array<char, ART<ValueT>::kMaxKeyLen> key_buffer_;
   Optional<std::string_view> next_key_;
+  ValueT* next_value_ = nullptr;
   Optional<bool> synchronized_;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -1148,6 +1264,13 @@ class ART<ValueT>::Scanner
     }
   }
 
+  ~Scanner() noexcept
+  {
+    if (!std::is_same_v<ValueT, void>) {
+      detail::run_destructor(this->next_value_);
+    }
+  }
+
   bool is_synchronized() const
   {
     if (kSynchronized == ARTBase::Synchronized::kFalse) {
@@ -1173,11 +1296,14 @@ class ART<ValueT>::Scanner
 
     // We need to create a copy of the node data to protect against data races.
     //
-    NodeT& node_view = detail::scanner_view_of(node_prefix_len,
-                                               node,
-                                               &top->node_storage_,
-                                               SyncType{},
-                                               this->synchronized_);
+    NodeT& node_view =
+        detail::scanner_view_of(node_prefix_len,
+                                node,
+                                &top->node_storage_,
+                                SyncType{},
+                                this->synchronized_,
+                                this->value_storage_address(node, this->synchronized_),
+                                batt::StaticType<ValueT>{});
 
     // Compare the lower bound key to the current node prefix.
     //
@@ -1229,6 +1355,13 @@ class ART<ValueT>::Scanner
     //
     if (node_view.is_terminal()) {
       this->next_key_.emplace(this->key_buffer_.data(), top->key_prefix_len_);
+      if (!std::is_same_v<ValueT, void>) {
+#if 0  // TODO [tastolfi 2025-07-22]  
+        detail::run_destructor(this->next_value_);
+        this->next_value_ = reinterpret_cast<ValueT*>(
+            this->value_storage_address(&node_view, this->synchronized_));
+#endif
+      }
     } else {
       this->next_key_ = None;
     }

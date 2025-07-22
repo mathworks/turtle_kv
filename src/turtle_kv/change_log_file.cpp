@@ -72,6 +72,8 @@ auto ChangeLogFile::PackedConfig::unpack() const noexcept -> ChangeLogFile::Conf
   PackedConfig packed_config;
   config.pack_to(&packed_config);
 
+  std::cerr << BATT_INSPECT(path) << BATT_INSPECT((void*)(&packed_config)) << std::endl;
+
   BATT_REQUIRE_OK(llfs::write_fd(*fd,
                                  ConstBuffer{
                                      &packed_config,
@@ -106,6 +108,8 @@ auto ChangeLogFile::PackedConfig::unpack() const noexcept -> ChangeLogFile::Conf
                                 },
                                 /*offset=*/0));
 
+  std::cerr << BATT_INSPECT(path) << BATT_INSPECT((void*)(&packed_config)) << std::endl;
+
   if (packed_config.magic != PackedConfig::kMagic) {
     LOG(ERROR) << "Magic number at start of config block is incorrect; possible data corruption "
                   "or incorrect file type";
@@ -116,6 +120,10 @@ auto ChangeLogFile::PackedConfig::unpack() const noexcept -> ChangeLogFile::Conf
 
   BATT_ASSIGN_OK_RESULT(llfs::IoRing::File file,
                         llfs::IoRing::File::open(io_ring->get_io_ring(), fd));
+
+  [[maybe_unused]] int unused;
+  std::cout << "press enter to continue" << std::endl;
+  std::cin >> unused;
 
   return {std::make_unique<ChangeLogFile>(std::move(io_ring), std::move(file), config)};
 }
