@@ -56,7 +56,7 @@ inline Status ART<ValueT>::insert(std::string_view key, InserterT&& inserter)
         if (branch.reload() == nullptr) {
           Node4* new_node = branch.store(this->make_node4(key_data, key_len));
           new_node->set_terminal();
-          return inserter.insert_at(ARTBase::uninitialized_value(new_node));
+          return inserter.insert_new(ARTBase::uninitialized_value(new_node));
         }
       }
 
@@ -109,14 +109,14 @@ inline Status ART<ValueT>::insert(std::string_view key, InserterT&& inserter)
                                             key_data + (common_len + 1),
                                             key_len - (common_len + 1));
           new_child->set_terminal();
-          status = inserter.insert_at(ARTBase::uninitialized_value(new_child));
+          status = inserter.insert_new(ARTBase::uninitialized_value(new_child));
 
         } else {
           if (new_parent->is_terminal()) {
-            status = inserter.update_at(ARTBase::mutable_value<ValueT>(new_parent));
+            status = inserter.update_existing(ARTBase::mutable_value<ValueT>(new_parent));
           } else {
             new_parent->set_terminal();
-            status = inserter.insert_at(ARTBase::uninitialized_value(new_parent));
+            status = inserter.insert_new(ARTBase::uninitialized_value(new_parent));
           }
         }
 
@@ -144,13 +144,13 @@ inline Status ART<ValueT>::insert(std::string_view key, InserterT&& inserter)
 
           // If the node was already terminal, then update (in the case of ValueT=void, this is a
           // no-op; we would have short-circuited at the immediately enclosing conditional),
-          // otherwise mark the node as storing a value, and call InserterT::insert_at.
+          // otherwise mark the node as storing a value, and call InserterT::insert_new.
           //
           if (!node_is_terminal) {
             node->set_terminal();
-            status = inserter.insert_at(uninitialized_value(node));
+            status = inserter.insert_new(uninitialized_value(node));
           } else {
-            status = inserter.update_at(ARTBase::mutable_value<ValueT>(node));
+            status = inserter.update_existing(ARTBase::mutable_value<ValueT>(node));
           }
         }
         done = true;
@@ -214,7 +214,7 @@ inline Status ART<ValueT>::insert(std::string_view key, InserterT&& inserter)
         auto* new_node = this->grow_node(node);
         Node4* new_child = this->add_child(new_node, key_byte, new_key_data, new_key_len);
         new_child->set_terminal();
-        status = inserter.insert_at(ARTBase::mutable_value<ValueT>(new_child));
+        status = inserter.insert_new(ARTBase::mutable_value<ValueT>(new_child));
 
         node->set_obsolete();
         branch.store(new_node);
@@ -237,7 +237,7 @@ inline Status ART<ValueT>::insert(std::string_view key, InserterT&& inserter)
           }
           Node4* new_child = this->add_child(node, key_byte, new_key_data, new_key_len);
           new_child->set_terminal();
-          status = inserter.insert_at(uninitialized_value(new_child));
+          status = inserter.insert_new(uninitialized_value(new_child));
 
         } else {
           if (next.reload() != nullptr) {
@@ -247,7 +247,7 @@ inline Status ART<ValueT>::insert(std::string_view key, InserterT&& inserter)
           Node4* new_child = this->make_node4(new_key_data, new_key_len);
           next.store(new_child);
           new_child->set_terminal();
-          status = inserter.insert_at(uninitialized_value(new_child));
+          status = inserter.insert_new(uninitialized_value(new_child));
         }
       }
 

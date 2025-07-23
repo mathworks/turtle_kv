@@ -855,13 +855,13 @@ struct DefaultCopyInserter {
   {
   }
 
-  Status insert_at(void* copy_to)
+  Status insert_new(void* copy_to)
   {
     new (copy_to) ValueT{this->copy_from_};
     return OkStatus();
   }
 
-  Status update_at(ValueT* copy_to)
+  Status update_existing(ValueT* copy_to)
   {
     *copy_to = this->copy_from_;
     return OkStatus();
@@ -876,13 +876,13 @@ struct DefaultMoveInserter {
   {
   }
 
-  Status insert_at(void* move_to)
+  Status insert_new(void* move_to)
   {
     new (move_to) ValueT{std::move(this->move_from_)};
     return OkStatus();
   }
 
-  Status update_at(ValueT* move_to)
+  Status update_existing(ValueT* move_to)
   {
     *move_to = std::move(this->move_from_);
     return OkStatus();
@@ -890,12 +890,12 @@ struct DefaultMoveInserter {
 };
 
 struct DefaultVoidInserter {
-  BATT_ALWAYS_INLINE Status insert_at(void*)
+  BATT_ALWAYS_INLINE Status insert_new(void*)
   {
     return OkStatus();
   }
 
-  BATT_ALWAYS_INLINE Status update_at(void*)
+  BATT_ALWAYS_INLINE Status update_existing(void*)
   {
     return OkStatus();
   }

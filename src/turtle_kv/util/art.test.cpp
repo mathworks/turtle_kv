@@ -22,6 +22,9 @@ using namespace batt::int_types;
 using turtle_kv::LatencyMetric;
 using turtle_kv::LatencyTimer;
 using turtle_kv::None;
+using turtle_kv::OkStatus;
+using turtle_kv::Optional;
+using turtle_kv::Status;
 using turtle_kv::testing::RandomStringGenerator;
 
 using ART = turtle_kv::ART<void>;
@@ -329,7 +332,65 @@ TEST(ArtTest, SimdSearch)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-TEST(ArtTest, MultiThreadTest)
+struct TestStringViewInserter {
+  const std::string_view& src;
+
+  Status insert_new(void* dst) const
+  {
+    new (dst) std::string_view{this->src};
+    return OkStatus();
+  }
+
+  Status update_existing(std::string_view* dst) const
+  {
+    *dst = this->src;
+    return OkStatus();
+  }
+};
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+struct TestIntInserter {
+  usize src;
+
+  Status insert_new(void* dst) const
+  {
+    *((usize*)dst) = this->src;
+    return OkStatus();
+  }
+
+  Status update_existing(usize* dst) const
+  {
+    *dst = this->src;
+    return OkStatus();
+  }
+};
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void insert_key(turtle_kv::ART<void>& art, const std::string& key)
+{
+  art.insert(key);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void insert_key(turtle_kv::ART<std::string_view>& art, const std::string& key)
+{
+  BATT_CHECK_OK(art.insert(key, TestStringViewInserter{.src = key}));
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void insert_key(turtle_kv::ART<usize>& art, const std::string& key)
+{
+  BATT_CHECK_OK(art.insert(key, TestIntInserter{.src = *((const usize*)key.data() + 4)}));
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <typename ValueT>
+void run_benchmark_test()
 {
   const int n_rounds = 3;
   const int n_stages_per_round = 2;  // insert and query
@@ -343,7 +404,7 @@ TEST(ArtTest, MultiThreadTest)
   for (usize n_threads = 1; n_threads <= std::thread::hardware_concurrency(); ++n_threads) {
     std::atomic<int> round{-1};
     std::atomic<int> pending{0};
-    std::atomic<ART*> p_index{nullptr};
+    std::atomic<turtle_kv::ART<ValueT>*> p_index{nullptr};
     std::atomic<const std::string*> p_keys{nullptr};
     std::atomic<usize> n_keys{0};
     std::vector<std::thread> threads;
@@ -362,13 +423,13 @@ TEST(ArtTest, MultiThreadTest)
           BATT_CHECK_EQ(r, round.load());
 
           VLOG(1) << "thread " << i << " starting round " << r;
-          ART& index = *p_index.load();
+          turtle_kv::ART<ValueT>& index = *p_index.load();
           const std::string* keys = p_keys.load();
           const usize n = n_keys.load();
 
           if ((r % 2) == 0) {
             for (usize j = i; j < n; j += n_threads) {
-              index.insert(keys[j]);
+              insert_key(index, keys[j]);
             }
           } else {
             std::uniform_int_distribution<usize> pick_i{0, n - 1};
@@ -393,6 +454,9 @@ TEST(ArtTest, MultiThreadTest)
 
     usize size_i = 0;
     for (const usize num_keys : data_set_sizes) {
+      //----- --- -- -  -  -   -
+      // Generate random key set.
+      //
       std::vector<std::string> keys;
       {
         std::default_random_engine rng{/*seed=*/1};
@@ -403,6 +467,9 @@ TEST(ArtTest, MultiThreadTest)
         }
       }
 
+      //----- --- -- -  -  -   -
+      // Initialize the thread-shared state.
+      //
       n_keys.store(num_keys);
       p_keys.store(keys.data());
       auto on_scope_exit2 = batt::finally([&] {
@@ -410,13 +477,21 @@ TEST(ArtTest, MultiThreadTest)
         p_keys.store(nullptr);
       });
 
+      //----- --- -- -  -  -   -
+      // Create a metric for each latency we want to measure.
+      //
       LatencyMetric insert_latency;
       LatencyMetric st_query_latency;
       LatencyMetric mt_query_latency;
 
+      //----- --- -- -  -  -   -
+      // Run the benchmark repeatedly `n_rounds` times.
+      //
       for (int r = 0; r < n_rounds; ++r) {
-        ART index;
+        turtle_kv::ART<ValueT> index;
 
+        // Set `pending` and `p_index`; the threads will not start working until `round` is updated.
+        //
         pending.store(n_threads);
         p_index.store(&index);
         auto on_scope_exit3 = batt::finally([&] {
@@ -428,7 +503,13 @@ TEST(ArtTest, MultiThreadTest)
           LatencyTimer timer{insert_latency, num_keys};
 
           const int next_round = (r + size_i * n_rounds) * 2;
+
+          //----- --- -- -  -  -   -
+          // Ready, set, go!
+          //
           round.store(next_round);
+          //----- --- -- -  -  -   -
+
           while (pending.load() > 0) {
             std::this_thread::yield();
           }
@@ -441,15 +522,21 @@ TEST(ArtTest, MultiThreadTest)
           LatencyTimer timer{mt_query_latency, num_keys};
 
           const int next_round = (r + size_i * n_rounds) * 2 + 1;
+
+          //----- --- -- -  -  -   -
+          // Ready, set, go!
+          //
           round.store(next_round);
+          //----- --- -- -  -  -   -
+
           while (pending.load() > 0) {
             std::this_thread::yield();
           }
         }
 
         //----- --- -- -  -  -   -
-        // After multi-threaded part of this round is done
-
+        // After multi-threaded part of this round is done.
+        //
         usize found_count = 0;
         auto start_time = std::chrono::steady_clock::now();
         for (const std::string& key : keys) {
@@ -475,6 +562,104 @@ TEST(ArtTest, MultiThreadTest)
         }
       }
     }
+  }
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+TEST(ArtTest, MultiThreadTest_Void)
+{
+  run_benchmark_test<void>();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+TEST(ArtTest, MultiThreadTest_StringView)
+{
+  run_benchmark_test<std::string_view>();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+TEST(ArtTest, MultiThreadTest_Int)
+{
+  run_benchmark_test<usize>();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+TEST(ArtTest, ValuePutGetScan)
+{
+  const usize n_keys = 100 * 1000;
+  std::default_random_engine rng{std::random_device{}()};
+  RandomStringGenerator generate_key;
+
+  std::vector<std::string> keys;
+  keys.resize(n_keys);
+
+  std::unordered_set<std::string_view> unique_keys;
+
+  for (std::string& k : keys) {
+    for (;;) {
+      k = generate_key(rng);
+      if (!unique_keys.count(k)) {
+        unique_keys.emplace(k);
+        break;
+      }
+    }
+  }
+
+  turtle_kv::ART<std::string_view> art;
+
+  const auto check_key_by_index = [&art, &keys](usize query_i, usize expected_i) {
+    ASSERT_TRUE(art.contains(keys[query_i]));
+
+    const std::string_view* p_value = art.unsynchronized_find(keys[query_i]);
+    ASSERT_NE(p_value, nullptr);
+    ASSERT_THAT(*p_value, ::testing::StrEq(keys[expected_i]));
+
+    Optional<std::string_view> value_copy = art.find(keys[query_i]);
+    ASSERT_TRUE(value_copy);
+    ASSERT_THAT(*value_copy, ::testing::StrEq(keys[expected_i]));
+  };
+
+  for (usize i = 0; i < n_keys; ++i) {
+    Status status = art.insert(keys[i],
+                               TestStringViewInserter{
+                                   .src = keys[i / 2],
+                               });
+
+    ASSERT_TRUE(status.ok()) << BATT_INSPECT(status);
+
+    for (usize j = i - std::min<usize>(i, 25); j <= i; ++j) {
+      ASSERT_NO_FATAL_FAILURE(check_key_by_index(j, j / 2));
+    }
+  }
+
+  // Check all values once more to make sure nothing that was inserted earlier was messed up by a
+  // later insertion or update.
+  //
+  for (usize i = 0; i < n_keys; ++i) {
+    ASSERT_NO_FATAL_FAILURE(check_key_by_index(i, i / 2));
+  }
+
+  // Now update all keys and verify them.
+  //
+  for (usize i = 0; i < n_keys; ++i) {
+    Status status = art.insert(keys[i],
+                               TestStringViewInserter{
+                                   .src = keys[i],
+                               });
+
+    ASSERT_TRUE(status.ok()) << BATT_INSPECT(status);
+
+    for (usize j = i - std::min<usize>(i, 25); j <= i; ++j) {
+      ASSERT_NO_FATAL_FAILURE(check_key_by_index(j, j));
+    }
+  }
+
+  for (usize i = 0; i < n_keys; ++i) {
+    ASSERT_NO_FATAL_FAILURE(check_key_by_index(i, i));
   }
 }
 

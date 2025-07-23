@@ -733,6 +733,8 @@ StatusOr<usize> KVStore::scan(
     const KeyView& min_key,
     const Slice<std::pair<KeyView, ValueView>>& items_out) noexcept /*override*/
 {
+  this->metrics_.scan_count.add(1);
+
   KVStoreScanner scanner{*this, min_key};
   BATT_REQUIRE_OK(scanner.start());
 
@@ -1156,15 +1158,21 @@ std::function<void(std::ostream&)> KVStore::debug_info() noexcept
 
     auto& query_page_loader = PinningPageLoader::metrics();
 
-    std::array<double, 32> page_reads_per_get;
+    std::array<double, 32> page_reads_per_get, page_reads_per_scan;
     page_reads_per_get.fill(0);
+    page_reads_per_scan.fill(0);
 
     double total_get_count = kv_store.total_get_count();
+    double total_scan_count = kv_store.scan_count.get();
 
     for (usize i = 12; i < 28; ++i) {
       page_reads_per_get[i] =
           (double)llfs::PageDeviceMetrics::instance().read_count_per_page_size_log2[i] /
           total_get_count;
+
+      page_reads_per_scan[i] =
+          (double)llfs::PageDeviceMetrics::instance().read_count_per_page_size_log2[i] /
+          total_scan_count;
     }
 
     const auto print_page_alloc_info = [&](std::ostream& out) {
@@ -1191,6 +1199,22 @@ std::function<void(std::ostream&)> KVStore::debug_info() noexcept
     double page_reads_per_get_16m = page_reads_per_get[24];
     double page_reads_per_get_32m = page_reads_per_get[25];
     double page_reads_per_get_64m = page_reads_per_get[26];
+
+    double page_reads_per_scan_4k = page_reads_per_scan[12];
+    double page_reads_per_scan_8k = page_reads_per_scan[13];
+    double page_reads_per_scan_16k = page_reads_per_scan[14];
+    double page_reads_per_scan_32k = page_reads_per_scan[15];
+    double page_reads_per_scan_64k = page_reads_per_scan[16];
+    double page_reads_per_scan_128k = page_reads_per_scan[17];
+    double page_reads_per_scan_256k = page_reads_per_scan[18];
+    double page_reads_per_scan_512k = page_reads_per_scan[19];
+    double page_reads_per_scan_1m = page_reads_per_scan[20];
+    double page_reads_per_scan_2m = page_reads_per_scan[21];
+    double page_reads_per_scan_4m = page_reads_per_scan[22];
+    double page_reads_per_scan_8m = page_reads_per_scan[23];
+    double page_reads_per_scan_16m = page_reads_per_scan[24];
+    double page_reads_per_scan_32m = page_reads_per_scan[25];
+    double page_reads_per_scan_64m = page_reads_per_scan[26];
 
     out << "\n"
         << BATT_INSPECT(kv_store.mem_table_get_count) << "\n"                          //
@@ -1318,6 +1342,22 @@ std::function<void(std::ostream&)> KVStore::debug_info() noexcept
         << BATT_INSPECT(page_reads_per_get_16m) << "\n"                                //
         << BATT_INSPECT(page_reads_per_get_32m) << "\n"                                //
         << BATT_INSPECT(page_reads_per_get_64m) << "\n"                                //
+        << "\n"                                                                        //
+        << BATT_INSPECT(page_reads_per_scan_4k) << "\n"                                //
+        << BATT_INSPECT(page_reads_per_scan_8k) << "\n"                                //
+        << BATT_INSPECT(page_reads_per_scan_16k) << "\n"                               //
+        << BATT_INSPECT(page_reads_per_scan_32k) << "\n"                               //
+        << BATT_INSPECT(page_reads_per_scan_64k) << "\n"                               //
+        << BATT_INSPECT(page_reads_per_scan_128k) << "\n"                              //
+        << BATT_INSPECT(page_reads_per_scan_256k) << "\n"                              //
+        << BATT_INSPECT(page_reads_per_scan_512k) << "\n"                              //
+        << BATT_INSPECT(page_reads_per_scan_1m) << "\n"                                //
+        << BATT_INSPECT(page_reads_per_scan_2m) << "\n"                                //
+        << BATT_INSPECT(page_reads_per_scan_4m) << "\n"                                //
+        << BATT_INSPECT(page_reads_per_scan_8m) << "\n"                                //
+        << BATT_INSPECT(page_reads_per_scan_16m) << "\n"                               //
+        << BATT_INSPECT(page_reads_per_scan_32m) << "\n"                               //
+        << BATT_INSPECT(page_reads_per_scan_64m) << "\n"                               //
         << "\n"                                                                        //
         << print_page_alloc_info                                                       //
         << "\n"                                                                        //

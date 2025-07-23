@@ -21,6 +21,8 @@ struct KVStoreMetrics {
   FastCountMetric<u64> checkpoint_get_count{0};
   LatencyMetric checkpoint_get_latency;
 
+  FastCountMetric<u64> scan_count{0};
+
   LatencyMetric compact_batch_latency;
   LatencyMetric push_batch_latency;
   LatencyMetric finalize_checkpoint_latency;
