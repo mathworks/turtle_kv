@@ -618,6 +618,7 @@ void KVStore::reset_thread_context() noexcept
 
   thread_context.query_page_loader.emplace(this->page_cache());
   thread_context.query_result_storage.emplace();
+  thread_context.scan_result_storage.emplace();
   thread_context.query_count = 0;
 }
 
@@ -733,6 +734,9 @@ StatusOr<usize> KVStore::scan(
     const KeyView& min_key,
     const Slice<std::pair<KeyView, ValueView>>& items_out) noexcept /*override*/
 {
+  ThreadContext& thread_context = this->per_thread_.get(this);
+  thread_context.scan_result_storage.emplace();
+
   this->metrics_.scan_count.add(1);
 
   KVStoreScanner scanner{*this, min_key};

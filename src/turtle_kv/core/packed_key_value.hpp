@@ -200,4 +200,49 @@ struct ShiftedPackedKeyOrder {
   }
 };
 
+/** \brief A comparator that computes a PackedKeyValue's absolute byte offset from the start of a
+ * leaf page, and compares it to a given target absolute offset.
+ */
+struct PackedKeyOffsetCompare {
+  /** \brief A "base" PackedKeyValue whose absolute offset is already known, which we can use to
+   * compute any other PackedKeyValue's object. This comparator relies on base_pkv to be the start
+   * of the range it is being used on, i.e., smaller than everything it is being compared to.
+   */
+  usize base_absolute_offset;
+  const PackedKeyValue* base_pkv;
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  usize get_key_data_offset(const PackedKeyValue& pkv) const
+  {
+    usize item_diff = &pkv - this->base_pkv;
+    usize pkv_item_offset = this->base_absolute_offset + (item_diff * 4);
+    return pkv_item_offset + pkv.key_offset;
+  }
+
+  bool operator()(u32 target_key_data_offset, const PackedKeyValue& pkv) const
+  {
+    return target_key_data_offset < this->get_key_data_offset(pkv);
+  }
+};
+
+/** \brief A comparator used to compare a shifted/sharded PackedKeyValue range to a given comparison
+ * key.
+ */
+struct ShiftedPackedKeyDataCompare {
+  isize offset_delta;
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  KeyView get_key_view(const PackedKeyValue& pkv) const
+  {
+    return pkv.shifted_key_view(offset_delta);
+  }
+
+  bool operator()(const PackedKeyValue& pkv, const KeyView& comp_key) const
+  {
+    return KeyOrder{}(this->get_key_view(pkv), comp_key);
+  }
+};
+
 }  // namespace turtle_kv

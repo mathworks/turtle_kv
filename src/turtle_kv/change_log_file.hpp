@@ -74,7 +74,7 @@ class ChangeLogFile
     }
   };
 
-  struct /*alignas(llfs::kDirectIOBlockAlign)*/ PackedConfig {
+  struct alignas(llfs::kDirectIOBlockAlign) PackedConfig {
     static constexpr u64 kMagic = 0x53ee6863bf7a1254ull;
 
     big_u64 magic;

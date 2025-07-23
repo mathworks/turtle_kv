@@ -446,12 +446,12 @@ void SubtreeBatchUpdateScenario::run()
         std::array<std::pair<KeyView, ValueView>, kMaxScanSize> scan_items_buffer;
         KeyView min_key = update.result_set.get_min_key();
 
-        KVStoreScanner kv_scanner{
-            *page_loader,
-            root_ptr->page_id_slot_or_panic(),
-            BATT_OK_RESULT_OR_PANIC(root_ptr->get_height(*page_loader)),
-            min_key,
-        };
+        KVStoreScanner kv_scanner{*page_loader,
+                                  root_ptr->page_id_slot_or_panic(),
+                                  BATT_OK_RESULT_OR_PANIC(root_ptr->get_height(*page_loader)),
+                                  min_key,
+                                  tree_options.trie_index_sharded_view_size(),
+                                  None};
 
         usize n_read = 0;
         {

@@ -41,6 +41,7 @@ using turtle_kv::KeyOrder;
 using turtle_kv::KeyView;
 using turtle_kv::MergeCompactor;
 using turtle_kv::Optional;
+using turtle_kv::PackedKeyValue;
 using turtle_kv::PackedLeafPage;
 using turtle_kv::SegmentedLevelBuilder;
 using turtle_kv::SegmentedLevelScanner;

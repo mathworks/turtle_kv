@@ -67,6 +67,7 @@ class KVStore : public Table
     boost::intrusive_ptr<llfs::StorageContext> storage_context;
     Optional<PinningPageLoader> query_page_loader;
     Optional<PageSliceStorage> query_result_storage;
+    Optional<PageSliceStorage> scan_result_storage;
     u64 query_count = 0;
     ChangeLogWriter& log_writer_;
     u64 current_mem_table_id = 0;

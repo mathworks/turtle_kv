@@ -109,6 +109,11 @@ struct FakeSegment {
     this->page_id_ = page_id;
   }
 
+  llfs::PageId get_leaf_page_id() const
+  {
+    return this->page_id_;
+  }
+
   void clear_active_pivots()
   {
     this->active_pivots_ = 0;

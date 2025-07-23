@@ -4,6 +4,7 @@
 #include <turtle_kv/mem_table.hpp>
 #include <turtle_kv/scan_metrics.hpp>
 
+#include <turtle_kv/import/env.hpp>
 #include <turtle_kv/import/int_types.hpp>
 
 #include <turtle_kv/tree/algo/nodes.hpp>
@@ -12,6 +13,7 @@
 #include <turtle_kv/tree/packed_leaf_page.hpp>
 #include <turtle_kv/tree/packed_node_page.hpp>
 #include <turtle_kv/tree/segmented_level_scanner.hpp>
+#include <turtle_kv/tree/sharded_leaf_scanner.hpp>
 #include <turtle_kv/tree/subtree.hpp>
 
 #include <turtle_kv/util/art.hpp>
@@ -45,6 +47,9 @@ class KVStoreScanner
   using PackedLevelScanner =
       SegmentedLevelScanner<const PackedNodePage, const PackedLevel, llfs::PageLoader>;
 
+  using PackedLevelShardedScanner =
+      ShardedLeafScanner<const PackedNodePage, const PackedLevel, llfs::PageLoader>;
+
   struct NodeScanState;
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -59,6 +64,12 @@ class KVStoreScanner
   //
   struct TreeLevelScanState {
     KVSlice kv_slice;
+    NodeScanState* node_state;
+    i32 buffer_level_i;
+  };
+
+  struct TreeLevelScanShardedState {
+    ShardedKeyValueSlice kv_slice;
     NodeScanState* node_state;
     i32 buffer_level_i;
   };
@@ -78,12 +89,17 @@ class KVStoreScanner
                  MemTableScanState<ARTBase::Synchronized::kTrue>,
                  MemTableScanState<ARTBase::Synchronized::kFalse>,
                  Slice<const EditView>,
-                 TreeLevelScanState>
+                 TreeLevelScanState,
+                 TreeLevelScanShardedState>
         state_impl;
 
     //----- --- -- -  -  -   -
 
     explicit ScanLevel(const KVSlice& kv_slice, NodeScanState* frame, i32 buffer_level_i) noexcept;
+
+    explicit ScanLevel(const ShardedKeyValueSlice& kv_slice,
+                       NodeScanState* frame,
+                       i32 buffer_level_i) noexcept;
 
     explicit ScanLevel(ActiveMemTableTag,
                        MemTable& mem_table,
@@ -126,12 +142,17 @@ class KVStoreScanner
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
   //
   struct NodeScanState {
+    using LevelVector = boost::container::static_vector<PackedLevelScanner, kMaxUpdateBufferLevels>;
+    
+    using ShardedLevelVector =
+        boost::container::static_vector<PackedLevelShardedScanner, kMaxUpdateBufferLevels>;
+
     u64 active_levels_;
     llfs::PinnedPage pinned_page_;
     const PackedNodePage* node_;
     i32 pivot_i_;
     boost::container::static_vector<PackedLevel, kMaxUpdateBufferLevels> levels_;
-    boost::container::static_vector<PackedLevelScanner, kMaxUpdateBufferLevels> level_scanners_;
+    std::variant<LevelVector, ShardedLevelVector> level_scanners_;
 
     //----- --- -- -  -  -   -
 
@@ -155,6 +176,8 @@ class KVStoreScanner
 
     KVSlice pull_next(i32 buffer_level_i);
 
+    ShardedKeyValueSlice pull_next_sharded(i32 buffer_level_i);
+
     void deactivate(i32 buffer_level_i);
   };
 
@@ -169,7 +192,9 @@ class KVStoreScanner
   explicit KVStoreScanner(llfs::PageLoader& page_loader,
                           const llfs::PageIdSlot& root,
                           i32 tree_height,
-                          const KeyView& min_key) noexcept;
+                          const KeyView& min_key,
+                          llfs::PageSize trie_index_sharded_view_size,
+                          Optional<PageSliceStorage> slice_storage) noexcept;
 
   ~KVStoreScanner() noexcept;
 
@@ -212,7 +237,9 @@ class KVStoreScanner
 
   boost::intrusive_ptr<const KVStore::State> pinned_state_;
   llfs::PageLoader& page_loader_;
+  PageSliceStorage* slice_storage_;
   llfs::PageIdSlot root_;
+  llfs::PageSize trie_index_sharded_view_size_;
   i32 tree_height_;
   KeyView min_key_;
   bool needs_resume_;

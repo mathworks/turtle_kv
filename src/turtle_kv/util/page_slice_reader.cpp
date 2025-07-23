@@ -49,6 +49,7 @@ StatusOr<ConstBuffer> PageSliceReader::read_slice(llfs::PageSize shard_size,
   //     will copy the requested data one shard at a time into a LocalSliceBuffer
   //
   if (shard_aligned_slice.size() == shard_size) {
+    BATT_CHECK(this->page_id_);
     Optional<llfs::PageId> shard_page_id =
         this->page_cache_.page_shard_id_for(this->page_id_, shard_aligned_slice);
 

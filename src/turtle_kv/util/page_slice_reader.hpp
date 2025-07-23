@@ -63,6 +63,20 @@ class PageSliceReader
                                    llfs::PinPageToJob pin_page_to_job,
                                    llfs::LruPriority lru_priority) const;
 
+  void set_page_id(const llfs::PageId page_id)
+  {
+    // TODO [tastolfi 2025-07-09] Maybe we should call storage_out.pinned_pages.clear()?
+    //
+    this->page_id_ = page_id;
+  }
+
+  void set_page_id(const llfs::PageIdSlot& page_id_slot)
+  {
+    // TODO [tastolfi 2025-07-09] Maybe we should call storage_out.pinned_pages.clear()?
+    //
+    this->page_id_ = page_id_slot.page_id;
+  }
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
   llfs::PageLoader& page_loader_;
