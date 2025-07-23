@@ -6,10 +6,11 @@ namespace turtle_kv {
 bool use_sharded_leaf_scanner()
 {
   static const bool b_ = [] {
-    const bool turtlekv_use_sharded_leaf_scanner =
-        getenv_as<bool>("turtlekv_use_sharded_leaf_scanner").value_or(false);
+    const char* varname = "turtlekv_use_sharded_leaf_scanner";
 
-    LOG(INFO) << "turtlekv_use_sharded_leaf_scanner=" << turtlekv_use_sharded_leaf_scanner;
+    const bool turtlekv_use_sharded_leaf_scanner = getenv_as<bool>(varname).value_or(false);
+
+    LOG(INFO) << varname << "=" << turtlekv_use_sharded_leaf_scanner;
 
     return turtlekv_use_sharded_leaf_scanner;
   }();
