@@ -55,8 +55,11 @@ inline Status ART<ValueT>::insert(std::string_view key, InserterT&& inserter)
         SeqMutex<u32>::WriteLock root_write_lock{this->super_root_.mutex_};
         if (branch.reload() == nullptr) {
           Node4* new_node = branch.store(this->make_node4(key_data, key_len));
-          new_node->set_terminal();
-          return inserter.insert_new(ARTBase::uninitialized_value(new_node));
+          Status status = inserter.insert_new(ARTBase::uninitialized_value(new_node));
+          if (status.ok()) {
+            new_node->set_terminal();
+          }
+          return status;
         }
       }
 
@@ -108,15 +111,19 @@ inline Status ART<ValueT>::insert(std::string_view key, InserterT&& inserter)
                                             /*key_byte=*/key_data[common_len],
                                             key_data + (common_len + 1),
                                             key_len - (common_len + 1));
-          new_child->set_terminal();
           status = inserter.insert_new(ARTBase::uninitialized_value(new_child));
+          if (status.ok()) {
+            new_child->set_terminal();
+          }
 
         } else {
           if (new_parent->is_terminal()) {
             status = inserter.update_existing(ARTBase::mutable_value<ValueT>(new_parent));
           } else {
-            new_parent->set_terminal();
             status = inserter.insert_new(ARTBase::uninitialized_value(new_parent));
+            if (status.ok()) {
+              new_parent->set_terminal();
+            }
           }
         }
 
@@ -147,8 +154,10 @@ inline Status ART<ValueT>::insert(std::string_view key, InserterT&& inserter)
           // otherwise mark the node as storing a value, and call InserterT::insert_new.
           //
           if (!node_is_terminal) {
-            node->set_terminal();
             status = inserter.insert_new(uninitialized_value(node));
+            if (status.ok()) {
+              node->set_terminal();
+            }
           } else {
             status = inserter.update_existing(ARTBase::mutable_value<ValueT>(node));
           }
@@ -213,8 +222,10 @@ inline Status ART<ValueT>::insert(std::string_view key, InserterT&& inserter)
 
         auto* new_node = this->grow_node(node);
         Node4* new_child = this->add_child(new_node, key_byte, new_key_data, new_key_len);
-        new_child->set_terminal();
         status = inserter.insert_new(ARTBase::mutable_value<ValueT>(new_child));
+        if (status.ok()) {
+          new_child->set_terminal();
+        }
 
         node->set_obsolete();
         branch.store(new_node);
@@ -236,8 +247,10 @@ inline Status ART<ValueT>::insert(std::string_view key, InserterT&& inserter)
             return;
           }
           Node4* new_child = this->add_child(node, key_byte, new_key_data, new_key_len);
-          new_child->set_terminal();
           status = inserter.insert_new(uninitialized_value(new_child));
+          if (status.ok()) {
+            new_child->set_terminal();
+          }
 
         } else {
           if (next.reload() != nullptr) {
@@ -246,8 +259,10 @@ inline Status ART<ValueT>::insert(std::string_view key, InserterT&& inserter)
           }
           Node4* new_child = this->make_node4(new_key_data, new_key_len);
           next.store(new_child);
-          new_child->set_terminal();
           status = inserter.insert_new(uninitialized_value(new_child));
+          if (status.ok()) {
+            new_child->set_terminal();
+          }
         }
       }
 

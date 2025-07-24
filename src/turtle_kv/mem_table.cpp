@@ -3,17 +3,17 @@
 
 #include <turtle_kv/import/env.hpp>
 
+#include <turtle_kv/util/env_param.hpp>
+
 #include <batteries/async/task.hpp>
 #include <batteries/checked_cast.hpp>
 
 namespace turtle_kv {
 
-#define GET_USE_ORDERED_INDEX()                                                                    \
-  static const bool use_ordered_index = [] {                                                       \
-    const bool b = getenv_as<bool>("turtlekv_memtable_ordered_index").value_or(true);              \
-    LOG(INFO) << "turtlekv_memtable_ordered_index=" << b;                                          \
-    return b;                                                                                      \
-  }()
+TURTLE_KV_ENV_PARAM(bool, turtlekv_memtable_hash_index, false);
+TURTLE_KV_ENV_PARAM(bool, turtlekv_memtable_ordered_index, true);
+TURTLE_KV_ENV_PARAM(bool, turtlekv_memtable_count_latest_update_only, true);
+TURTLE_KV_ENV_PARAM(u32, turtlekv_memtable_hash_bucket_div, 32);
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
@@ -21,7 +21,7 @@ namespace turtle_kv {
 {
   return RuntimeOptions{
       .limit_size_by_latest_updates_only =
-          getenv_as<bool>("turtlekv_memtable_count_latest_update_only").value_or(true),
+          getenv_param<turtlekv_memtable_count_latest_update_only>(),
   };
 }
 
@@ -34,8 +34,9 @@ namespace turtle_kv {
     : page_cache_{page_cache}
     , metrics_{metrics}
     , is_finalized_{false}
-    , hash_index_{max_byte_size /
-                  getenv_as<usize>("turtlekv_memtable_hash_bucket_div").value_or(32)}
+    , hash_index_{}
+    , ordered_index_{}
+    , art_index_{}
     , max_byte_size_{BATT_CHECKED_CAST(i64, max_byte_size)}
     , current_byte_size_{0}
     , self_id_{id.or_else([&] {
@@ -46,6 +47,15 @@ namespace turtle_kv {
     , block_list_mutex_{}
     , blocks_{}
 {
+  if (getenv_param<turtlekv_memtable_hash_index>()) {
+    this->hash_index_.emplace(max_byte_size / getenv_param<turtlekv_memtable_hash_bucket_div>());
+    if (getenv_param<turtlekv_memtable_ordered_index>()) {
+      this->ordered_index_.emplace();
+    }
+  } else {
+    this->art_index_.emplace();
+  }
+
   this->metrics_.mem_table_alloc.add(1);
 
   const usize total_overhead_estimate = max_byte_size * 32 / 10;
@@ -71,26 +81,39 @@ Status MemTable::put(ChangeLogWriter::Context& context,
                      const KeyView& key,
                      const ValueView& value) noexcept
 {
-  GET_USE_ORDERED_INDEX();
-
   StorageImpl storage{*this, context, OkStatus()};
 
-  MemTableEntryInserter<StorageImpl> inserter{
-      this->current_byte_size_,
-      this->max_byte_size_,
-      this->runtime_options_.limit_size_by_latest_updates_only,
-      storage,
-      key,
-      value,
-      this->version_.fetch_add(1),
-  };
+  if (this->hash_index_) {
+    MemTableEntryInserter<StorageImpl> inserter{
+        this->current_byte_size_,
+        this->max_byte_size_,
+        this->runtime_options_.limit_size_by_latest_updates_only,
+        storage,
+        key,
+        value,
+        this->version_.fetch_add(1),
+    };
 
-  BATT_REQUIRE_OK(this->hash_index_.insert(inserter));
+    BATT_REQUIRE_OK(this->hash_index_->insert(inserter));
 
-  // If this is a key we haven't seen before, add it to the ordered index.
-  //
-  if (use_ordered_index && inserter.inserted) {
-    this->ordered_index_.insert(get_key(*inserter.entry));
+    // If this is a key we haven't seen before, add it to the ordered index.
+    //
+    if (this->ordered_index_ && inserter.inserted) {
+      this->ordered_index_->insert(get_key(*inserter.entry));
+    }
+
+  } else {
+    MemTableValueEntryInserter<StorageImpl> inserter{
+        this->current_byte_size_,
+        this->max_byte_size_,
+        this->runtime_options_.limit_size_by_latest_updates_only,
+        storage,
+        key,
+        value,
+        this->version_.fetch_add(1),
+    };
+
+    BATT_REQUIRE_OK(this->art_index_->insert(key, inserter));
   }
 
   return storage.status;
@@ -100,11 +123,20 @@ Status MemTable::put(ChangeLogWriter::Context& context,
 //
 Optional<ValueView> MemTable::get(const KeyView& key) noexcept
 {
-  MemTableEntry entry;
-  if (!this->hash_index_.find_key(key, entry)) {
+  if (this->hash_index_) {
+    MemTableEntry entry;
+    if (!this->hash_index_->find_key(key, entry)) {
+      return None;
+    }
+    return entry.value_;
+  }
+
+  Optional<MemTableValueEntry> entry = this->art_index_->find(key);
+  if (!entry) {
     return None;
   }
-  return entry.value_;
+
+  return entry->value_view();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -114,19 +146,30 @@ usize MemTable::scan(const KeyView& min_key,
 {
   usize n_found = 0;
 
-  // const u32 read_version = this->version_.load();
-  this->ordered_index_.scan(min_key, [&](const std::string_view& tmp_key) {
-    if (n_found >= items_out.size()) {
-      return false;
+  if (this->ordered_index_) {
+    this->ordered_index_->scan(min_key, [&](const std::string_view& tmp_key) {
+      if (n_found >= items_out.size()) {
+        return false;
+      }
+      MemTableEntry entry;
+      if (this->hash_index_->find_key(tmp_key, entry)) {
+        items_out[n_found].first = entry.key_;
+        items_out[n_found].second = entry.value_;
+        ++n_found;
+      }
+      return true;
+    });
+
+  } else {
+    ART<MemTableValueEntry>::Scanner<ARTBase::Synchronized::kTrue> scanner{*this->art_index_,
+                                                                           min_key};
+
+    for (; n_found < items_out.size() && !scanner.is_done(); ++n_found) {
+      items_out[n_found].first = scanner.get_key();
+      items_out[n_found].second = scanner.get_value().value_view();
+      scanner.advance();
     }
-    MemTableEntry entry;
-    if (this->hash_index_.find_key(tmp_key, entry)) {
-      items_out[n_found].first = entry.key_;
-      items_out[n_found].second = entry.value_;
-      ++n_found;
-    }
-    return true;
-  });
+  }
 
   return n_found;
 }
@@ -135,11 +178,19 @@ usize MemTable::scan(const KeyView& min_key,
 //
 Optional<ValueView> MemTable::finalized_get(const KeyView& key) noexcept
 {
-  const MemTableEntry* entry = this->hash_index_.unsynchronized_find_key(key);
+  if (this->hash_index_) {
+    const MemTableEntry* entry = this->hash_index_->unsynchronized_find_key(key);
+    if (!entry) {
+      return None;
+    }
+    return entry->value_;
+  }
+
+  const MemTableValueEntry* entry = this->art_index_->unsynchronized_find(key);
   if (!entry) {
     return None;
   }
-  return entry->value_;
+  return entry->value_view();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -179,8 +230,6 @@ bool MemTable::finalize() noexcept
 //
 MergeCompactor::ResultSet</*decay_to_items=*/false> MemTable::compact() noexcept
 {
-  GET_USE_ORDERED_INDEX();
-
   BATT_CHECK(this->is_finalized_);
 
   for (;;) {
@@ -199,10 +248,25 @@ MergeCompactor::ResultSet</*decay_to_items=*/false> MemTable::compact() noexcept
     BATT_CHECK_EQ(locked_state, Self::kCompactionState_InProgress);
   });
 
-  usize total_keys = 0;
-  total_keys = this->hash_index_.size();
-
   std::vector<EditView> edits_out;
+
+  if (this->hash_index_) {
+    edits_out = this->compact_hash_index();
+  } else {
+    edits_out = this->compact_art_index();
+  }
+
+  this->compacted_edits_.append(std::move(edits_out));
+
+  return this->compacted_edits_;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+std::vector<EditView> MemTable::compact_hash_index()
+{
+  std::vector<EditView> edits_out;
+  usize total_keys = this->hash_index_->size();
   edits_out.reserve(total_keys);
 
   const auto value_from_entry = [this](const MemTableEntry& entry) {
@@ -235,15 +299,15 @@ MergeCompactor::ResultSet</*decay_to_items=*/false> MemTable::compact() noexcept
     return value;
   };
 
-  if (use_ordered_index) {
+  if (this->ordered_index_) {
     ART<void>::Scanner<ARTBase::Synchronized::kFalse> scanner{
-        this->ordered_index_,
+        *this->ordered_index_,
         /*lower_bound_key=*/std::string_view{}};
 
     while (!scanner.is_done()) {
       const std::string_view& tmp_key = scanner.get_key();
 
-      const MemTableEntry* entry = this->hash_index_.unsynchronized_find_key(tmp_key);
+      const MemTableEntry* entry = this->hash_index_->unsynchronized_find_key(tmp_key);
       BATT_CHECK_NOT_NULLPTR(entry);
 
       edits_out.emplace_back(get_key(*entry), value_from_entry(*entry));
@@ -252,7 +316,7 @@ MergeCompactor::ResultSet</*decay_to_items=*/false> MemTable::compact() noexcept
     }
 
   } else {
-    this->hash_index_.for_each(  //
+    this->hash_index_->for_each(  //
         [&](const MemTableEntry& entry) {
           KeyView key = get_key(entry);
           ValueView value = value_from_entry(entry);
@@ -262,9 +326,27 @@ MergeCompactor::ResultSet</*decay_to_items=*/false> MemTable::compact() noexcept
     std::sort(edits_out.begin(), edits_out.end(), KeyOrder{});
   }
 
-  this->compacted_edits_.append(std::move(edits_out));
+  return edits_out;
+}
 
-  return this->compacted_edits_;
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+std::vector<EditView> MemTable::compact_art_index()
+{
+  std::vector<EditView> edits_out;
+
+  ART<MemTableValueEntry>::Scanner<ARTBase::Synchronized::kFalse> scanner{
+      *this->art_index_,
+      /*min_key=*/std::string_view{}};
+
+  for (; !scanner.is_done(); scanner.advance()) {
+    const MemTableValueEntry& entry = scanner.get_value();
+    edits_out.emplace_back(entry.key_view(), entry.value_view());
+    //
+    // TODO [tastolfi 2025-07-24] compact merge-op values
+  }
+
+  return edits_out;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

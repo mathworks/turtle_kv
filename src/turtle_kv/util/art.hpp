@@ -935,6 +935,8 @@ class ART : public ARTBase
     ART::metrics().destruct_count.add(1);
   }
 
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
   template <typename InserterT>
   Status insert(std::string_view key, InserterT&& inserter);
 
@@ -1065,7 +1067,7 @@ NodeT& scanner_view_of(usize,
                        AlignedStorageT*,
                        std::integral_constant<ARTBase::Synchronized, ARTBase::Synchronized::kFalse>,
                        const Optional<bool>& /*sync*/,
-                       void* /*value_storage_addr*/,
+                       const void* /*value_storage_addr*/,
                        batt::StaticType<ValueT> /*type_of_value*/)
 {
   return *node;
@@ -1165,21 +1167,6 @@ struct ValueStorageBase<void, ARTBase::Synchronized::kDynamic> {
   }
 };
 
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-template <typename ValueT>
-void run_destructor(ValueT*& value)
-{
-  if (value) {
-    value->~ValueT();
-    value = nullptr;
-  }
-}
-
-inline void run_destructor(void*& /*value*/)
-{
-}
-
 }  // namespace detail
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
@@ -1269,9 +1256,6 @@ class ART<ValueT>::Scanner : public detail::ValueStorageBase<ValueT, kSynchroniz
 
   ~Scanner() noexcept
   {
-    if (!std::is_same_v<ValueT, void>) {
-      detail::run_destructor(this->next_value_);
-    }
   }
 
   bool is_synchronized() const
@@ -1359,12 +1343,13 @@ class ART<ValueT>::Scanner : public detail::ValueStorageBase<ValueT, kSynchroniz
     if (node_view.is_terminal()) {
       this->next_key_.emplace(this->key_buffer_.data(), top->key_prefix_len_);
       if (!std::is_same_v<ValueT, void>) {
-        detail::run_destructor(this->next_value_);
-        this->next_value_ =
-            reinterpret_cast<ValueT*>(this->value_storage_address(&node_view, this->synchronized_));
+        this->next_value_ = (ValueT*)(this->value_storage_address(&node_view, this->synchronized_));
       }
     } else {
       this->next_key_ = None;
+      if (!std::is_same_v<ValueT, void>) {
+        this->next_value_ = nullptr;
+      }
     }
 
     top->scan_state_.template emplace<typename NodeT::ScanState>(node_view, top->min_key_byte_);
@@ -1392,6 +1377,9 @@ class ART<ValueT>::Scanner : public detail::ValueStorageBase<ValueT, kSynchroniz
   void advance()
   {
     this->next_key_ = None;
+    if (!std::is_same_v<ValueT, void>) {
+      this->next_value_ = nullptr;
+    }
 
     for (;;) {
       if (this->depth_ == 0) {

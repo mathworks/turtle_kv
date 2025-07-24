@@ -157,14 +157,37 @@ class MemTable : public batt::RefCounted<MemTable>
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  bool has_hash_index() const noexcept
+  {
+    return bool{this->hash_index_};
+  }
+
   ConcurrentHashIndex& hash_index()
   {
-    return this->hash_index_;
+    BATT_CHECK(this->hash_index_);
+    return *this->hash_index_;
+  }
+
+  bool has_ordered_index() const noexcept
+  {
+    return bool{this->ordered_index_};
   }
 
   ART<void>& ordered_index()
   {
-    return this->ordered_index_;
+    BATT_CHECK(this->ordered_index_);
+    return *this->ordered_index_;
+  }
+
+  bool has_art_index() const noexcept
+  {
+    return bool{this->art_index_};
+  }
+
+  ART<MemTableValueEntry>& art_index()
+  {
+    BATT_CHECK(this->art_index_);
+    return *this->art_index_;
   }
 
   /** \brief Returns the sorted, compacted edits of this MemTable as a single Slice, if compact()
@@ -209,6 +232,10 @@ class MemTable : public batt::RefCounted<MemTable>
     this->cache_allocs_.emplace_back(this->page_cache_.allocate_external(byte_count));
   }
 
+  std::vector<EditView> compact_hash_index();
+
+  std::vector<EditView> compact_art_index();
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   llfs::PageCache& page_cache_;
@@ -219,9 +246,14 @@ class MemTable : public batt::RefCounted<MemTable>
 
   RuntimeOptions runtime_options_ = RuntimeOptions::with_default_values();
 
-  ConcurrentHashIndex hash_index_;
+  //----- --- -- -  -  -   -
+  //
+  Optional<ConcurrentHashIndex> hash_index_;
+  Optional<ART<void>> ordered_index_;
+  //
+  //----- --- -- -  -  -   -
 
-  ART<void> ordered_index_;
+  Optional<ART<MemTableValueEntry>> art_index_;
 
   const i64 max_byte_size_;
 
