@@ -39,6 +39,11 @@
  */
 #define TURTLE_KV_ENABLE_TCMALLOC 1
 
+/** \brief Enable/disable heap profiling support for gperftools/tcmalloc.  Only has an effect if
+ * TURTLE_KV_ENABLE_TCMALLOC is 1.
+ */
+#define TURTLE_KV_ENABLE_TCMALLOC_HEAP_PROFILING 0
+
 namespace turtle_kv {
 
 constexpr i64 kNodeLruPriority = 4;

@@ -1,6 +1,8 @@
 #include <turtle_kv/kv_store.hpp>
 //
 
+#include <turtle_kv/config.hpp>
+
 #include <turtle_kv/checkpoint_log.hpp>
 #include <turtle_kv/file_utils.hpp>
 #include <turtle_kv/kv_store_scanner.hpp>
@@ -20,9 +22,13 @@
 #include <llfs/bloom_filter_page_view.hpp>
 #include <llfs/page_device_metrics.hpp>
 
+#if TURTLE_KV_ENABLE_TCMALLOC
+#if TURTLE_KV_ENABLE_TCMALLOC_HEAP_PROFILING
 #include <gperftools/heap-profiler.h>
 #include <gperftools/malloc_extension.h>
 #include <gperftools/malloc_hook.h>
+#endif  // TURTLE_KV_ENABLE_TCMALLOC_HEAP_PROFILING
+#endif  // TURTLE_KV_ENABLE_TCMALLOC
 
 #include <set>
 
@@ -297,6 +303,7 @@ u64 query_page_loader_reset_every_n()
 /*static*/ Status KVStore::global_init()
 {
   const static Status status = []() -> Status {
+#if TURTLE_KV_ENABLE_TCMALLOC
     const bool tune_tcmalloc = getenv_as<bool>("turtlekv_tune_tcmalloc").value_or(false);
     if (tune_tcmalloc) {
       MallocExtension* m_ext = MallocExtension::instance();
@@ -316,31 +323,15 @@ u64 query_page_loader_reset_every_n()
       LOG(INFO) << "tcmalloc.memory_release_rate " << m_ext->GetMemoryReleaseRate();
     }
 
+#if TURTLE_KV_ENABLE_TC_MALLOC_HEAP_PROFILING
     const char* turtlekv_heap_profile = std::getenv("turtlekv_heap_profile");
     if (turtlekv_heap_profile) {
-      // MemoryProfiler::set_enabled(true);
-
-#if 1
       HeapProfilerStart(turtlekv_heap_profile);
       BATT_CHECK_NE(IsHeapProfilerRunning(), 0);
       LOG(INFO) << BATT_INSPECT_STR(turtlekv_heap_profile) << "; heap profiling enabled";
-#endif
-#if 0
-      new std::thread{[&] {
-        int n_blocks = 0;
-        usize total = 0;
-        int hist[kMallocHistogramSize];
-
-        for (;;) {
-          std::this_thread::sleep_for(std::chrono::milliseconds{1111});
-          const bool ok = MallocExtension::instance()->MallocMemoryStats(&n_blocks, &total, hist);
-          BATT_CHECK(ok);
-
-          std::cerr << BATT_INSPECT(n_blocks) << BATT_INSPECT(total) << std::endl;
-        }
-      }};
-#endif
     }
+#endif  // TURTLE_KV_ENABLE_TCMALLOC_HEAP_PROFILING
+#endif  // TURTLE_KV_ENABLE_TCMALLOC
 
     return OkStatus();
   }();
