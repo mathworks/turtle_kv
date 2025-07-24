@@ -384,7 +384,8 @@ void insert_key(turtle_kv::ART<std::string_view>& art, const std::string& key)
 //
 void insert_key(turtle_kv::ART<usize>& art, const std::string& key)
 {
-  BATT_CHECK_OK(art.insert(key, TestIntInserter{.src = *((const usize*)key.data() + 4)}));
+  BATT_CHECK_GE(key.size(), sizeof(usize));
+  BATT_CHECK_OK(art.insert(key, TestIntInserter{.src = *((const usize*)(key.data()))}));
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
