@@ -42,6 +42,12 @@ struct BigUInt64KeyGenerator {
     s.resize(sizeof(llfs::big_u64));
     *((llfs::big_u64*)s.data()) = pick_n(rng);
 
+    // depth == 1 will be Node256, but not full.
+    //
+    if ((s[0] & 7) == 0) {
+      s[0] += 1;
+    }
+
     // depth == 2 will max out at Node48.
     //
     s[1] &= 31;
@@ -83,6 +89,15 @@ TEST(ArtTest, ByteInt)
   EXPECT_LT(ByteInt::from_i32(-1), ByteInt::from_char(a));
   EXPECT_LT(ByteInt::from_i32(-1), ByteInt::from_char(b));
   EXPECT_LT(ByteInt::from_i32(-1), ByteInt::from_char(c));
+
+  ByteInt i = ByteInt::from_i32(255);
+
+  EXPECT_EQ(i, ByteInt::from_char(a));
+
+  ++i;
+
+  EXPECT_EQ(i.to_i32(), 256);
+  EXPECT_EQ(i.to_char(), 0);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
