@@ -9,6 +9,8 @@
 
 #include <turtle_kv/import/metrics.hpp>
 
+#include <llfs/int_types.hpp>
+
 #include <batteries/stream_util.hpp>
 
 #include <string>

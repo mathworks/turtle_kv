@@ -5,7 +5,7 @@
 
 namespace turtle_kv {
 
-TURTLE_KV_ENV_PARAM(bool, turtlekv_use_shareded_leaf_scanner, false);
+TURTLE_KV_ENV_PARAM(bool, turtlekv_use_sharded_leaf_scanner, false);
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
@@ -544,7 +544,7 @@ ValueView KVStoreScanner::ScanLevel::value() const
 namespace {
 
 template <typename MemTableScanStateT>
-BATT_ALWAYS_INLINE bool scan_level_mem_table_advance_impl(ScanLevel* scan_level,
+BATT_ALWAYS_INLINE bool scan_level_mem_table_advance_impl(KVStoreScanner::ScanLevel* scan_level,
                                                           MemTableScanStateT& state)
 {
   state.art_scanner_->advance();
@@ -698,7 +698,7 @@ template <bool kInsertHeap>
   }
 
   this->active_levels_ = 1;
-  if (use_sharded_leaf_scanner()) {
+  if (getenv_param<turtlekv_use_sharded_leaf_scanner>()) {
     ShardedKeyValueSlice sharded_slice{first_slice.begin(), first_slice.end()};
 
     ScanLevel& level = kv_scanner.scan_levels_.emplace_back(sharded_slice, this, 0);

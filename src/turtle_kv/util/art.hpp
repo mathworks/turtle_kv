@@ -682,16 +682,13 @@ class ARTBase
 
     struct ScanState {
       Self& self_;
-      i32 min_key_;
       i32 key_byte_;
 
       //----- --- -- -  -  -   -
 
-      explicit ScanState(Self& self, i32 min_key) noexcept
-          : self_{self}
-          , min_key_{min_key}
-          , key_byte_{min_key}
+      explicit ScanState(Self& self, i32 min_key) noexcept : self_{self}, key_byte_{min_key}
       {
+        this->skip_null_branches();
       }
 
       i32 get_key_byte() const
@@ -712,6 +709,15 @@ class ARTBase
       void advance()
       {
         ++this->key_byte_;
+        this->skip_null_branches();
+      }
+
+     private:
+      void skip_null_branches()
+      {
+        while (!this->is_done() && this->get_branch() == nullptr) {
+          ++this->key_byte_;
+        }
       }
     };
 

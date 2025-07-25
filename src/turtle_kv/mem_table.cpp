@@ -59,16 +59,16 @@ TURTLE_KV_ENV_PARAM(u32, turtlekv_memtable_hash_bucket_div, 32);
 
   if (getenv_param<turtlekv_memtable_hash_index>()) {
     this->hash_index_.emplace(max_byte_size / getenv_param<turtlekv_memtable_hash_bucket_div>());
-    overhead_estimate += kHashIndexOverheadPct;
+    overhead_estimate_pct += kHashIndexOverheadPct;
 
     if (getenv_param<turtlekv_memtable_ordered_index>()) {
       this->ordered_index_.emplace();
-      overhead_estimate += kOrderedIndexOverheadPct;
+      overhead_estimate_pct += kOrderedIndexOverheadPct;
     }
 
   } else {
     this->art_index_.emplace();
-    overhead_estimate += kArtIndexOverheadPct;
+    overhead_estimate_pct += kArtIndexOverheadPct;
   }
 
   this->metrics_.mem_table_alloc.add(1);
