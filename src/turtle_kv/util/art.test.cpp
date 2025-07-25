@@ -21,6 +21,7 @@ namespace {
 
 using namespace batt::int_types;
 
+using turtle_kv::ByteInt;
 using turtle_kv::LatencyMetric;
 using turtle_kv::LatencyTimer;
 using turtle_kv::None;
@@ -31,16 +32,70 @@ using turtle_kv::testing::RandomStringGenerator;
 
 using ART = turtle_kv::ART<void>;
 
+struct BigUInt64KeyGenerator {
+  template <typename Rng>
+  std::string operator()(Rng& rng) const
+  {
+    std::uniform_int_distribution<u64> pick_n{u64{0}, ~u64{0}};
+
+    std::string s;
+    s.resize(sizeof(llfs::big_u64));
+    *((llfs::big_u64*)s.data()) = pick_n(rng);
+
+    // depth == 2 will max out at Node48.
+    //
+    s[1] &= 31;
+
+    // depth == 3 will max out at Node16.
+    //
+    s[2] &= 15;
+
+    // depth == 4 will max out at Node16, with space.
+    //
+    s[3] &= 7;
+
+    // depth == 5 will max out at Node4.
+    //
+    s[4] &= 3;
+
+    // depth == 6 will max out at Node4, with space.
+    //
+    s[5] &= 1;
+
+    return s;
+  }
+};
+
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-TEST(ArtTest, PutContainsTest)
+TEST(ArtTest, ByteInt)
+{
+  char a, b, c;
+
+  a = 255;
+  b = 1;
+  c = 160;
+
+  EXPECT_EQ(ByteInt::from_char(a).to_i32(), 255);
+  EXPECT_EQ(ByteInt::from_char(b).to_i32(), 1);
+  EXPECT_EQ(ByteInt::from_char(c).to_i32(), 160);
+  EXPECT_EQ(ByteInt::from_i32(-1).to_i32(), -1);
+  EXPECT_LT(ByteInt::from_i32(-1), ByteInt::from_char(a));
+  EXPECT_LT(ByteInt::from_i32(-1), ByteInt::from_char(b));
+  EXPECT_LT(ByteInt::from_i32(-1), ByteInt::from_char(c));
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <typename KeyGeneratorT>
+void run_put_contains_test()
 {
   const usize num_keys = 1e5;
   const usize num_scans = 10000;
   const usize max_scan_length = 100;
 
   std::default_random_engine rng{/*seed=*/1};
-  RandomStringGenerator generate_key;
+  KeyGeneratorT generate_key;
   std::uniform_int_distribution<usize> pick_scan_length{1, max_scan_length};
 
   std::vector<std::string> keys;
@@ -116,6 +171,11 @@ TEST(ArtTest, PutContainsTest)
         }
 
         EXPECT_EQ(expected_result.size(), actual_result.size());
+
+        BATT_CHECK_EQ(expected_result, actual_result)
+            << BATT_INSPECT_STR(lower_bound_key) << std::endl
+            << BATT_INSPECT_RANGE_PRETTY(expected_result)
+            << BATT_INSPECT_RANGE_PRETTY(actual_result);
 
         ASSERT_EQ(expected_result, actual_result)
             << BATT_INSPECT_STR(lower_bound_key) << BATT_INSPECT(i);
@@ -195,6 +255,26 @@ TEST(ArtTest, PutContainsTest)
             << BATT_INSPECT(item_latency) << std::endl
             << BATT_INSPECT(item_nosync_latency) << std::endl
             << BATT_INSPECT(sort_latency) << std::endl;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+TEST(ArtTest, PutContainsTest_Key24)
+{
+  run_put_contains_test<RandomStringGenerator>();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+TEST(ArtTest, PutContainsTest_Key8)
+{
+  char a[2] = {0, 0};
+  a[0] -= 1;
+  char b[2] = {1, 0};
+
+  BATT_CHECK_LT(std::string_view{b}, std::string_view{a});
+
+  run_put_contains_test<BigUInt64KeyGenerator>();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <turtle_kv/util/byte_int.hpp>
 #include <turtle_kv/util/object_thread_storage.hpp>
 #include <turtle_kv/util/seq_mutex.hpp>
 
@@ -433,8 +434,8 @@ class ARTBase
   if (bit_i == 64) {                                                                               \
     break;                                                                                         \
   }                                                                                                \
-  key_byte = key_byte_offset + bit_i;                                                              \
-  branch = branch_for_byte[key_byte];                                                              \
+  key_byte = ByteInt::from_i32(key_byte_offset + bit_i);                                           \
+  branch = branch_for_byte[key_byte.to_i32()];                                                     \
   if (branch) {                                                                                    \
     this->sorted_branches_[this->branch_count_] = branch;                                          \
     this->sorted_keys_[this->branch_count_] = key_byte;                                            \
@@ -479,11 +480,14 @@ class ARTBase
       usize branch_count_;
       usize i_;
       std::array<NodeBase*, kBranchCount> sorted_branches_;
-      std::array<i32, kBranchCount> sorted_keys_;
+      std::array<ByteInt, kBranchCount> sorted_keys_;
 
       //----- --- -- -  -  -   -
 
-      explicit ScanState(Self& self, i32 min_key) noexcept : self_{self}, branch_count_{0}, i_{0}
+      explicit ScanState(Self& self, ByteInt min_key) noexcept
+          : self_{self}
+          , branch_count_{0}
+          , i_{0}
       {
         std::array<NodeBase*, 256> branch_for_byte;
         std::array<u64, 4> key_bitmap = {0, 0, 0, 0};
@@ -491,16 +495,16 @@ class ARTBase
         const usize n_branches = this->self_.branch_count();
 
         for (usize i = 0; i < n_branches; ++i) {
-          const i32 key_byte = this->self_.key[i];
+          const ByteInt key_byte = ByteInt::from_u8(this->self_.key[i]);
           if (key_byte < min_key) {
             continue;
           }
-          branch_for_byte[key_byte] = this->self_.branches[i];
-          key_bitmap[(key_byte >> 6) & 3] |= (u64{1} << (key_byte & 0x3f));
+          branch_for_byte[key_byte.to_i32()] = this->self_.branches[i];
+          key_bitmap[(key_byte.to_i32() >> 6) & 3] |= (u64{1} << (key_byte.to_i32() & 0x3f));
         }
 
         u64 word_val;
-        i32 key_byte;
+        ByteInt key_byte;
         NodeBase* branch;
 
         TURTLE_KV_ART_SMALL_NODE_OUTER_LOOP(0, 0)
@@ -509,7 +513,7 @@ class ARTBase
         TURTLE_KV_ART_SMALL_NODE_OUTER_LOOP(3, 192)
       }
 
-      i32 get_key_byte() const
+      ByteInt get_key_byte() const
       {
         return this->sorted_keys_[this->i_];
       }
@@ -582,47 +586,48 @@ class ARTBase
 
     struct ScanState {
       Self& self_;
-      i32 min_key_;
-      i32 key_byte_;
-      usize i_;
+      ByteInt key_byte_;
+      usize branch_i_;
 
       //----- --- -- -  -  -   -
 
-      explicit ScanState(Self& self, i32 min_key) noexcept
+      explicit ScanState(Self& self, ByteInt min_key) noexcept
           : self_{self}
-          , min_key_{min_key}
           , key_byte_{min_key}
-          , i_{self.branch_for_key[min_key]}
+          , branch_i_{kInvalidBranchIndex}
       {
         this->skip_invalid_branches();
       }
 
-      i32 get_key_byte() const
+      ByteInt get_key_byte() const
       {
         return this->key_byte_;
       }
 
       NodeBase* get_branch() const
       {
-        return this->self_.branches[this->key_byte_];
+        return this->self_.branches[this->branch_i_];
       }
 
       bool is_done() const
       {
-        return this->i_ == kInvalidBranchIndex;
+        return this->key_byte_ >= ByteInt::from_i32(256);
       }
 
       void advance()
       {
-        this->i_ = kInvalidBranchIndex;
+        ++this->key_byte_;
         this->skip_invalid_branches();
       }
 
       void skip_invalid_branches()
       {
-        while (this->i_ == kInvalidBranchIndex) {
+        while (!this->is_done()) {
+          this->branch_i_ = this->self_.branch_for_key[this->key_byte_.to_i32()];
+          if (this->branch_i_ != kInvalidBranchIndex) {
+            break;
+          }
           ++this->key_byte_;
-          this->i_ = this->self_.branch_for_key[this->key_byte_];
         }
       }
     };
@@ -682,28 +687,28 @@ class ARTBase
 
     struct ScanState {
       Self& self_;
-      i32 key_byte_;
+      ByteInt key_byte_;
 
       //----- --- -- -  -  -   -
 
-      explicit ScanState(Self& self, i32 min_key) noexcept : self_{self}, key_byte_{min_key}
+      explicit ScanState(Self& self, ByteInt min_key) noexcept : self_{self}, key_byte_{min_key}
       {
         this->skip_null_branches();
       }
 
-      i32 get_key_byte() const
+      ByteInt get_key_byte() const
       {
         return this->key_byte_;
       }
 
       NodeBase* get_branch() const
       {
-        return this->self_.branches[this->key_byte_];
+        return this->self_.branches[this->key_byte_.to_i32()];
       }
 
       bool is_done() const
       {
-        return this->key_byte_ >= 256;
+        return this->key_byte_ >= ByteInt::from_i32(256);
       }
 
       void advance()
@@ -1211,13 +1216,13 @@ class ART<ValueT>::Scanner : public detail::ValueStorageBase<ValueT, kSynchroniz
     NodeScanState scan_state_;
     usize key_prefix_len_;
     std::string_view lower_bound_key_;
-    i32 min_key_byte_;
+    ByteInt min_key_byte_;
 
     explicit Frame(usize key_prefix_len, std::string_view lower_bound_key) noexcept
         : scan_state_{None}
         , key_prefix_len_{key_prefix_len}
         , lower_bound_key_{lower_bound_key}
-        , min_key_byte_{0}
+        , min_key_byte_{ByteInt::from_i32(0)}
     {
     }
   };
@@ -1325,11 +1330,11 @@ class ART<ValueT>::Scanner : public detail::ValueStorageBase<ValueT, kSynchroniz
 
     // Set bounds for branch visitation.
     //
-    top->min_key_byte_ = [&]() -> i32 {
+    top->min_key_byte_ = [&]() -> ByteInt {
       if (top->lower_bound_key_.empty()) {
-        return 0;
+        return ByteInt::from_i32(0);
       }
-      const i32 next_char = top->lower_bound_key_.front();
+      const ByteInt next_char = ByteInt::from_char(top->lower_bound_key_.front());
       top->lower_bound_key_.remove_prefix(1);
       return next_char;
     }();
@@ -1358,7 +1363,8 @@ class ART<ValueT>::Scanner : public detail::ValueStorageBase<ValueT, kSynchroniz
       }
     }
 
-    top->scan_state_.template emplace<typename NodeT::ScanState>(node_view, top->min_key_byte_);
+    [[maybe_unused]] auto& scan_state_impl =
+        top->scan_state_.template emplace<typename NodeT::ScanState>(node_view, top->min_key_byte_);
   }
 
   bool is_done() const
@@ -1409,10 +1415,10 @@ class ART<ValueT>::Scanner : public detail::ValueStorageBase<ValueT, kSynchroniz
               return;
             }
 
-            const i32 key_byte = scan_state.get_key_byte();
+            const ByteInt key_byte = scan_state.get_key_byte();
             NodeBase* const child = scan_state.get_branch();
 
-            this->key_buffer_[top->key_prefix_len_] = (char)key_byte;
+            this->key_buffer_[top->key_prefix_len_] = key_byte.to_char();
 
             if (key_byte == top->min_key_byte_) {
               child->visit([&](auto* child_node) {
