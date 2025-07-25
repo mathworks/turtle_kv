@@ -62,6 +62,13 @@ class KVStoreScanner
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
   //
+  template <ARTBase::Synchronized kSync>
+  struct MemTableValueScanState {
+    ART<MemTableValueEntry>::Scanner<kSync>* art_scanner_;
+  };
+
+  //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+  //
   struct TreeLevelScanState {
     KVSlice kv_slice;
     NodeScanState* node_state;
@@ -77,7 +84,13 @@ class KVStoreScanner
   struct ActiveMemTableTag {
   };
 
+  struct ActiveMemTableValueTag {
+  };
+
   struct DeltaMemTableTag {
+  };
+
+  struct DeltaMemTableValueTag {
   };
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -88,6 +101,8 @@ class KVStoreScanner
     std::variant<NoneType,
                  MemTableScanState<ARTBase::Synchronized::kTrue>,
                  MemTableScanState<ARTBase::Synchronized::kFalse>,
+                 MemTableValueScanState<ARTBase::Synchronized::kTrue>,
+                 MemTableValueScanState<ARTBase::Synchronized::kFalse>,
                  Slice<const EditView>,
                  TreeLevelScanState,
                  TreeLevelScanShardedState>
@@ -108,6 +123,14 @@ class KVStoreScanner
     explicit ScanLevel(DeltaMemTableTag,
                        MemTable& mem_table,
                        ART<void>::Scanner<ARTBase::Synchronized::kFalse>& art_scanner) noexcept;
+
+    explicit ScanLevel(
+        ActiveMemTableValueTag,
+        ART<MemTableValueEntry>::Scanner<ARTBase::Synchronized::kTrue>& art_scanner) noexcept;
+
+    explicit ScanLevel(
+        DeltaMemTableValueTag,
+        ART<MemTableValueEntry>::Scanner<ARTBase::Synchronized::kFalse>& art_scanner) noexcept;
 
     explicit ScanLevel(const Slice<const EditView>& edit_view_slice) noexcept;
 
@@ -143,7 +166,7 @@ class KVStoreScanner
   //
   struct NodeScanState {
     using LevelVector = boost::container::static_vector<PackedLevelScanner, kMaxUpdateBufferLevels>;
-    
+
     using ShardedLevelVector =
         boost::container::static_vector<PackedLevelShardedScanner, kMaxUpdateBufferLevels>;
 
@@ -227,13 +250,11 @@ class KVStoreScanner
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  using DeltaMemTableScannerStorage =
-      std::aligned_storage_t<sizeof(ART<void>::Scanner<ARTBase::Synchronized::kFalse>),
-                             alignof(ART<void>::Scanner<ARTBase::Synchronized::kFalse>)>;
-
-  using ActiveMemTableScannerStorage =
-      std::aligned_storage_t<sizeof(ART<void>::Scanner<ARTBase::Synchronized::kTrue>),
-                             alignof(ART<void>::Scanner<ARTBase::Synchronized::kTrue>)>;
+  using DeltaMemTableScannerStorage = std::aligned_storage_t<
+      /*size=*/std::max(sizeof(ART<void>::Scanner<ARTBase::Synchronized::kFalse>),
+                        sizeof(ART<MemTableValueEntry>::Scanner<ARTBase::Synchronized::kFalse>)),
+      /*align=*/std::max(alignof(ART<void>::Scanner<ARTBase::Synchronized::kFalse>),
+                         alignof(ART<MemTableValueEntry>::Scanner<ARTBase::Synchronized::kFalse>))>;
 
   boost::intrusive_ptr<const KVStore::State> pinned_state_;
   llfs::PageLoader& page_loader_;
@@ -246,6 +267,7 @@ class KVStoreScanner
   Optional<EditView> next_item_;
   Status status_;
   Optional<ART<void>::Scanner<ARTBase::Synchronized::kTrue>> mem_table_scanner_;
+  Optional<ART<MemTableValueEntry>::Scanner<ARTBase::Synchronized::kTrue>> mem_table_value_scanner_;
   std::array<DeltaMemTableScannerStorage, 32> static_delta_storage_;
   DeltaMemTableScannerStorage* delta_storage_;
   boost::container::static_vector<NodeScanState, kMaxTreeHeight - 1> tree_scan_path_;

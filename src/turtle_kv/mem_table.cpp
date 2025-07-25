@@ -10,7 +10,15 @@
 
 namespace turtle_kv {
 
-TURTLE_KV_ENV_PARAM(bool, turtlekv_memtable_hash_index, false);
+namespace {
+
+constexpr usize kHashIndexOverheadPct = 285;
+constexpr usize kOrderedIndexOverheadPct = 35;
+constexpr usize kArtIndexOverheadPct = 50;
+
+}  // namespace
+
+TURTLE_KV_ENV_PARAM(bool, turtlekv_memtable_hash_index, true);
 TURTLE_KV_ENV_PARAM(bool, turtlekv_memtable_ordered_index, true);
 TURTLE_KV_ENV_PARAM(bool, turtlekv_memtable_count_latest_update_only, true);
 TURTLE_KV_ENV_PARAM(u32, turtlekv_memtable_hash_bucket_div, 32);
@@ -47,18 +55,25 @@ TURTLE_KV_ENV_PARAM(u32, turtlekv_memtable_hash_bucket_div, 32);
     , block_list_mutex_{}
     , blocks_{}
 {
+  usize overhead_estimate_pct = 0;
+
   if (getenv_param<turtlekv_memtable_hash_index>()) {
     this->hash_index_.emplace(max_byte_size / getenv_param<turtlekv_memtable_hash_bucket_div>());
+    overhead_estimate += kHashIndexOverheadPct;
+
     if (getenv_param<turtlekv_memtable_ordered_index>()) {
       this->ordered_index_.emplace();
+      overhead_estimate += kOrderedIndexOverheadPct;
     }
+
   } else {
     this->art_index_.emplace();
+    overhead_estimate += kArtIndexOverheadPct;
   }
 
   this->metrics_.mem_table_alloc.add(1);
 
-  const usize total_overhead_estimate = max_byte_size * 32 / 10;
+  const usize total_overhead_estimate = (max_byte_size * overhead_estimate_pct + 99) / 100;
   this->reserve_cache_space(total_overhead_estimate);
 }
 

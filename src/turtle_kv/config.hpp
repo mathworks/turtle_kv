@@ -31,6 +31,10 @@
 #error You must choose one kind of filter!
 #endif
 
+/** \brief Whether to use hash-based indexing in MemTables for faster point lookups.
+ */
+#define TURTLE_KV_MEM_TABLE_HASH_INDEX 1
+
 /** \brief Whether filters are consulted during point queries.
  */
 #define TURTLE_KV_ENABLE_LEAF_FILTERS 1
