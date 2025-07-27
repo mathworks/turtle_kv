@@ -383,8 +383,12 @@ Status KVStoreScanner::set_next_item()
     }
 
     if (scan_level->advance()) {
+      LatencyTimer timer{batt::Every2ToTheConst<16>{},
+                         KVStoreScanner::metrics().heap_update_latency};
       this->heap_.update_first();
     } else {
+      LatencyTimer timer{batt::Every2ToTheConst<16>{},
+                         KVStoreScanner::metrics().heap_remove_latency};
       this->heap_.remove_first();
       this->needs_resume_ = true;
     }
@@ -585,6 +589,11 @@ template <typename MemTableScanStateT>
 BATT_ALWAYS_INLINE bool scan_level_mem_table_advance_impl(KVStoreScanner::ScanLevel* scan_level,
                                                           MemTableScanStateT& state)
 {
+  auto& m = KVStoreScanner::metrics();
+
+  m.art_advance_count.add(1);
+  LatencyTimer timer{batt::Every2ToTheConst<10>{}, m.art_advance_latency};
+
   state.art_scanner_->advance();
   if (state.art_scanner_->is_done()) {
     return false;
@@ -698,6 +707,8 @@ template <bool kInsertHeap>
         this->active_levels_ |= (u64{1} << buffer_level_i);
         ScanLevel& level = kv_scanner.scan_levels_.emplace_back(first_slice, this, buffer_level_i);
         if (kInsertHeap) {
+          LatencyTimer timer{batt::Every2ToTheConst<16>{},
+                             KVStoreScanner::metrics().heap_insert_latency};
           kv_scanner.heap_.insert(&level);
         }
       }
@@ -715,6 +726,8 @@ template <bool kInsertHeap>
         this->active_levels_ |= (u64{1} << buffer_level_i);
         ScanLevel& level = kv_scanner.scan_levels_.emplace_back(first_slice, this, buffer_level_i);
         if (kInsertHeap) {
+          LatencyTimer timer{batt::Every2ToTheConst<16>{},
+                             KVStoreScanner::metrics().heap_insert_latency};
           kv_scanner.heap_.insert(&level);
         }
       }
@@ -746,11 +759,15 @@ template <bool kInsertHeap>
 
     ScanLevel& level = kv_scanner.scan_levels_.emplace_back(sharded_slice, this, 0);
     if (kInsertHeap) {
+      LatencyTimer timer{batt::Every2ToTheConst<16>{},
+                         KVStoreScanner::metrics().heap_insert_latency};
       kv_scanner.heap_.insert(&level);
     }
   } else {
     ScanLevel& level = kv_scanner.scan_levels_.emplace_back(first_slice, this, 0);
     if (kInsertHeap) {
+      LatencyTimer timer{batt::Every2ToTheConst<16>{},
+                         KVStoreScanner::metrics().heap_insert_latency};
       kv_scanner.heap_.insert(&level);
     }
   }

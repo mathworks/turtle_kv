@@ -39,10 +39,17 @@ class KVStoreScanner
   static constexpr usize kMaxHeapSize = kMaxTreeHeight * kMaxUpdateBufferLevels;
 
   struct Metrics {
-    LatencyMetric scan_level_advance_latency;
-    LatencyMetric pull_next_sharded_latency;
+    LatencyMetric heap_insert_latency;
+    LatencyMetric heap_update_latency;
+    LatencyMetric heap_remove_latency;
 
+    LatencyMetric art_advance_latency;
+    FastCountMetric<usize> art_advance_count;
+
+    LatencyMetric scan_level_advance_latency;
     FastCountMetric<usize> scan_level_advance_count;
+
+    LatencyMetric pull_next_sharded_latency;
     FastCountMetric<usize> pull_next_sharded_count;
   };
 

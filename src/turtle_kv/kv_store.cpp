@@ -742,6 +742,11 @@ StatusOr<usize> KVStore::scan_keys(const KeyView& min_key,
                                    const Slice<KeyView>& items_out) noexcept /*override*/
 {
   ThreadContext& thread_context = this->per_thread_.get(this);
+  if (thread_context.scan_result_storage) {
+    LOG_EVERY_N(INFO, 1000) << BATT_INSPECT(
+        thread_context.scan_result_storage->pinned_pages.size());
+  }
+
   thread_context.scan_result_storage.emplace();
 
   this->metrics_.scan_count.add(1);
@@ -1379,6 +1384,11 @@ std::function<void(std::ostream&)> KVStore::debug_info() noexcept
         << BATT_INSPECT(kv_store.mem_table_free) << "\n"                               //
         << BATT_INSPECT(kv_store.mem_table_count_stats) << "\n"                        //
         << "\n"                                                                        //
+        << BATT_INSPECT(scanner.heap_insert_latency) << "\n"                           //
+        << BATT_INSPECT(scanner.heap_update_latency) << "\n"                           //
+        << BATT_INSPECT(scanner.heap_remove_latency) << "\n"                           //
+        << BATT_INSPECT(scanner.art_advance_latency) << "\n"                           //
+        << BATT_INSPECT(scanner.art_advance_count) << "\n"                             //
         << BATT_INSPECT(scanner.scan_level_advance_latency) << "\n"                    //
         << BATT_INSPECT(scanner.scan_level_advance_count) << "\n"                      //
         << BATT_INSPECT(scanner.pull_next_sharded_latency) << "\n"                     //
