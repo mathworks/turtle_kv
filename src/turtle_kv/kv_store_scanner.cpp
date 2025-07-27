@@ -27,6 +27,10 @@ TURTLE_KV_ENV_PARAM(bool, turtlekv_use_sharded_leaf_scanner, false);
     , scan_levels_{}
     , heap_{}
 {
+  auto& m = KVStoreScanner::metrics();
+  m.ctor_count.add(1);
+  LatencyTimer timer{batt::EveryNToTheConst<10>{}, m.ctor_latency};
+
   if (this->pinned_state_->mem_table_->has_ordered_index()) {
     this->mem_table_scanner_.emplace(this->pinned_state_->mem_table_->ordered_index(), min_key);
   }
@@ -74,6 +78,10 @@ KVStoreScanner::~KVStoreScanner() noexcept
 //
 Status KVStoreScanner::start()
 {
+  auto& m = KVStoreScanner::metrics();
+  m.start_count.add(1);
+  LatencyTimer timer{batt::EveryNToTheConst<10>{}, m.start_latency};
+
   if (this->pinned_state_) {
     const usize n_deltas = this->pinned_state_->deltas_.size();
 
@@ -363,6 +371,10 @@ Status KVStoreScanner::resume()
 //
 Status KVStoreScanner::set_next_item()
 {
+  auto& m = KVStoreScanner::metrics();
+  m.next_count.add(1);
+  LatencyTimer timer{batt::EveryNToTheConst<10>{}, m.next_latency};
+
   for (;;) {
     if (this->heap_.empty()) {
       return OkStatus();
@@ -383,11 +395,11 @@ Status KVStoreScanner::set_next_item()
     }
 
     if (scan_level->advance()) {
-      LatencyTimer timer{batt::Every2ToTheConst<16>{},
+      LatencyTimer timer{batt::Every2ToTheConst<8>{},
                          KVStoreScanner::metrics().heap_update_latency};
       this->heap_.update_first();
     } else {
-      LatencyTimer timer{batt::Every2ToTheConst<16>{},
+      LatencyTimer timer{batt::Every2ToTheConst<8>{},
                          KVStoreScanner::metrics().heap_remove_latency};
       this->heap_.remove_first();
       this->needs_resume_ = true;
@@ -707,7 +719,7 @@ template <bool kInsertHeap>
         this->active_levels_ |= (u64{1} << buffer_level_i);
         ScanLevel& level = kv_scanner.scan_levels_.emplace_back(first_slice, this, buffer_level_i);
         if (kInsertHeap) {
-          LatencyTimer timer{batt::Every2ToTheConst<16>{},
+          LatencyTimer timer{batt::Every2ToTheConst<8>{},
                              KVStoreScanner::metrics().heap_insert_latency};
           kv_scanner.heap_.insert(&level);
         }
@@ -726,7 +738,7 @@ template <bool kInsertHeap>
         this->active_levels_ |= (u64{1} << buffer_level_i);
         ScanLevel& level = kv_scanner.scan_levels_.emplace_back(first_slice, this, buffer_level_i);
         if (kInsertHeap) {
-          LatencyTimer timer{batt::Every2ToTheConst<16>{},
+          LatencyTimer timer{batt::Every2ToTheConst<8>{},
                              KVStoreScanner::metrics().heap_insert_latency};
           kv_scanner.heap_.insert(&level);
         }
@@ -759,14 +771,14 @@ template <bool kInsertHeap>
 
     ScanLevel& level = kv_scanner.scan_levels_.emplace_back(sharded_slice, this, 0);
     if (kInsertHeap) {
-      LatencyTimer timer{batt::Every2ToTheConst<16>{},
+      LatencyTimer timer{batt::Every2ToTheConst<8>{},
                          KVStoreScanner::metrics().heap_insert_latency};
       kv_scanner.heap_.insert(&level);
     }
   } else {
     ScanLevel& level = kv_scanner.scan_levels_.emplace_back(first_slice, this, 0);
     if (kInsertHeap) {
-      LatencyTimer timer{batt::Every2ToTheConst<16>{},
+      LatencyTimer timer{batt::Every2ToTheConst<8>{},
                          KVStoreScanner::metrics().heap_insert_latency};
       kv_scanner.heap_.insert(&level);
     }
