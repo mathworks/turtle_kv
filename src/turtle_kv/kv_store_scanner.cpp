@@ -599,6 +599,9 @@ BATT_ALWAYS_INLINE bool scan_level_mem_table_advance_impl(KVStoreScanner::ScanLe
 //
 bool KVStoreScanner::ScanLevel::advance()
 {
+  LatencyTimer timer{batt::Every2ToTheConst<10>{},
+                     KVStoreScanner::metrics().scan_level_advance_latency};
+
   return batt::case_of(
       this->state_impl,
       [](NoneType) -> bool {
@@ -806,6 +809,9 @@ auto KVStoreScanner::NodeScanState::pull_next_sharded(i32 buffer_level_i) -> Sha
     this->deactivate(buffer_level_i);
     return ShardedKeyValueSlice{};
   }
+
+  LatencyTimer timer{batt::Every2ToTheConst<10>{},
+                     KVStoreScanner::metrics().scan_level_advance_latency};
 
   ShardedLevelVector& sharded_scanners = std::get<ShardedLevelVector>(this->level_scanners_);
   PackedLevelShardedScanner& level_scanner = sharded_scanners[buffer_level_i];

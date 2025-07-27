@@ -1167,6 +1167,8 @@ std::function<void(std::ostream&)> KVStore::debug_info() noexcept
 
     auto& node = InMemoryNode::metrics();
 
+    auto& scanner = KVStoreScanner::metrics();
+
     auto& query_page_loader = PinningPageLoader::metrics();
 
     std::array<double, 32> page_reads_per_get, page_reads_per_scan;
@@ -1376,6 +1378,9 @@ std::function<void(std::ostream&)> KVStore::debug_info() noexcept
         << BATT_INSPECT(kv_store.mem_table_alloc) << "\n"                              //
         << BATT_INSPECT(kv_store.mem_table_free) << "\n"                               //
         << BATT_INSPECT(kv_store.mem_table_count_stats) << "\n"                        //
+        << "\n"                                                                        //
+        << BATT_INSPECT(scanner.scan_level_advance_latency) << "\n"                    //
+        << BATT_INSPECT(scanner.pull_next_sharded_latency) << "\n"                     //
         << "\n"                                                                        //
         << dump_memory_stats() << "\n"                                                 //
         ;

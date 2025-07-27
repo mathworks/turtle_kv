@@ -38,6 +38,17 @@ class KVStoreScanner
   static constexpr usize kMaxUpdateBufferLevels = 64;
   static constexpr usize kMaxHeapSize = kMaxTreeHeight * kMaxUpdateBufferLevels;
 
+  struct Metrics {
+    LatencyMetric scan_level_advance_latency;
+    LatencyMetric pull_next_sharded_latency;
+  };
+
+  static Metrics& metrics() noexcept
+  {
+    static Metrics metrics_;
+    return metrics_;
+  }
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   using KVSlice = Slice<const PackedKeyValue>;
