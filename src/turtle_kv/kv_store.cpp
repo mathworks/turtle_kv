@@ -1380,7 +1380,9 @@ std::function<void(std::ostream&)> KVStore::debug_info() noexcept
         << BATT_INSPECT(kv_store.mem_table_count_stats) << "\n"                        //
         << "\n"                                                                        //
         << BATT_INSPECT(scanner.scan_level_advance_latency) << "\n"                    //
+        << BATT_INSPECT(scanner.scan_level_advance_count) << "\n"                      //
         << BATT_INSPECT(scanner.pull_next_sharded_latency) << "\n"                     //
+        << BATT_INSPECT(scanner.pull_next_sharded_count) << "\n"                       //
         << "\n"                                                                        //
         << dump_memory_stats() << "\n"                                                 //
         ;
