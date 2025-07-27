@@ -293,13 +293,13 @@ Status KVStoreScanner::enter_subtree(i32 subtree_height,
                                      InsertHeapBool insert_heap)
 {
   for (;;) {
-    StatusOr<llfs::PinnedPage> pinned_page =
-        subtree_root.load_through(this->page_loader_,
-                                  llfs::PageLoadOptions{
-                                      llfs::PinPageToJob::kFalse,
-                                      llfs::OkIfNotFound{false},
-                                      llfs::LruPriority{kNodeLruPriority},
-                                  });
+    StatusOr<llfs::PinnedPage> pinned_page = subtree_root.load_through(
+        this->page_loader_,
+        llfs::PageLoadOptions{
+            (subtree_height > 1) ? llfs::PinPageToJob::kTrue : llfs::PinPageToJob::kFalse,
+            llfs::OkIfNotFound{false},
+            llfs::LruPriority{(subtree_height > 1) ? kNodeLruPriority : kLeafLruPriority},
+        });
 
     BATT_REQUIRE_OK(pinned_page);
     BATT_REQUIRE_OK(this->validate_page_layout(subtree_height, *pinned_page));
