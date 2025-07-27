@@ -12,6 +12,7 @@
 #include <llfs/page_loader.hpp>
 
 namespace turtle_kv {
+
 /** \brief A representation of a Slice<const PackedKeyValue> where the elements have been
  * shifted/sharded.
  */
