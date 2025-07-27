@@ -296,7 +296,7 @@ Status KVStoreScanner::enter_subtree(i32 subtree_height,
     StatusOr<llfs::PinnedPage> pinned_page = subtree_root.load_through(
         this->page_loader_,
         llfs::PageLoadOptions{
-            (subtree_height > 1) ? llfs::PinPageToJob::kTrue : llfs::PinPageToJob::kFalse,
+            (subtree_height > 1) ? llfs::PinPageToJob::kDefault : llfs::PinPageToJob::kFalse,
             llfs::OkIfNotFound{false},
             llfs::LruPriority{(subtree_height > 1) ? kNodeLruPriority : kLeafLruPriority},
         });
