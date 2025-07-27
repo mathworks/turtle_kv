@@ -138,7 +138,7 @@ class KVStoreScanner
 
     /** \brief Returns the current item as an EditView.
      */
-    EditView item() const;
+    EditView item(bool key_only) const;
 
     /** \brief Returns the value of the current item.
      */
@@ -231,6 +231,13 @@ class KVStoreScanner
 
   StatusOr<usize> read(const Slice<std::pair<KeyView, ValueView>>& buffer);
 
+  StatusOr<usize> read_keys(const Slice<KeyView>& buffer);
+
+  void set_keys_only(bool b) noexcept
+  {
+    this->keys_only_ = b;
+  }
+
   //+++++++++++-+-+--+----- --- -- -  -  -   --
  private:
   Status validate_page_layout(i32 height, const llfs::PinnedPage& pinned_page);
@@ -273,6 +280,7 @@ class KVStoreScanner
   boost::container::static_vector<NodeScanState, kMaxTreeHeight - 1> tree_scan_path_;
   boost::container::small_vector<ScanLevel, kMaxHeapSize + 32> scan_levels_;
   StackMerger<ScanLevel, ScanLevelMinHeapOrder, kMaxHeapSize> heap_;
+  bool keys_only_ = false;
 };
 
 }  // namespace turtle_kv

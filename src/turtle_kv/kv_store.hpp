@@ -146,6 +146,8 @@ class KVStore : public Table
   StatusOr<usize> scan(const KeyView& min_key,
                        const Slice<std::pair<KeyView, ValueView>>& items_out) noexcept override;
 
+  StatusOr<usize> scan_keys(const KeyView& min_key, const Slice<KeyView>& keys_out) noexcept;
+
   Status remove(const KeyView& key) noexcept override;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -

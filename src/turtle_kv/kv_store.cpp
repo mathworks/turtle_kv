@@ -738,6 +738,22 @@ StatusOr<usize> KVStore::scan(
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+StatusOr<usize> KVStore::scan_keys(const KeyView& min_key,
+                                   const Slice<KeyView>& items_out) noexcept /*override*/
+{
+  ThreadContext& thread_context = this->per_thread_.get(this);
+  thread_context.scan_result_storage.emplace();
+
+  this->metrics_.scan_count.add(1);
+
+  KVStoreScanner scanner{*this, min_key};
+  scanner.set_keys_only(true);
+  BATT_REQUIRE_OK(scanner.start());
+
+  return scanner.read_keys(items_out);
+}
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 Status KVStore::remove(const KeyView& key) noexcept /*override*/
 {
   (void)key;
