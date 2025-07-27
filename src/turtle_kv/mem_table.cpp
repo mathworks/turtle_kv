@@ -72,6 +72,8 @@ TURTLE_KV_ENV_PARAM(u32, turtlekv_memtable_hash_bucket_div, 32);
   }
 
   this->metrics_.mem_table_alloc.add(1);
+  this->metrics_.mem_table_count_stats.update(this->metrics_.mem_table_alloc.get() -
+                                              this->metrics_.mem_table_free.get());
 
   const usize total_overhead_estimate = (max_byte_size * overhead_estimate_pct + 99) / 100;
   this->reserve_cache_space(total_overhead_estimate);
@@ -88,6 +90,8 @@ MemTable::~MemTable() noexcept
   [[maybe_unused]] const bool b = this->finalize();
 
   this->metrics_.mem_table_free.add(1);
+  this->metrics_.mem_table_count_stats.update(this->metrics_.mem_table_alloc.get() -
+                                              this->metrics_.mem_table_free.get());
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

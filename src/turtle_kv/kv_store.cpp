@@ -1358,6 +1358,7 @@ std::function<void(std::ostream&)> KVStore::debug_info() noexcept
         << "\n"                                                                        //
         << BATT_INSPECT(kv_store.mem_table_alloc) << "\n"                              //
         << BATT_INSPECT(kv_store.mem_table_free) << "\n"                               //
+        << BATT_INSPECT(kv_store.mem_table_count_stats) << "\n"                        //
         << "\n"                                                                        //
         << dump_memory_stats() << "\n"                                                 //
         ;
