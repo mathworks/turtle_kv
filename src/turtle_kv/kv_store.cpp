@@ -1234,7 +1234,6 @@ std::function<void(std::ostream&)> KVStore::debug_info() noexcept
         << "\n"                                                                        //
         << BATT_INSPECT(page_cache.get_count) << "\n"                                  //
         << BATT_INSPECT(page_cache.allocate_page_alloc_latency) << "\n"                //
-        << BATT_INSPECT(page_cache.page_read_latency) << "\n"                          //
         << BATT_INSPECT(page_cache.total_bytes_read) << "\n"                           //
         << "\n"                                                                        //
         << BATT_INSPECT(query_page_loader.prefetch_hint_latency) << "\n"               //
