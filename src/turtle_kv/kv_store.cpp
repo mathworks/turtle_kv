@@ -1381,8 +1381,16 @@ std::function<void(std::ostream&)> KVStore::debug_info() noexcept
         << "\n"                                                                        //
         << BATT_INSPECT(scanner.ctor_latency) << "\n"                                  //
         << BATT_INSPECT(scanner.ctor_count) << "\n"                                    //
-        << BATT_INSPECT(scanner.start_latency) << "\n"                                 //
+        << "\n"                                                                        //
         << BATT_INSPECT(scanner.start_count) << "\n"                                   //
+        << BATT_INSPECT(scanner.start_latency) << "\n"                                 //
+        << BATT_INSPECT(scanner.start_deltas_latency) << "\n"                          //
+        << BATT_INSPECT(scanner.start_enter_subtree_latency) << "\n"                   //
+        << BATT_INSPECT(scanner.start_resume_latency) << "\n"                          //
+        << BATT_INSPECT(scanner.start_build_heap_latency) << "\n"                      //
+        << "\n"                                                                        //
+        << BATT_INSPECT(scanner.init_heap_size_stats) << "\n"                          //
+        << "\n"                                                                        //
         << BATT_INSPECT(scanner.next_latency) << "\n"                                  //
         << BATT_INSPECT(scanner.next_count) << "\n"                                    //
         << BATT_INSPECT(scanner.heap_insert_latency) << "\n"                           //

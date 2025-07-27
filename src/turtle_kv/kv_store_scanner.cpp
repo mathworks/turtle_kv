@@ -83,6 +83,8 @@ Status KVStoreScanner::start()
   LatencyTimer timer{batt::Every2ToTheConst<10>{}, m.start_latency};
 
   if (this->pinned_state_) {
+    LatencyTimer timer{batt::Every2ToTheConst<10>{}, m.start_deltas_latency};
+
     const usize n_deltas = this->pinned_state_->deltas_.size();
 
     // Reserve space for MemTable (active + deltas) in ScanLevels.
@@ -172,13 +174,23 @@ Status KVStoreScanner::start()
   // Initialize a path down the checkpoint tree (unless empty).
   //
   if (this->root_.is_valid()) {
-    BATT_REQUIRE_OK(this->enter_subtree(this->tree_height_, this->root_, std::false_type{}));
-    BATT_REQUIRE_OK(this->resume());
+    {
+      LatencyTimer timer{batt::Every2ToTheConst<10>{}, m.start_enter_subtree_latency};
+      BATT_REQUIRE_OK(this->enter_subtree(this->tree_height_, this->root_, std::false_type{}));
+    }
+    {
+      LatencyTimer timer{batt::Every2ToTheConst<10>{}, m.start_resume_latency};
+      BATT_REQUIRE_OK(this->resume());
+    }
   }
 
   // Run make heap once at the beginning.
   //
-  this->heap_.reset(as_slice(this->scan_levels_), /*minimum_capacity=*/kMaxHeapSize);
+  {
+    m.init_heap_size_stats.update(this->scan_levels_.size());
+    LatencyTimer timer{batt::Every2ToTheConst<10>{}, m.start_build_heap_latency};
+    this->heap_.reset(as_slice(this->scan_levels_), /*minimum_capacity=*/kMaxHeapSize);
+  }
 
   BATT_REQUIRE_OK(this->set_next_item());
 

@@ -43,6 +43,11 @@ class KVStoreScanner
     FastCountMetric<usize> ctor_count;
 
     LatencyMetric start_latency;
+    LatencyMetric start_deltas_latency;
+    LatencyMetric start_enter_subtree_latency;
+    LatencyMetric start_resume_latency;
+    LatencyMetric start_build_heap_latency;
+    StatsMetric<usize> init_heap_size_stats;
     FastCountMetric<usize> start_count;
 
     LatencyMetric next_latency;
