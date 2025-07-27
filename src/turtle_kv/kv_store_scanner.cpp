@@ -29,7 +29,7 @@ TURTLE_KV_ENV_PARAM(bool, turtlekv_use_sharded_leaf_scanner, false);
 {
   auto& m = KVStoreScanner::metrics();
   m.ctor_count.add(1);
-  LatencyTimer timer{batt::EveryNToTheConst<10>{}, m.ctor_latency};
+  LatencyTimer timer{batt::Every2ToTheConst<10>{}, m.ctor_latency};
 
   if (this->pinned_state_->mem_table_->has_ordered_index()) {
     this->mem_table_scanner_.emplace(this->pinned_state_->mem_table_->ordered_index(), min_key);
@@ -80,7 +80,7 @@ Status KVStoreScanner::start()
 {
   auto& m = KVStoreScanner::metrics();
   m.start_count.add(1);
-  LatencyTimer timer{batt::EveryNToTheConst<10>{}, m.start_latency};
+  LatencyTimer timer{batt::Every2ToTheConst<10>{}, m.start_latency};
 
   if (this->pinned_state_) {
     const usize n_deltas = this->pinned_state_->deltas_.size();
@@ -373,7 +373,7 @@ Status KVStoreScanner::set_next_item()
 {
   auto& m = KVStoreScanner::metrics();
   m.next_count.add(1);
-  LatencyTimer timer{batt::EveryNToTheConst<10>{}, m.next_latency};
+  LatencyTimer timer{batt::Every2ToTheConst<10>{}, m.next_latency};
 
   for (;;) {
     if (this->heap_.empty()) {
