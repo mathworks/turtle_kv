@@ -742,11 +742,6 @@ StatusOr<usize> KVStore::scan_keys(const KeyView& min_key,
                                    const Slice<KeyView>& items_out) noexcept /*override*/
 {
   ThreadContext& thread_context = this->per_thread_.get(this);
-  if (thread_context.scan_result_storage) {
-    LOG_EVERY_N(INFO, 1000) << BATT_INSPECT(
-        thread_context.scan_result_storage->pinned_pages.size());
-  }
-
   thread_context.scan_result_storage.emplace();
 
   this->metrics_.scan_count.add(1);
