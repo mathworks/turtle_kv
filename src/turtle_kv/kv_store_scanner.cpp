@@ -814,7 +814,7 @@ auto KVStoreScanner::NodeScanState::pull_next_sharded(i32 buffer_level_i) -> Sha
 
   auto& m = KVStoreScanner::metrics();
 
-  m.pull_next_shareded_count.add(1);
+  m.pull_next_sharded_count.add(1);
   LatencyTimer timer{batt::Every2ToTheConst<10>{}, m.pull_next_sharded_latency};
 
   ShardedLevelVector& sharded_scanners = std::get<ShardedLevelVector>(this->level_scanners_);
