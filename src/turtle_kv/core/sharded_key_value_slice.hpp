@@ -162,8 +162,9 @@ class ShardedKeyValueSlice
    */
   usize value_data_lower_bound_;
 
-  /** \brief The leaf page from which the key-value data comes from.
+  /** \brief The leaf page from which the key-value data comes.
    */
   llfs::PageId leaf_page_id_;
 };
+
 }  // namespace turtle_kv
