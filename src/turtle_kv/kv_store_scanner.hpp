@@ -41,6 +41,9 @@ class KVStoreScanner
   struct Metrics {
     LatencyMetric scan_level_advance_latency;
     LatencyMetric pull_next_sharded_latency;
+
+    FastCountMetric<usize> scan_level_advance_count;
+    FastCountMetric<usize> pull_next_sharded_count;
   };
 
   static Metrics& metrics() noexcept
