@@ -13,7 +13,7 @@
 #include <turtle_kv/tree/packed_leaf_page.hpp>
 #include <turtle_kv/tree/packed_node_page.hpp>
 #include <turtle_kv/tree/segmented_level_scanner.hpp>
-#include <turtle_kv/tree/sharded_leaf_scanner.hpp>
+#include <turtle_kv/tree/sharded_level_scanner.hpp>
 #include <turtle_kv/tree/subtree.hpp>
 
 #include <turtle_kv/util/art.hpp>
@@ -83,7 +83,7 @@ class KVStoreScanner
       SegmentedLevelScanner<const PackedNodePage, const PackedLevel, llfs::PageLoader>;
 
   using PackedLevelShardedScanner =
-      ShardedLeafScanner<const PackedNodePage, const PackedLevel, llfs::PageLoader>;
+      ShardedLevelScanner<const PackedNodePage, const PackedLevel, llfs::PageLoader>;
 
   struct NodeScanState;
 

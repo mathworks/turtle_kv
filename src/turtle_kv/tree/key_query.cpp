@@ -238,9 +238,7 @@ StatusOr<ValueView> find_key_in_leaf_using_sharded_views(llfs::PageId leaf_page_
 
   // We have the Trie index in memory; query it to find the range containing our query key.
   //
-  usize key_prefix_match = 0;
-  const Interval<usize> search_range =
-      packed_leaf_page.calculate_search_range(query.key(), key_prefix_match);
+  const Interval<usize> search_range = packed_leaf_page.calculate_search_range(query.key());
 
   // Calculate the leaf page slice containing the range of PackedKeyValue objects we will need
   // to binary search.  We add two to the end of the range; one because we only know how long

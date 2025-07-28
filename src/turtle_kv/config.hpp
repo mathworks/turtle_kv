@@ -64,4 +64,6 @@ constexpr i64 kNewNodeLruPriority = kNodeLruPriority + kNewPagePriorityBoost;
 constexpr i64 kNewFilterLruPriority = kFilterLruPriority + kNewPagePriorityBoost;
 constexpr i64 kNewLeafLruPriority = kLeafLruPriority + kNewPagePriorityBoost;
 
+constexpr u32 kDefaultLeafShardedViewSize = 4096;
+
 }  // namespace turtle_kv

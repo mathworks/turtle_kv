@@ -20,7 +20,7 @@ struct SliceData {
 
 /** \brief When we load a slice of key offsets/pointers, we save some information about that slice
  * so that we can try reusing the slice (and avoid another sharded page load) in later calls to
- * ShardedLeafScanner::next.
+ * ShardedLevelScanner::next.
  */
 struct CachedItems {
   usize upper_bound;
@@ -34,10 +34,10 @@ struct CachedItems {
 };
 
 template <typename NodeT, typename LevelT, typename PageLoaderT>
-class ShardedLeafScanner : private SegmentedLevelScannerBase
+class ShardedLevelScanner : private SegmentedLevelScannerBase
 {
  public:
-  using Self = ShardedLeafScanner;
+  using Self = ShardedLevelScanner;
   using Super = SegmentedLevelScannerBase;
   using Node = NodeT;
   using Level = LevelT;
@@ -50,33 +50,33 @@ class ShardedLeafScanner : private SegmentedLevelScannerBase
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  explicit ShardedLeafScanner(Node& node,
-                              Level& level,
-                              PageLoader& loader,
-                              PageSliceStorage& slice_storage,
-                              llfs::PinPageToJob pin_pages_to_job,
-                              Status& status,
-                              llfs::PageSize trie_index_size,
-                              i32 min_pivot_i = 0,
-                              Optional<KeyView> min_key = None) noexcept;
+  explicit ShardedLevelScanner(Node& node,
+                               Level& level,
+                               PageLoader& loader,
+                               PageSliceStorage& slice_storage,
+                               llfs::PinPageToJob pin_pages_to_job,
+                               Status& status,
+                               llfs::PageSize trie_index_size,
+                               i32 min_pivot_i = 0,
+                               Optional<KeyView> min_key = None) noexcept;
 
-  explicit ShardedLeafScanner(Node& node,
-                              Level& level,
-                              PageLoader& loader,
-                              PageSliceStorage& slice_storage,
-                              llfs::PinPageToJob pin_pages_to_job,
-                              llfs::PageSize trie_index_size,
-                              i32 min_pivot_i = 0,
-                              Optional<KeyView> min_key = None) noexcept
-      : ShardedLeafScanner{node,
-                           level,
-                           loader,
-                           slice_storage,
-                           pin_pages_to_job,
-                           this->Super::self_contained_status_,
-                           trie_index_size,
-                           min_pivot_i,
-                           min_key}
+  explicit ShardedLevelScanner(Node& node,
+                               Level& level,
+                               PageLoader& loader,
+                               PageSliceStorage& slice_storage,
+                               llfs::PinPageToJob pin_pages_to_job,
+                               llfs::PageSize trie_index_size,
+                               i32 min_pivot_i = 0,
+                               Optional<KeyView> min_key = None) noexcept
+      : ShardedLevelScanner{node,
+                            level,
+                            loader,
+                            slice_storage,
+                            pin_pages_to_job,
+                            this->Super::self_contained_status_,
+                            trie_index_size,
+                            min_pivot_i,
+                            min_key}
   {
   }
 
@@ -135,7 +135,7 @@ class ShardedLeafScanner : private SegmentedLevelScannerBase
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename NodeT, typename LevelT, typename PageLoaderT>
-inline /*explicit*/ ShardedLeafScanner<NodeT, LevelT, PageLoaderT>::ShardedLeafScanner(
+inline /*explicit*/ ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::ShardedLevelScanner(
     Node& node,
     Level& level,
     PageLoader& loader,
@@ -168,7 +168,7 @@ inline /*explicit*/ ShardedLeafScanner<NodeT, LevelT, PageLoaderT>::ShardedLeafS
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename NodeT, typename LevelT, typename PageLoaderT>
-inline auto ShardedLeafScanner<NodeT, LevelT, PageLoaderT>::peek() -> Optional<Item>
+inline auto ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::peek() -> Optional<Item>
 {
   return this->peek_next_impl(false);
 }
@@ -176,7 +176,7 @@ inline auto ShardedLeafScanner<NodeT, LevelT, PageLoaderT>::peek() -> Optional<I
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename NodeT, typename LevelT, typename PageLoaderT>
-inline auto ShardedLeafScanner<NodeT, LevelT, PageLoaderT>::next() -> Optional<Item>
+inline auto ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::next() -> Optional<Item>
 {
   return this->peek_next_impl(true);
 }
@@ -184,7 +184,7 @@ inline auto ShardedLeafScanner<NodeT, LevelT, PageLoaderT>::next() -> Optional<I
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename NodeT, typename LevelT, typename PageLoaderT>
-inline auto ShardedLeafScanner<NodeT, LevelT, PageLoaderT>::peek_next_impl(bool advance)
+inline auto ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::peek_next_impl(bool advance)
     -> Optional<Item>
 {
   // Errors are final; check the current status.
@@ -345,7 +345,7 @@ inline auto ShardedLeafScanner<NodeT, LevelT, PageLoaderT>::peek_next_impl(bool 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename NodeT, typename LevelT, typename PageLoaderT>
-inline void ShardedLeafScanner<NodeT, LevelT, PageLoaderT>::advance_segment()
+inline void ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::advance_segment()
 {
   ++this->segment_i_;
   this->head_shard_slice_ = ConstBuffer{};
@@ -356,7 +356,7 @@ inline void ShardedLeafScanner<NodeT, LevelT, PageLoaderT>::advance_segment()
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename NodeT, typename LevelT, typename PageLoaderT>
-inline Status ShardedLeafScanner<NodeT, LevelT, PageLoaderT>::advance_to_pivot(
+inline Status ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::advance_to_pivot(
     usize target_pivot_i,
     const Segment& segment) noexcept
 {
@@ -412,7 +412,7 @@ inline Status ShardedLeafScanner<NodeT, LevelT, PageLoaderT>::advance_to_pivot(
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename NodeT, typename LevelT, typename PageLoaderT>
-inline StatusOr<SliceData> ShardedLeafScanner<NodeT, LevelT, PageLoaderT>::init_slice_data(
+inline StatusOr<SliceData> ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::init_slice_data(
     const KeyView& gap_pivot_key) noexcept
 {
   const void* page_start = this->head_shard_slice_.data();
@@ -428,6 +428,9 @@ inline StatusOr<SliceData> ShardedLeafScanner<NodeT, LevelT, PageLoaderT>::init_
   usize item_i_offset = (usize)byte_distance(page_start, head_items + this->item_i_);
   usize item_nearest_aligned_boundary = (item_i_offset + (kDefaultLeafShardedViewSize - 1)) &
                                         ~((1 << batt::log2_ceil(kDefaultLeafShardedViewSize)) - 1);
+  //                                       ^^^^
+  // kDefaultLeafShardedViewSize is always a power of 2, so doing log, 1 << isn't needed.
+
   if (item_i_offset == item_nearest_aligned_boundary) {
     item_nearest_aligned_boundary += kDefaultLeafShardedViewSize;
   }
@@ -569,7 +572,7 @@ inline StatusOr<SliceData> ShardedLeafScanner<NodeT, LevelT, PageLoaderT>::init_
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename NodeT, typename LevelT, typename PageLoaderT>
-inline Interval<usize> ShardedLeafScanner<NodeT, LevelT, PageLoaderT>::get_trie_search_range(
+inline Interval<usize> ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::get_trie_search_range(
     const KeyView& key)
 {
   BATT_CHECK_NE(this->head_shard_slice_.size(), 0);
@@ -589,14 +592,13 @@ inline Interval<usize> ShardedLeafScanner<NodeT, LevelT, PageLoaderT>::get_trie_
   const void* trie_end = advance_pointer(trie_begin, packed_leaf_page.trie_index_size);
   BATT_CHECK_LE(byte_distance(page_start, trie_end), this->trie_index_sharded_view_size_);
 
-  usize key_prefix_match = 0;
-  return packed_leaf_page.calculate_search_range(key, key_prefix_match);
+  return packed_leaf_page.calculate_search_range(key);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename NodeT, typename LevelT, typename PageLoaderT>
-inline Status ShardedLeafScanner<NodeT, LevelT, PageLoaderT>::set_start_item(
+inline Status ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::set_start_item(
     usize flushed_upper_bound,
     Optional<KeyView> lower_bound_key,
     Optional<Interval<usize>> search_range) noexcept
@@ -677,7 +679,7 @@ inline Status ShardedLeafScanner<NodeT, LevelT, PageLoaderT>::set_start_item(
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename NodeT, typename LevelT, typename PageLoaderT>
-inline void ShardedLeafScanner<NodeT, LevelT, PageLoaderT>::update_cached_items(usize prev_item_i)
+inline void ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::update_cached_items(usize prev_item_i)
 {
   if (this->item_i_ >= this->cached_items_.upper_bound) {
     this->cached_items_.reset();

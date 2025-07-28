@@ -195,12 +195,13 @@ struct PackedLeafPage {
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
   //
-  Interval<usize> calculate_search_range(const std::string_view& key, usize& key_prefix_match) const
+  Interval<usize> calculate_search_range(const std::string_view& key) const
   {
     if (!this->trie_index) {
       return Interval<usize>{0, this->key_count};
     }
 
+    usize key_prefix_match = 0;
     Interval<usize> search_range = this->trie_index->find(key, key_prefix_match);
 
     const usize max_i = this->key_count - 1;
@@ -247,8 +248,7 @@ struct PackedLeafPage {
   {
     LatencyTimer timer{Every2ToTheConst<16>{}, PackedLeafPage::metrics().find_key_latency};
 
-    usize key_prefix_match = 0;
-    Interval<usize> search_range = this->calculate_search_range(key, key_prefix_match);
+    Interval<usize> search_range = this->calculate_search_range(key);
 
     const PackedKeyValue* found = this->find_key_in_range(key, search_range);
 
@@ -294,8 +294,7 @@ struct PackedLeafPage {
   //
   const PackedKeyValue* lower_bound(const std::string_view& key) const
   {
-    usize key_prefix_match = 0;
-    Interval<usize> search_range = this->calculate_search_range(key, key_prefix_match);
+    Interval<usize> search_range = this->calculate_search_range(key);
 
     return this->lower_bound_in_range(key, search_range);
   }

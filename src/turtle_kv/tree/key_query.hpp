@@ -234,8 +234,6 @@ struct KeyQuery {
   }
 };
 
-static constexpr u32 kDefaultLeafShardedViewSize = 4096;
-
 StatusOr<ValueView> find_key_in_leaf(llfs::PageId leaf_page_id,
                                      KeyQuery& query,
                                      usize& item_index_out);
