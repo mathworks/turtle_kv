@@ -1,8 +1,10 @@
 #include <turtle_kv/tree/memory_storage.hpp>
 //
 
-#include <turtle_kv/import/logging.hpp>
 #include <turtle_kv/tree/config.hpp>
+#include <turtle_kv/tree/storage_config.hpp>
+
+#include <turtle_kv/import/logging.hpp>
 
 #include <llfs/config.hpp>
 #include <llfs/memory_page_arena.hpp>
@@ -47,9 +49,8 @@ std::shared_ptr<llfs::PageCache> make_memory_page_cache(batt::TaskScheduler& sch
                                                    /*name=*/"Filter",
                                                    /*device_id=*/2));
 
-  auto cache_options = llfs::PageCacheOptions::with_default_values();
-
-  cache_options.set_byte_size((byte_capacity * 5 + 1) / 4);
+  auto cache_options =
+      page_cache_options_from(opts, /*cache_size_bytes=*/(byte_capacity * 5 + 1) / 4);
 
   return BATT_OK_RESULT_OR_PANIC(llfs::PageCache::make_shared(
       /*storage_pool=*/std::move(arenas),

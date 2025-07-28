@@ -12,6 +12,7 @@
 #include <turtle_kv/tree/in_memory_node.hpp>
 #include <turtle_kv/tree/leaf_page_view.hpp>
 #include <turtle_kv/tree/node_page_view.hpp>
+#include <turtle_kv/tree/storage_config.hpp>
 
 #include <turtle_kv/util/memory_profiler.hpp>
 #include <turtle_kv/util/memory_stats.hpp>
@@ -107,21 +108,8 @@ u64 query_page_loader_reset_every_n()
                                                      const TreeOptions& tree_options,
                                                      const RuntimeOptions& runtime_options) noexcept
 {
-  auto page_cache_options = llfs::PageCacheOptions::with_default_values();
-
-  std::set<llfs::PageSize> sharded_leaf_views;
-
-  sharded_leaf_views.insert(llfs::PageSize{4 * kKiB});
-  sharded_leaf_views.insert(tree_options.trie_index_sharded_view_size());
-
-  for (llfs::PageSize view_size : sharded_leaf_views) {
-    if (tree_options.leaf_size() != view_size) {
-      page_cache_options.add_sharded_view(tree_options.leaf_size(), view_size);
-    }
-  }
-
-  page_cache_options.set_byte_size(runtime_options.cache_size_bytes,
-                                   /*default_page_size=*/llfs::PageSize{4 * kKiB});
+  llfs::PageCacheOptions page_cache_options =
+      page_cache_options_from(tree_options, runtime_options.cache_size_bytes);
 
   storage_context.set_page_cache_options(page_cache_options);
 
@@ -365,7 +353,7 @@ u64 query_page_loader_reset_every_n()
       state->mem_table_.reset(new MemTable{
           this->page_cache(),
           this->metrics_,
-          /*max_byte_size=*/this->tree_options_.leaf_data_size(),
+          /*max_byte_size=*/this->tree_options_.flush_size(),
           DeltaBatchId{1}.to_mem_table_id(),
       });
       state->base_checkpoint_ = Checkpoint::empty_at_batch(DeltaBatchId::from_u64(0));
