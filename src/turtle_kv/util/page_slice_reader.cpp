@@ -59,9 +59,9 @@ StatusOr<ConstBuffer> PageSliceReader::read_slice(llfs::PageSize shard_size,
       return {batt::StatusCode::kUnavailable};
     }
 
-    const llfs::PinnedPage* p_pinned_page = storage_out.find_pinned_page(*shard_page_id);
     const void* raw_data = nullptr;
 
+    const llfs::PinnedPage* p_pinned_page = storage_out.find_pinned_page(*shard_page_id);
     if (p_pinned_page) {
       raw_data = p_pinned_page->raw_data();
     } else {
@@ -76,13 +76,12 @@ StatusOr<ConstBuffer> PageSliceReader::read_slice(llfs::PageSize shard_size,
                                                       lru_priority}));
 
       raw_data = newly_pinned_shard.raw_data();
-
       storage_out.insert_pinned_page(std::move(newly_pinned_shard));
     }
 
     // Success!  Return the requested slice as a ConstBuffer.
     //
-    return ConstBuffer{pinned_shard.raw_data(), offset_in_shard + slice.size()} + offset_in_shard;
+    return ConstBuffer{raw_data, offset_in_shard + slice.size()} + offset_in_shard;
   }
 
   //----- --- -- -  -  -   -
@@ -154,7 +153,7 @@ StatusOr<ConstBuffer> PageSliceReader::read_slice(const Interval<usize>& slice,
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-const llfs::PinnedPage* PageSliceReader::find_pinned_page(llfs::PageId page_id) noexcept
+const llfs::PinnedPage* PageSliceStorage::find_pinned_page(llfs::PageId page_id) noexcept
 {
   for (usize i = this->pinned_pages.size(); i > 0;) {
     --i;
@@ -172,7 +171,7 @@ const llfs::PinnedPage* PageSliceReader::find_pinned_page(llfs::PageId page_id) 
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-void PageSliceReader::insert_pinned_page(llfs::PinnedPage&& pinned_page) noexcept
+void PageSliceStorage::insert_pinned_page(llfs::PinnedPage&& pinned_page) noexcept
 {
   this->pinned_pages.emplace_back(std::move(pinned_page));
 }
