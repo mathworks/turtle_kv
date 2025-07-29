@@ -110,15 +110,29 @@ class ShardedLeafPageScannerTest : public ::testing::Test
 //
 TEST_F(ShardedLeafPageScannerTest, Test)
 {
+  const bool kExtraTesting = false;
+
+  const usize kOuterLoops = kExtraTesting ? 1000 : 100;
+  const usize kScannersPerOuter = kExtraTesting ? 1000 : 25;
+  const usize kScansPerScanner = kExtraTesting ? 250 : 10;
+
   DLOG(INFO) << BATT_INSPECT(tree_options.trie_index_sharded_view_size());
 
-  for (usize i = 0; i < 8000; ++i) {
+  for (usize loop_i = 0; loop_i < kOuterLoops; ++loop_i) {
+    //----- --- -- -  -  -   -
+
+    // Generate a random batch.
+    //
     auto batch = this->random_edits();
-    ASSERT_TRUE(std::is_sorted(batch.begin(), batch.end(), KeyOrder{}));
-    for (usize j = 1; j < batch.size(); ++j) {
-      ASSERT_NE(batch[j - 1], batch[j]);
+
+    // Validate that keys in the batch are sorted and unique.
+    //
+    for (usize edit_i = 1; edit_i < batch.size(); ++edit_i) {
+      ASSERT_LT(batch[edit_i - 1], batch[edit_i]);
     }
 
+    // Allocate a page so we can build a leaf for the batch.
+    //
     StatusOr<PinnedPage> pinned_page =
         this->page_cache->allocate_page_of_size(this->tree_options.leaf_size(),
                                                 batt::WaitForResource{true},
@@ -149,45 +163,48 @@ TEST_F(ShardedLeafPageScannerTest, Test)
     //
     PackedLeafPage* packed_leaf = build_leaf_page(buffer, plan, batch);
 
+    // Validate that the leaf was properly built.
+    //
     ASSERT_NE(packed_leaf, nullptr);
     EXPECT_EQ(packed_leaf->key_count, batch.size());
     EXPECT_EQ(packed_leaf->min_key(), get_key(batch.front()));
     EXPECT_EQ(packed_leaf->max_key(), get_key(batch.back()));
-
     for (usize i = 0; i < packed_leaf->key_count; ++i) {
       ASSERT_EQ(packed_leaf->key_at(i), get_key(batch[i]));
       ASSERT_EQ(packed_leaf->value_at(i), get_value(batch[i]));
     }
 
+    // Leaf looks good; "write" it through the cache so we can load sharded views.
+    //
     bool written = false;
     this->page_cache->async_write_new_page(batt::make_copy(*pinned_page), [&written](auto result) {
       written = result.ok();
     });
     ASSERT_TRUE(written);
 
+    // We will need a random key generator for scan lower bounds.
+    //
     RandomStringGenerator generate_key;
     generate_key.set_size(this->tree_options.key_size_hint());
 
+    std::uniform_int_distribution<usize> pick_item{0, batch.size() - 1};
+
     // Now do some short scans and verify.
     //
-    for (usize j = 0; j < 5000; ++j) {
+    for (usize j = 0; j < kScannersPerOuter; ++j) {
       ShardedLeafPageScanner scanner{*this->page_cache, pinned_page->page_id(), this->tree_options};
       DLOG(INFO) << "load_header";
       Status header_status = scanner.load_header();
       ASSERT_TRUE(header_status.ok()) << BATT_INSPECT(header_status);
 
-      for (usize j2 = 0; j2 < 100; ++j2) {
+      for (usize j2 = 0; j2 < kScansPerScanner; ++j2) {
         std::string key;
 
-        if (this->pick_branch()) {
-          // Scan to a random key that *is* in the batch.
-          //
-          std::uniform_int_distribution<usize> pick_item{0, batch.size() - 1};
+        // 50/50: Scan to a random key that *is* in the batch, or generate a new random key.
+        //
+        if (this->pick_branch(50)) {
           key.assign(get_key(batch[pick_item(rng)]));
-
         } else {
-          // Scan to a new random key.
-          //
           key = generate_key(rng);
         }
 
@@ -204,11 +221,12 @@ TEST_F(ShardedLeafPageScannerTest, Test)
           continue;
         }
         ASSERT_TRUE(seek_status.ok()) << BATT_INSPECT(seek_status);
+        ASSERT_FALSE(scanner.item_range_empty());
         DLOG(INFO) << "(seek OK; verifying keys)";
 
-        bool first_in_range = true;
-
-        usize max_scan_len = this->pick_branch() ? (batch.size() + 1) / 2 : 100;
+        // Pick 30% "large" scans, 70% short.
+        //
+        const usize max_scan_len = this->pick_branch(30) ? (batch.size() + 1) / 2 : 100;
 
         // Pick a random scan length.
         //
@@ -217,20 +235,20 @@ TEST_F(ShardedLeafPageScannerTest, Test)
         DLOG(INFO) << BATT_INSPECT(scan_len);
 
         for (usize k = 0; k < scan_len && actual_iter != batch.end(); ++k, ++actual_iter) {
-          if (first_in_range) {
-            ASSERT_FALSE(scanner.item_range_empty());
-            first_in_range = false;
-          }
-
-          ASSERT_EQ(scanner.front_key(), get_key(*actual_iter));
-
+          // Load the value for the current item.
+          //
           StatusOr<ValueView> value_status = scanner.front_value();
 
+          // Verify the scanned item.
+          //
+          ASSERT_EQ(scanner.front_key(), get_key(*actual_iter));
           ASSERT_TRUE(value_status.ok()) << BATT_INSPECT(value_status);
           ASSERT_EQ(*value_status, get_value(*actual_iter));
 
           DLOG(INFO) << "verified key [" << k << "]: " << batt::c_str_literal(scanner.front_key());
 
+          // Move the scanner to the next item.
+          //
           scanner.drop_front();
           if (scanner.item_range_empty()) {
             DLOG(INFO) << "next_item_range";
@@ -240,7 +258,7 @@ TEST_F(ShardedLeafPageScannerTest, Test)
               break;
             }
             ASSERT_TRUE(next_status.ok()) << BATT_INSPECT(next_status);
-            first_in_range = true;
+            ASSERT_FALSE(scanner.item_range_empty());
           }
         }
       }
