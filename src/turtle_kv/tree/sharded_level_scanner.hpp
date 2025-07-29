@@ -303,8 +303,8 @@ inline auto ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::peek_next_impl(bool
                                          *(this->slice_storage_),
                                          this->pin_pages_to_job_,
                                          llfs::LruPriority{kTrieIndexLruPriority});
-      if (!head_buffer.ok()) {
-        this->status_ = head_buffer.status();
+      if (!status_or_head_buffer.ok()) {
+        this->status_ = status_or_head_buffer.status();
         return None;
       }
       this->head_shard_slice_ = *status_or_head_buffer;
