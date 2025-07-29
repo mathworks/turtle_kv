@@ -13,6 +13,7 @@
 #include <turtle_kv/tree/packed_leaf_page.hpp>
 #include <turtle_kv/tree/packed_node_page.hpp>
 #include <turtle_kv/tree/segmented_level_scanner.hpp>
+#include <turtle_kv/tree/sharded_leaf_page_scanner.hpp>
 #include <turtle_kv/tree/sharded_level_scanner.hpp>
 #include <turtle_kv/tree/subtree.hpp>
 
@@ -116,6 +117,19 @@ class KVStoreScanner
     i32 buffer_level_i;
   };
 
+  struct ShardedLeafScanState {
+    NodeScanState* node_state_;
+    ShardedLeafPageScanner* leaf_scanner_;
+
+    template <typename... Args>
+    explicit ShardedLeafScanState(NodeScanState* node_state,
+                                  ShardedLeafPageScanner* leaf_scanner) noexcept
+        : node_state_{node_state}
+        , leaf_scanner_{leaf_scanner}
+    {
+    }
+  };
+
   struct ActiveMemTableTag {
   };
 
@@ -126,6 +140,9 @@ class KVStoreScanner
   };
 
   struct DeltaMemTableValueTag {
+  };
+
+  struct ShardedLeafTag {
   };
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -140,7 +157,8 @@ class KVStoreScanner
                  MemTableValueScanState<ARTBase::Synchronized::kFalse>,
                  Slice<const EditView>,
                  TreeLevelScanState,
-                 TreeLevelScanShardedState>
+                 TreeLevelScanShardedState,
+                 ShardedLeafScanState>
         state_impl;
 
     //----- --- -- -  -  -   -
@@ -168,6 +186,10 @@ class KVStoreScanner
         ART<MemTableValueEntry>::Scanner<ARTBase::Synchronized::kFalse>& art_scanner) noexcept;
 
     explicit ScanLevel(const Slice<const EditView>& edit_view_slice) noexcept;
+
+    explicit ScanLevel(ShardedLeafTag,
+                       NodeScanState* node_state,
+                       ShardedLeafPageScanner* leaf_scanner) noexcept;
 
     //----- --- -- -  -  -   -
 
@@ -229,6 +251,19 @@ class KVStoreScanner
                            llfs::PinnedPage&& page,
                            const PackedLeafPage& leaf,
                            std::integral_constant<bool, kInsertHeap>) noexcept;
+
+    // Generic frame; initialization will be done post construction.
+    //
+    explicit NodeScanState() noexcept;
+
+    //----- --- -- -  -  -   -
+
+    // We need to initialize the scan state post initio in this case.
+    //
+    template <bool kInsertHeap>
+    Status initialize_sharded_leaf_scanner(KVStoreScanner& kv_scanner,
+                                           llfs::PageId page_id,
+                                           std::integral_constant<bool, kInsertHeap>);
 
     i32 get_height() const;
 
@@ -316,6 +351,7 @@ class KVStoreScanner
   boost::container::small_vector<ScanLevel, kMaxHeapSize + 32> scan_levels_;
   StackMerger<ScanLevel, ScanLevelMinHeapOrder, kMaxHeapSize> heap_;
   bool keys_only_ = false;
+  Optional<ShardedLeafPageScanner> sharded_leaf_scanner_;
 };
 
 }  // namespace turtle_kv

@@ -35,9 +35,16 @@ class ShardedLeafPageScanner
 
   explicit ShardedLeafPageScanner(llfs::PageLoader& page_loader,
                                   llfs::PageId page_id,
-                                  const TreeOptions& tree_options) noexcept
+                                  llfs::PageSize trie_index_sharded_view_size) noexcept
       : slice_reader_{page_loader, page_id, llfs::PageSize{kDefaultLeafShardedViewSize}}
-      , head_shard_size_{tree_options.trie_index_sharded_view_size()}
+      , head_shard_size_{trie_index_sharded_view_size}
+  {
+  }
+
+  explicit ShardedLeafPageScanner(llfs::PageLoader& page_loader,
+                                  llfs::PageId page_id,
+                                  const TreeOptions& tree_options) noexcept
+      : ShardedLeafPageScanner{page_loader, page_id, tree_options.trie_index_sharded_view_size()}
   {
   }
 

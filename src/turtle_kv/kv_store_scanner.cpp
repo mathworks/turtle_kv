@@ -293,13 +293,51 @@ Status KVStoreScanner::enter_subtree(i32 subtree_height,
                                      InsertHeapBool insert_heap)
 {
   for (;;) {
-    StatusOr<llfs::PinnedPage> pinned_page = subtree_root.load_through(
-        this->page_loader_,
-        llfs::PageLoadOptions{
-            (subtree_height > 1) ? llfs::PinPageToJob::kDefault : llfs::PinPageToJob::kFalse,
-            llfs::OkIfNotFound{false},
-            llfs::LruPriority{(subtree_height > 1) ? kNodeLruPriority : kLeafLruPriority},
-        });
+    auto load_options = llfs::PageLoadOptions{
+        (subtree_height > 1) ? llfs::PinPageToJob::kDefault : llfs::PinPageToJob::kFalse,
+        llfs::OkIfNotFound{false},
+        llfs::LruPriority{(subtree_height > 1) ? kNodeLruPriority : kLeafLruPriority},
+    };
+
+    // Handle the bottom level specially.
+    //
+    if (subtree_height == 1) {
+      // Best case scenario: the full leaf page is already in-cache; pin it and push a NodeScanState
+      // that iterates though a single PackedKeyValue slice.
+      //
+      StatusOr<llfs::PinnedPage> pinned_leaf =
+          subtree_root.try_pin_through(this->page_loader_, load_options);
+
+      // Optimistic pin succeeded!  We are on the fast path.
+      //
+      if (pinned_leaf.ok()) {
+        // Sanity check: does the page have leaf layout?
+        //
+        const auto& page_header =
+            *static_cast<const llfs::PackedPageHeader*>(pinned_leaf->const_buffer().data());
+
+        if (page_header.layout_id != LeafPageView::page_layout_id()) {
+          return {batt::StatusCode::kDataLoss};
+        }
+
+        // Enter the full leaf, and we are done.
+        //
+        BATT_REQUIRE_OK(this->enter_leaf(std::move(*pinned_leaf), insert_heap));
+
+      } else {
+        // If the pin failed, then using sharded views is the best option.
+        //
+        NodeScanState& node_state = this->tree_scan_path_.emplace_back();
+
+        BATT_REQUIRE_OK(node_state.initialize_sharded_leaf_scanner(*this,  //
+                                                                   subtree_root.page_id,
+                                                                   insert_heap));
+      }
+      break;
+    }
+
+    StatusOr<llfs::PinnedPage> pinned_page =
+        subtree_root.load_through(this->page_loader_, load_options);
 
     BATT_REQUIRE_OK(pinned_page);
     BATT_REQUIRE_OK(this->validate_page_layout(subtree_height, *pinned_page));
@@ -441,6 +479,17 @@ Status KVStoreScanner::set_next_item()
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+/*explicit*/ KVStoreScanner::ScanLevel::ScanLevel(ShardedLeafTag,
+                                                  NodeScanState* node_state,
+                                                  ShardedLeafPageScanner* leaf_scanner) noexcept
+    : key{}
+    , state_impl{ShardedLeafScanState{node_state, leaf_scanner}}
+{
+  ;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 /*explicit*/ KVStoreScanner::ScanLevel::ScanLevel(const ShardedKeyValueSlice& kv_slice,
                                                   NodeScanState* node_state,
                                                   i32 buffer_level_i) noexcept
@@ -571,6 +620,12 @@ EditView KVStoreScanner::ScanLevel::item(bool key_only) const
           return EditView{this->key, ValueView{}};
         }
         return EditView{this->key, state.kv_slice.front_value()};
+      },
+      [this, key_only](const ShardedLeafScanState& state) -> EditView {
+        if (key_only) {
+          return EditView{this->key, ValueView{}};
+        }
+        return EditView{this->key, BATT_OK_RESULT_OR_PANIC(state.leaf_scanner_->front_value())};
       });
 }
 
@@ -604,6 +659,9 @@ ValueView KVStoreScanner::ScanLevel::value() const
       },
       [](const TreeLevelScanShardedState& state) -> ValueView {
         return state.kv_slice.front_value();
+      },
+      [](const ShardedLeafScanState& state) -> ValueView {
+        return BATT_OK_RESULT_OR_PANIC(state.leaf_scanner_->front_value());
       });
 }
 
@@ -683,6 +741,18 @@ bool KVStoreScanner::ScanLevel::advance()
           }
         }
         this->key = state.kv_slice.front_key();
+        return true;
+      },
+      [this](ShardedLeafScanState& state) -> bool {
+        state.leaf_scanner_->drop_front();
+        if (state.leaf_scanner_->item_range_empty()) {
+          Status load_status = state.leaf_scanner_->load_next_item_range();
+          if (!load_status.ok()) {
+            state.node_state_->active_levels_ = 0;
+            return false;
+          }
+        }
+        this->key = state.leaf_scanner_->front_key();
         return true;
       });
 }
@@ -795,6 +865,54 @@ template <bool kInsertHeap>
       kv_scanner.heap_.insert(&level);
     }
   }
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+/*explicit*/ KVStoreScanner::NodeScanState::NodeScanState() noexcept
+    : active_levels_{0}
+    , pinned_page_{}
+    , node_{nullptr}
+    , pivot_i_{0}
+{
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <bool kInsertHeap>
+Status KVStoreScanner::NodeScanState::initialize_sharded_leaf_scanner(
+    KVStoreScanner& kv_scanner,
+    llfs::PageId page_id,
+    std::integral_constant<bool, kInsertHeap>)
+{
+  ShardedLeafPageScanner& leaf_scanner =
+      kv_scanner.sharded_leaf_scanner_.emplace(kv_scanner.page_loader_,
+                                               page_id,
+                                               kv_scanner.trie_index_sharded_view_size_);
+
+  ScanLevel& level = kv_scanner.scan_levels_.emplace_back(ShardedLeafTag{},
+                                                          /* NodeScanState */ this,
+                                                          &leaf_scanner);
+
+  // We must load the PackedLeafPage header shard before anything else.
+  //
+  BATT_REQUIRE_OK(leaf_scanner.load_header());
+
+  Status seek_status = leaf_scanner.seek_to(kv_scanner.min_key_);
+  if (seek_status == batt::StatusCode::kEndOfStream || leaf_scanner.item_range_empty()) {
+    kv_scanner.scan_levels_.pop_back();
+    return OkStatus();
+  }
+  BATT_REQUIRE_OK(seek_status);
+
+  this->active_levels_ = 1;
+  level.key = leaf_scanner.front_key();
+
+  if (kInsertHeap) {
+    kv_scanner.heap_.insert(&level);
+  }
+
+  return OkStatus();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
