@@ -128,7 +128,8 @@ TEST_F(ShardedLeafPageScannerTest, Test)
     // Validate that keys in the batch are sorted and unique.
     //
     for (usize edit_i = 1; edit_i < batch.size(); ++edit_i) {
-      ASSERT_LT(batch[edit_i - 1], batch[edit_i]);
+      ASSERT_LT(get_key(batch[edit_i - 1]), get_key(batch[edit_i]));
+      ASSERT_NE(batch[edit_i - 1], batch[edit_i]);
     }
 
     // Allocate a page so we can build a leaf for the batch.
