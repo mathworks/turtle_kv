@@ -142,6 +142,14 @@ class ShardedLevelScanner : private SegmentedLevelScannerBase
 
   void update_cached_items(usize prev_item_i);
 
+  Optional<Item> continue_full_leaf_after_segment_check(bool advance,
+                                                        u64 active_pivots,
+                                                        const Segment* segment) noexcept;
+
+  Optional<Item> continue_sharded_after_segment_check(bool advance,
+                                                      u64 active_pivots,
+                                                      const Segment* segment) noexcept;
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
   Node* node_;
   Level* level_;
@@ -162,6 +170,7 @@ class ShardedLevelScanner : private SegmentedLevelScannerBase
   batt::BoolStatus load_full_leaf_;
   bool passed_min_key_;
   bool hit_gap_pivot_key_;
+  bool needs_load_segment_ = false;
 };
 
 //=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
@@ -205,9 +214,6 @@ inline /*explicit*/ ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::ShardedLeve
 template <typename NodeT, typename LevelT, typename PageLoaderT>
 inline auto ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::peek() -> Optional<Item>
 {
-  if (this->load_full_leaf_ == batt::BoolStatus::kTrue) {
-    return this->peek_next_impl_full_leaf(false);
-  }
   return this->peek_next_impl(false);
 }
 
@@ -216,9 +222,6 @@ inline auto ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::peek() -> Optional<
 template <typename NodeT, typename LevelT, typename PageLoaderT>
 inline auto ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::next() -> Optional<Item>
 {
-  if (this->load_full_leaf_ == batt::BoolStatus::kTrue) {
-    return this->peek_next_impl_full_leaf(true);
-  }
   return this->peek_next_impl(true);
 }
 
@@ -243,13 +246,15 @@ inline auto ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::peek_next_impl(bool
   const Segment* segment = std::addressof(this->level_->get_segment(this->segment_i_));
 
   u64 active_pivots = segment->get_active_pivots();
-  BATT_CHECK_NE(active_pivots, 0) << "This segment should have been dropped!";
+  {
+    BATT_CHECK_NE(active_pivots, 0) << "This segment should have been dropped!";
+  }
 
-  // If this->head_shard_slice_ is empty, we need haven't looked at the leaf corresponding to the
-  // segment we are looking at. Thus, we need to load the "head shard", or the part of the leaf page
-  // containing the trie index.
+  // Check for need to load new segment.
   //
-  if (this->head_shard_slice_.size() == 0) {
+  if (this->needs_load_segment_) {
+    this->load_full_leaf_ = batt::BoolStatus::kUnknown;
+
     // Skip ahead to the next segment that is active at or past the minimum pivot.
     //
     while (last_bit(active_pivots) < this->min_pivot_i_) {
@@ -267,35 +272,45 @@ inline auto ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::peek_next_impl(bool
       ++target_pivot_i;
     }
 
-    if (this->load_full_leaf_ == batt::BoolStatus::kUnknown) {
+    // Try to pin the full leaf; if this fails, then load shards for this segment.
+    //
+    {
       Status load_leaf = this->try_full_leaf_load(*segment);
       if (load_leaf.ok()) {
         this->load_full_leaf_ = batt::BoolStatus::kTrue;
+        BATT_CHECK(!this->needs_load_segment_);
+
         this->advance_to_pivot_full_leaf(
             target_pivot_i,
             *segment,
             PackedLeafPage::view_of(this->full_leaf_data_->leaf_page.get_page_buffer()));
-        return this->peek_next_impl_full_leaf(advance);
-      } else {
-        this->load_full_leaf_ = batt::BoolStatus::kFalse;
+
+        return this->continue_full_leaf_after_segment_check(advance, active_pivots, segment);
       }
+
+      this->load_full_leaf_ = batt::BoolStatus::kFalse;
     }
 
     // Read the head shard!
     //
     this->slice_reader_.set_page_id(segment->get_leaf_page_id());
 
-    StatusOr<ConstBuffer> head_buffer =
-        this->slice_reader_.read_slice(this->trie_index_sharded_view_size_,
-                                       Interval<usize>{0, this->trie_index_sharded_view_size_},
-                                       *(this->slice_storage_),
-                                       this->pin_pages_to_job_,
-                                       llfs::LruPriority{kTrieIndexLruPriority});
-    if (!head_buffer.ok()) {
-      this->status_ = head_buffer.status();
-      return None;
+    ConstBuffer head_buffer;
+    {
+      StatusOr<ConstBuffer> status_or_head_buffer =
+          this->slice_reader_.read_slice(this->trie_index_sharded_view_size_,
+                                         Interval<usize>{0, this->trie_index_sharded_view_size_},
+                                         *(this->slice_storage_),
+                                         this->pin_pages_to_job_,
+                                         llfs::LruPriority{kTrieIndexLruPriority});
+      if (!head_buffer.ok()) {
+        this->status_ = head_buffer.status();
+        return None;
+      }
+      this->head_shard_slice_ = *status_or_head_buffer;
+      this->needs_load_segment_ = false;
+      BATT_CHECK_NE(this->head_shard_slice_.size(), 0);
     }
-    this->head_shard_slice_ = *head_buffer;
 
     // Advance to `target_pivot_i` in this segment.
     //
@@ -319,6 +334,21 @@ inline auto ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::peek_next_impl(bool
     }
   }
 
+  if (this->load_full_leaf_ == batt::BoolStatus::kTrue) {
+    return this->continue_full_leaf_after_segment_check(advance, active_pivots, segment);
+  }
+  BATT_CHECK_EQ(this->load_full_leaf_, batt::BoolStatus::kFalse);
+  return this->continue_sharded_after_segment_check(advance, active_pivots, segment);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <typename NodeT, typename LevelT, typename PageLoaderT>
+inline auto ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::continue_sharded_after_segment_check(
+    bool advance,
+    u64 active_pivots,
+    const Segment* segment) noexcept -> Optional<Item>
+{
   const void* page_start = this->head_shard_slice_.data();
   const void* payload_start = advance_pointer(page_start, sizeof(llfs::PackedPageHeader));
   const auto& packed_leaf_page = *static_cast<const PackedLeafPage*>(payload_start);
@@ -400,63 +430,11 @@ inline auto ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::peek_next_impl(bool
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename NodeT, typename LevelT, typename PageLoaderT>
-inline auto ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::peek_next_impl_full_leaf(bool advance)
-    -> Optional<Item>
+inline auto ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::continue_full_leaf_after_segment_check(
+    bool advance,
+    u64 active_pivots,
+    const Segment* segment) noexcept -> Optional<Item>
 {
-  // Errors are final; check the current status.
-  //
-  if (!this->status_.ok()) {
-    return None;
-  }
-
-  // If the current segment is past the end, return None.
-  //
-  if (this->segment_i_ == this->level_->segment_count()) {
-    return None;
-  }
-
-  const Segment* segment = std::addressof(this->level_->get_segment(this->segment_i_));
-
-  u64 active_pivots = segment->get_active_pivots();
-  BATT_CHECK_NE(active_pivots, 0) << "This segment should have been dropped!";
-
-  BATT_CHECK(this->full_leaf_data_);
-  if (this->full_leaf_data_->needs_load) {
-    while (last_bit(active_pivots) < this->min_pivot_i_) {
-      ++this->segment_i_;
-      if (this->segment_i_ == this->level_->segment_count()) {
-        return None;
-      }
-      segment = std::addressof(this->level_->get_segment(this->segment_i_));
-      active_pivots = segment->get_active_pivots();
-    }
-
-    // Try to load the page for this segment.
-    //
-    StatusOr<PinnedPageT> loaded_page =
-        segment->load_leaf_page(*this->loader_, this->pin_pages_to_job_);
-
-    if (!loaded_page.ok()) {
-      this->status_ = loaded_page.status();
-      VLOG(1) << "Failed to load page: " << BATT_INSPECT(loaded_page.status())
-              << BATT_INSPECT((int)this->pin_pages_to_job_);
-      return None;
-    }
-
-    this->full_leaf_data_.emplace(false, std::move(*loaded_page));
-
-    i32 target_pivot_i = std::max(first_bit(active_pivots), this->min_pivot_i_);
-    while (target_pivot_i < (i32)this->node_->pivot_count() &&
-           !get_bit(active_pivots, target_pivot_i)) {
-      ++target_pivot_i;
-    }
-
-    this->advance_to_pivot_full_leaf(
-        target_pivot_i,
-        *segment,
-        PackedLeafPage::view_of(this->full_leaf_data_->leaf_page.get_page_buffer()));
-  }
-
   const PackedLeafPage& leaf_page =
       PackedLeafPage::view_of(this->full_leaf_data_->leaf_page.get_page_buffer());
 
@@ -509,8 +487,10 @@ inline void ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::advance_segment()
 
   if (this->load_full_leaf_ == batt::BoolStatus::kTrue) {
     this->full_leaf_data_.emplace();
+    this->needs_load_segment_ = true;
   } else {
     this->head_shard_slice_ = ConstBuffer{};
+    this->needs_load_segment_ = true;
     this->cached_items_.reset();
     this->passed_min_key_ = false;
   }
@@ -911,4 +891,5 @@ inline void ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::update_cached_items
     this->cached_items_.items_buffer += index_diff * sizeof(PackedKeyValue);
   }
 }
+
 }  // namespace turtle_kv
