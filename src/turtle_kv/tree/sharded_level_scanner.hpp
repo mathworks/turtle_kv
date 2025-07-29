@@ -879,7 +879,7 @@ template <typename NodeT, typename LevelT, typename PageLoaderT>
 inline Status ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::try_full_leaf_load(
     const Segment& segment) noexcept
 {
-  auto& metrics = ShardedLevelScannerMetrics::metrics();
+  auto& metrics = ShardedLevelScannerMetrics::instance();
   metrics.full_page_attempts.add(1);
 
   llfs::PageId leaf_page_id = segment.get_leaf_page_id();
