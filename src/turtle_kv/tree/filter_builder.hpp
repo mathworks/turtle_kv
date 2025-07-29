@@ -262,12 +262,12 @@ Status build_quotient_filter_for_leaf(llfs::PageCache& page_cache,
   } else {
     BATT_CHECK_GT(max_slots_8bit, max_slots_16bit);
 
-    LOG_FIRST_N(WARNING, 10) << "Truncating hash values to fit filter!";
-
     usize hash_val_shift = 1;
     while ((items.size() >> hash_val_shift) / load_factor_8bit > max_slots_8bit) {
       ++hash_val_shift;
     }
+    LOG_FIRST_N(WARNING, 10) << "Truncating hash values to fit filter!"
+                             << BATT_INSPECT(hash_val_shift);
 
     filter_size = vqf_required_size<8>(max_slots_8bit);
     BATT_REQUIRE_OK(build_vqf_filter<8>(filter_buffer, items, max_slots_8bit, hash_val_shift));
