@@ -338,13 +338,17 @@ class ShardedLeafPageScanner
     this->item_range_->lower_bound += count;
     this->loaded_items_.drop_front(count);
 
-    const usize new_key_full_size =
+    // Check that we still have at least two keys' worth of data (we need both to find the correct
+    // size of the value of the front key).
+    //
+    const usize new_key_data_min_size =
         this->loaded_items_.empty()
             ? usize{0}
-            : (this->loaded_items_.front().key_size() + sizeof(PackedValueOffset));
+            : (this->loaded_items_[0].key_size() + sizeof(PackedValueOffset) +  //
+               this->loaded_items_[1].key_size() + sizeof(PackedValueOffset));
 
     if (this->loaded_items_.empty() ||
-        (this->key_data_page_slice_.lower_bound + new_key_full_size) >
+        (this->key_data_page_slice_.lower_bound + new_key_data_min_size) >
             this->key_data_page_slice_.upper_bound) {
       this->key_data_page_slice_.lower_bound = this->key_data_page_slice_.upper_bound;
       this->loaded_items_ = as_slice(this->loaded_items_.begin(), 0);
