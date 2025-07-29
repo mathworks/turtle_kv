@@ -170,7 +170,7 @@ class ShardedLevelScanner : private SegmentedLevelScannerBase
   batt::BoolStatus load_full_leaf_;
   bool passed_min_key_;
   bool hit_gap_pivot_key_;
-  bool needs_load_segment_ = false;
+  bool needs_load_segment_ = true;
 };
 
 //=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
