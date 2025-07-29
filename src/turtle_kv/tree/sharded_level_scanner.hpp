@@ -874,6 +874,7 @@ inline Status ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::try_full_leaf_loa
   if (loaded_page.ok()) {
     metrics.full_page_success.add(1);
     this->full_leaf_data_.emplace(false, std::move(*loaded_page));
+    this->needs_load_segment_ = false;
   }
 
   return loaded_page.status();
