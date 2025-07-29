@@ -305,12 +305,14 @@ Status KVStoreScanner::enter_subtree(i32 subtree_height,
       // Best case scenario: the full leaf page is already in-cache; pin it and push a NodeScanState
       // that iterates though a single PackedKeyValue slice.
       //
+      metrics().full_leaf_attempts.add(1);
       StatusOr<llfs::PinnedPage> pinned_leaf =
           subtree_root.try_pin_through(this->page_loader_, load_options);
 
       // Optimistic pin succeeded!  We are on the fast path.
       //
       if (pinned_leaf.ok()) {
+        metrics().full_leaf_success.add(1);
         // Sanity check: does the page have leaf layout?
         //
         const auto& page_header =

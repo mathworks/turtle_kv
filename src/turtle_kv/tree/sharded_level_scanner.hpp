@@ -6,6 +6,8 @@
 
 #include <turtle_kv/util/page_slice_reader.hpp>
 
+#include <turtle_kv/import/metrics.hpp>
+
 namespace turtle_kv {
 
 /** \brief Contains the necessary data needed to initialize a ShardedKeyValueSlice.
@@ -37,6 +39,21 @@ template <typename PinnedLeafT>
 struct FullLeafData {
   bool needs_load = true;
   PinnedLeafT leaf_page;
+};
+
+struct ShardedLevelScannerMetrics {
+  using Self = ShardedLevelScannerMetrics;
+
+  static Self& instance() noexcept
+  {
+    static Self instance_;
+    return instance_;
+  }
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  FastCountMetric<usize> full_page_attempts{0};
+  FastCountMetric<usize> full_page_success{0};
 };
 
 template <typename NodeT, typename LevelT, typename PageLoaderT>
@@ -862,6 +879,9 @@ template <typename NodeT, typename LevelT, typename PageLoaderT>
 inline Status ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::try_full_leaf_load(
     const Segment& segment) noexcept
 {
+  auto& metrics = ShardedLevelScannerMetrics::metrics();
+  metrics.full_page_attempts.add(1);
+
   llfs::PageId leaf_page_id = segment.get_leaf_page_id();
   StatusOr<PinnedPageT> loaded_page = this->loader_->try_pin_cached_page(  //
       leaf_page_id,
@@ -872,6 +892,7 @@ inline Status ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::try_full_leaf_loa
       });
 
   if (loaded_page.ok()) {
+    metrics.full_page_success.add(1);
     this->full_leaf_data_.emplace(false, std::move(*loaded_page));
   }
 

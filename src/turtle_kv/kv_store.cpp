@@ -12,6 +12,7 @@
 #include <turtle_kv/tree/in_memory_node.hpp>
 #include <turtle_kv/tree/leaf_page_view.hpp>
 #include <turtle_kv/tree/node_page_view.hpp>
+#include <turtle_kv/tree/sharded_level_scanner.hpp>
 #include <turtle_kv/tree/storage_config.hpp>
 
 #include <turtle_kv/util/memory_profiler.hpp>
@@ -1160,6 +1161,8 @@ std::function<void(std::ostream&)> KVStore::debug_info() noexcept
 
     auto& scanner = KVStoreScanner::metrics();
 
+    auto& sharded_level_scanner = ShardedLevelScannerMetrics::instance();
+
     auto& query_page_loader = PinningPageLoader::metrics();
 
     std::array<double, 32> page_reads_per_get, page_reads_per_scan;
@@ -1393,6 +1396,11 @@ std::function<void(std::ostream&)> KVStore::debug_info() noexcept
         << BATT_INSPECT(scanner.scan_level_advance_count) << "\n"                      //
         << BATT_INSPECT(scanner.pull_next_sharded_latency) << "\n"                     //
         << BATT_INSPECT(scanner.pull_next_sharded_count) << "\n"                       //
+        << BATT_INSPECT(scanner.full_leaf_attempts) << "\n"                            //
+        << BATT_INSPECT(scanner.full_leaf_success) << "\n"                             //
+        << "\n"                                                                        //
+        << BATT_INSPECT(sharded_level_scanner.full_page_attempts) << "\n"              //
+        << BATT_INSPECT(sharded_level_scanner.full_page_success) << "\n"               //
         << "\n"                                                                        //
         << dump_memory_stats() << "\n"                                                 //
         ;

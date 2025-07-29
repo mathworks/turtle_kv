@@ -66,6 +66,9 @@ class KVStoreScanner
 
     LatencyMetric pull_next_sharded_latency;
     FastCountMetric<usize> pull_next_sharded_count;
+
+    FastCountMetric<usize> full_leaf_attempts;
+    FastCountMetric<usize> full_leaf_success;
   };
 
   static Metrics& metrics() noexcept
