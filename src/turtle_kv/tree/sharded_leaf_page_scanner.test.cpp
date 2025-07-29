@@ -90,7 +90,7 @@ class ShardedLeafPageScannerTest : public ::testing::Test
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  std::default_random_engine rng{1};
+  std::default_random_engine rng{472};
 
   StableStringStore string_storage;
 
@@ -223,6 +223,11 @@ TEST_F(ShardedLeafPageScannerTest, Test)
           }
 
           ASSERT_EQ(scanner.front_key(), get_key(*actual_iter));
+
+          StatusOr<ValueView> value_status = scanner.front_value();
+
+          ASSERT_TRUE(value_status.ok()) << BATT_INSPECT(value_status);
+          ASSERT_EQ(*value_status, get_value(*actual_iter));
 
           DLOG(INFO) << "verified key [" << k << "]: " << batt::c_str_literal(scanner.front_key());
 

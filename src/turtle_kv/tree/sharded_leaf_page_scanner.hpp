@@ -256,11 +256,21 @@ class ShardedLeafPageScanner
     return OkStatus();
   }
 
+  /** \brief Returns true iff there are no more items in the currently loaded range.
+   *
+   * If this function returns true, then this->load_next_item_range() may be called to load another
+   * batch of key data.  If the current range is empty *and* there is no next range (i.e. the end of
+   * the last range exhausted the key range of the leaf), then this->load_next_item_range() will
+   * return `batt::StatusCode::kEndOfStream`.
+   */
   bool item_range_empty() const noexcept
   {
     return this->loaded_items_.empty();
   }
 
+  /** \brief Returns the current key, if this->item_range_empty() is false; otherwise behavior is
+   * undefined.
+   */
   KeyView front_key() const noexcept
   {
     // return this->loaded_items_.front().shifted_key_view(this->item_to_key_data_offset_);
@@ -268,6 +278,10 @@ class ShardedLeafPageScanner
                    this->loaded_items_.front().key_size()};
   }
 
+  /** \brief Loads and returns the value associated with the current key.
+   *
+   * If this->item_range_empty() is true, behavior is undefined.
+   */
   StatusOr<ValueView> front_value() noexcept
   {
     // Calculate the location within the page containing the value data.
@@ -304,6 +318,12 @@ class ShardedLeafPageScanner
     return unpack_value_view(value_data_buffer);
   }
 
+  /** \brief Drops one (or more) items from the front of the current range.
+   *
+   * External callers should *not* override the default count of 1, since they have no way in
+   * general of knowing how many items are in the current range.  (count > 1 is used internally, by
+   * this->seek_to)
+   */
   void drop_front(usize count = 1) noexcept
   {
     const PackedKeyValue& key0 = this->loaded_items_[0];
@@ -369,6 +389,10 @@ class ShardedLeafPageScanner
     }
   }
 
+  /** \brief Chooses and returns a last item index (from the start of the this->header_->items
+   * array) so as to minimize the amount of I/O and copying for key data, while maximizing the size
+   * of the resulting item range.
+   */
   usize infer_last_item_index(usize first_item_i, usize items_page_offset) const noexcept
   {
     // It costs the same to load up to the end of the shard containing the first item, so figure
