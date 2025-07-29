@@ -280,7 +280,6 @@ class ShardedLeafPageScanner
    */
   KeyView front_key() const noexcept
   {
-    // return this->loaded_items_.front().shifted_key_view(this->item_to_key_data_offset_);
     return KeyView{static_cast<const char*>(this->key_data_start_),
                    this->loaded_items_.front().key_size()};
   }

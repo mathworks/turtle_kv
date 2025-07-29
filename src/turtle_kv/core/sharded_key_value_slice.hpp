@@ -86,7 +86,7 @@ class ShardedKeyValueSlice
     usize value_size = pkv.shifted_value_size(this->key_data_offset_);
 
     Interval<usize> value_data_slice{this->value_data_lower_bound_,
-                                     value_data_lower_bound_ + value_size};
+                                     this->value_data_lower_bound_ + value_size};
 
     BATT_CHECK(this->leaf_page_id_);
     PageSliceReader slice_reader{*this->page_loader_,

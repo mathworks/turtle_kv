@@ -25,6 +25,10 @@ namespace turtle_kv {
 struct PageSliceStorage {
   llfs::BasicStableStringStore<512, 4096> stable_string_store;
   SmallVec<llfs::PinnedPage, 64> pinned_pages;
+
+  const llfs::PinnedPage* find_pinned_page(llfs::PageId page_id) noexcept;
+
+  void insert_pinned_page(llfs::PinnedPage&& pinned_page) noexcept;
 };
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------

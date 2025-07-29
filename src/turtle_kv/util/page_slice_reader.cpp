@@ -59,17 +59,26 @@ StatusOr<ConstBuffer> PageSliceReader::read_slice(llfs::PageSize shard_size,
       return {batt::StatusCode::kUnavailable};
     }
 
-    // Attempt to pin the requested shard in the cache.
-    //
-    BATT_ASSIGN_OK_RESULT(
-        llfs::PinnedPage pinned_shard,
-        this->page_loader_.load_page(*shard_page_id,
-                                     llfs::PageLoadOptions{llfs::ShardedPageView::page_layout_id(),
-                                                           pin_page_to_job,
-                                                           llfs::OkIfNotFound{false},
-                                                           lru_priority}));
+    const llfs::PinnedPage* p_pinned_page = storage_out.find_pinned_page(*shard_page_id);
+    const void* raw_data = nullptr;
 
-    storage_out.pinned_pages.emplace_back(pinned_shard);
+    if (p_pinned_page) {
+      raw_data = p_pinned_page->raw_data();
+    } else {
+      // Attempt to pin the requested shard in the cache.
+      //
+      BATT_ASSIGN_OK_RESULT(llfs::PinnedPage newly_pinned_shard,
+                            this->page_loader_.load_page(
+                                *shard_page_id,
+                                llfs::PageLoadOptions{llfs::ShardedPageView::page_layout_id(),
+                                                      pin_page_to_job,
+                                                      llfs::OkIfNotFound{false},
+                                                      lru_priority}));
+
+      raw_data = newly_pinned_shard.raw_data();
+
+      storage_out.insert_pinned_page(std::move(newly_pinned_shard));
+    }
 
     // Success!  Return the requested slice as a ConstBuffer.
     //
@@ -141,6 +150,31 @@ StatusOr<ConstBuffer> PageSliceReader::read_slice(const Interval<usize>& slice,
                           storage_out,
                           pin_page_to_job,
                           lru_priority);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+const llfs::PinnedPage* PageSliceReader::find_pinned_page(llfs::PageId page_id) noexcept
+{
+  for (usize i = this->pinned_pages.size(); i > 0;) {
+    --i;
+    llfs::PinnedPage& next = this->pinned_pages[i];
+    if (next.page_id() == page_id) {
+      llfs::PinnedPage& last = this->pinned_pages.back();
+      if (&next != &last) {
+        std::swap(next, last);
+      }
+      return &last;
+    }
+  }
+  return nullptr;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void PageSliceReader::insert_pinned_page(llfs::PinnedPage&& pinned_page) noexcept
+{
+  this->pinned_pages.emplace_back(std::move(pinned_page));
 }
 
 }  // namespace turtle_kv

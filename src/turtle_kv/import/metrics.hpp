@@ -5,6 +5,24 @@
 
 namespace turtle_kv {
 
+template <typename T>
+struct NullCountMetric {
+};
+
+template <typename T>
+struct NullFastCountMetric {
+};
+
+struct NullLatencyMetric {
+};
+
+struct NullLatencyTimer {
+};
+
+template <typename T>
+struct NullStatsMetric {
+};
+
 using ::batt::CountMetric;
 using ::batt::DerivedMetric;
 using ::batt::Every2ToThe;
