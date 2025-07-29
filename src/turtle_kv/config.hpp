@@ -50,7 +50,7 @@
 
 /** \brief Enable/disable collection of stats/metrics.
  */
-#define TURTLE_KV_ENABLE_METRICS 1
+#define TURTLE_KV_ENABLE_METRICS 0
 
 namespace turtle_kv {
 
