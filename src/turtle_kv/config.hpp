@@ -48,6 +48,10 @@
  */
 #define TURTLE_KV_ENABLE_TCMALLOC_HEAP_PROFILING 0
 
+/** \brief Enable/disable collection of stats/metrics.
+ */
+#define TURTLE_KV_ENABLE_METRICS 1
+
 namespace turtle_kv {
 
 constexpr i64 kNodeLruPriority = 4;

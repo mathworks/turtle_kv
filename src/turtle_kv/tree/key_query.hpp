@@ -216,9 +216,9 @@ struct KeyQuery {
 #endif
 #if TURTLE_KV_USE_QUOTIENT_FILTER
     const bool reject =
-        BATT_COLLECT_LATENCY_SAMPLE(Every2ToTheConst<16>{},
-                                    Self::metrics().filter_lookup_latency,
-                                    (filter_page_view.is_present(this->hash_val) == false));
+        TURTLE_KV_COLLECT_LATENCY_SAMPLE(Every2ToTheConst<16>{},
+                                         Self::metrics().filter_lookup_latency,
+                                         (filter_page_view.is_present(this->hash_val) == false));
 #endif
 
     if (reject) {

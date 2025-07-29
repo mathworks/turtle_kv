@@ -625,9 +625,10 @@ StatusOr<ValueView> KVStore::get(const KeyView& key) noexcept /*override*/
 
   // First check the current active MemTable.
   //
-  Optional<ValueView> value = BATT_COLLECT_LATENCY_SAMPLE(batt::Every2ToTheConst<14>{},
-                                                          this->metrics_.mem_table_get_latency,
-                                                          observed_state->mem_table_->get(key));
+  Optional<ValueView> value =
+      TURTLE_KV_COLLECT_LATENCY_SAMPLE(batt::Every2ToTheConst<14>{},
+                                       this->metrics_.mem_table_get_latency,
+                                       observed_state->mem_table_->get(key));
 
   if (value) {
     if (!value->needs_combine()) {
@@ -644,9 +645,10 @@ StatusOr<ValueView> KVStore::get(const KeyView& key) noexcept /*override*/
     --i;
     const boost::intrusive_ptr<MemTable>& delta = observed_state->deltas_[i];
 
-    Optional<ValueView> delta_value = BATT_COLLECT_LATENCY_SAMPLE(batt::Every2ToTheConst<18>{},
-                                                                  this->metrics_.delta_get_latency,
-                                                                  delta->finalized_get(key));
+    Optional<ValueView> delta_value =
+        TURTLE_KV_COLLECT_LATENCY_SAMPLE(batt::Every2ToTheConst<18>{},
+                                         this->metrics_.delta_get_latency,
+                                         delta->finalized_get(key));
 
     if (delta_value) {
       // VLOG(1) << "found key " << batt::c_str_literal(key) << " in delta MemTable " << i << "/"
@@ -685,9 +687,9 @@ StatusOr<ValueView> KVStore::get(const KeyView& key) noexcept /*override*/
   };
 
   StatusOr<ValueView> value_from_checkpoint =
-      BATT_COLLECT_LATENCY_SAMPLE(batt::Every2ToTheConst<12>{},
-                                  this->metrics_.checkpoint_get_latency,
-                                  pinned_state->base_checkpoint_.find_key(query));
+      TURTLE_KV_COLLECT_LATENCY_SAMPLE(batt::Every2ToTheConst<12>{},
+                                       this->metrics_.checkpoint_get_latency,
+                                       pinned_state->base_checkpoint_.find_key(query));
 
   if (value_from_checkpoint.ok()) {
     // VLOG(1) << "found key " << batt::c_str_literal(key) << " in checkpoint tree";
@@ -887,7 +889,8 @@ std::unique_ptr<DeltaBatch> KVStore::compact_memtable(boost::intrusive_ptr<MemTa
   //
   std::unique_ptr<DeltaBatch> delta_batch = std::make_unique<DeltaBatch>(std::move(mem_table));
 
-  BATT_COLLECT_LATENCY(this->metrics_.compact_batch_latency, delta_batch->merge_compact_edits());
+  TURTLE_KV_COLLECT_LATENCY(this->metrics_.compact_batch_latency,
+                            delta_batch->merge_compact_edits());
 
   this->metrics_.batch_edits_count.add(delta_batch->result_set_size());
 
@@ -927,8 +930,8 @@ StatusOr<std::unique_ptr<CheckpointJob>> KVStore::apply_batch_to_checkpoint(
     // Apply the finalized MemTable to the current checkpoint (in-memory).
     //
     StatusOr<usize> push_status =
-        BATT_COLLECT_LATENCY(this->metrics_.push_batch_latency,
-                             this->checkpoint_generator_.push_batch(std::move(delta_batch)));
+        TURTLE_KV_COLLECT_LATENCY(this->metrics_.push_batch_latency,
+                                  this->checkpoint_generator_.push_batch(std::move(delta_batch)));
 
     BATT_REQUIRE_OK(push_status);
     BATT_CHECK_EQ(*push_status, 1);
@@ -957,10 +960,10 @@ StatusOr<std::unique_ptr<CheckpointJob>> KVStore::apply_batch_to_checkpoint(
   // Serialize all pages and create the job.
   //
   StatusOr<std::unique_ptr<CheckpointJob>> checkpoint_job =
-      BATT_COLLECT_LATENCY(this->metrics_.finalize_checkpoint_latency,
-                           this->checkpoint_generator_.finalize_checkpoint(
-                               std::move(checkpoint_token),
-                               batt::make_copy(this->checkpoint_token_pool_)));
+      TURTLE_KV_COLLECT_LATENCY(this->metrics_.finalize_checkpoint_latency,
+                                this->checkpoint_generator_.finalize_checkpoint(
+                                    std::move(checkpoint_token),
+                                    batt::make_copy(this->checkpoint_token_pool_)));
 
   BATT_REQUIRE_OK(checkpoint_job);
 
@@ -1001,12 +1004,12 @@ Status KVStore::commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_jo
   // Durably commit the checkpoint.
   //
   StatusOr<llfs::SlotRange> checkpoint_slot_range =
-      BATT_COLLECT_LATENCY(this->metrics_.append_job_latency,                     //
-                           this->checkpoint_log_->append(                         //
-                               std::move(*checkpoint_job->appendable_job),        //
-                               *checkpoint_job->append_job_grant,                 //
-                               std::move(checkpoint_job->prepare_slot_sequencer)  //
-                               ));
+      TURTLE_KV_COLLECT_LATENCY(this->metrics_.append_job_latency,                     //
+                                this->checkpoint_log_->append(                         //
+                                    std::move(*checkpoint_job->appendable_job),        //
+                                    *checkpoint_job->append_job_grant,                 //
+                                    std::move(checkpoint_job->prepare_slot_sequencer)  //
+                                    ));
 
   BATT_REQUIRE_OK(checkpoint_slot_range);
 

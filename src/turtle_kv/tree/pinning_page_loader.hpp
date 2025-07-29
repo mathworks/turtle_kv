@@ -47,9 +47,9 @@ class PinningPageLoader : public llfs::PageLoader
       llfs::PageId page_id,
       const Optional<llfs::PageLayoutId>& required_layout) const
   {
-    auto iter = BATT_COLLECT_LATENCY_SAMPLE(Every2ToTheConst<16>{},
-                                            this->metrics_.hash_map_lookup_latency,
-                                            this->pinned_pages_.find(page_id.int_value()));
+    auto iter = TURTLE_KV_COLLECT_LATENCY_SAMPLE(Every2ToTheConst<16>{},
+                                                 this->metrics_.hash_map_lookup_latency,
+                                                 this->pinned_pages_.find(page_id.int_value()));
 
     if (iter != this->pinned_pages_.end()) {
       if (required_layout && *required_layout != llfs::ShardedPageView::page_layout_id()) {
