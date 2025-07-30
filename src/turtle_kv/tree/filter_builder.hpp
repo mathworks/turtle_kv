@@ -51,6 +51,7 @@ struct BloomFilterMetrics {
   StatsMetric<u64> bit_size_stats;
   StatsMetric<u64> bit_count_stats;
   StatsMetric<u64> item_count_stats;
+  LatencyMetric build_page_latency;
 };
 
 struct FilterPageAlloc {
@@ -111,8 +112,12 @@ Status build_bloom_filter_for_leaf(llfs::PageCache& page_cache,
     return OkStatus();
   }
 
+  auto& metrics = BloomFilterMetrics::instance();
+
   FilterPageAlloc alloc{page_cache, leaf_page_id};
   BATT_REQUIRE_OK(alloc.status);
+
+  LatencyTimer timer{Every2ToTheConst<8>{}, metrics.build_page_latency};
 
   BATT_ASSIGN_OK_RESULT(const llfs::PackedBloomFilterPage* packed_filter,
                         llfs::build_bloom_filter_page(batt::WorkerPool::null_pool(),
@@ -124,9 +129,9 @@ Status build_bloom_filter_for_leaf(llfs::PageCache& page_cache,
                                                       leaf_page_id,
                                                       alloc.filter_buffer));
 
-  {
-    auto& metrics = BloomFilterMetrics::instance();
+  timer.stop();
 
+  {
     const usize item_count = std::distance(items.begin(), items.end());
 
     metrics.word_count_stats.update(packed_filter->bloom_filter.word_count());
@@ -158,6 +163,7 @@ struct QuotientFilterMetrics {
   StatsMetric<u64> bit_size_stats;
   StatsMetric<u64> item_count_stats;
   StatsMetric<u64> bits_per_key_stats;
+  LatencyMetric build_page_latency;
 };
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -168,6 +174,10 @@ inline Status build_vqf_filter(const MutableBuffer& filter_buffer,
                                u64 nslots,
                                usize hash_val_shift = 0)
 {
+  auto& metrics = QuotientFilterMetrics::instance();
+
+  LatencyTimer timer{Every2ToTheConst<8>{}, metrics.build_page_latency};
+
   auto* const packed_filter_header = static_cast<PackedVqfFilter*>(filter_buffer.data());
   vqf_filter<TAG_BITS>* packed_filter = packed_filter_header->get_impl<TAG_BITS>();
   const u64 mask = ~u64{0} << hash_val_shift;
@@ -180,8 +190,6 @@ inline Status build_vqf_filter(const MutableBuffer& filter_buffer,
   const u64 actual_size = vqf_filter_size(packed_filter);
   BATT_CHECK_LE(actual_size,
                 filter_buffer.size() - (sizeof(PackedVqfFilter) - sizeof(vqf_metadata)));
-
-  auto& metrics = QuotientFilterMetrics::instance();
 
   metrics.byte_size_stats.update(actual_size);
   metrics.bit_size_stats.update(actual_size * 8);

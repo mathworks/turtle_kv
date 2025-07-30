@@ -203,6 +203,8 @@ struct KeyQuery {
     // reject.
     //
     if (filter_page_view.src_page_id() != page_id_to_reject) {
+      LOG_FIRST_N(INFO, 10) << BATT_INSPECT(filter_page_view.src_page_id())
+                            << BATT_INSPECT(page_id_to_reject);
       Self::metrics().page_id_mismatch_count.add(1);
       return BoolStatus::kUnknown;
     }
