@@ -16,6 +16,7 @@
 #include <llfs/bloom_filter.hpp>
 #include <llfs/bloom_filter_page.hpp>
 #include <llfs/bloom_filter_page_view.hpp>
+#include <llfs/packed_bloom_filter_page.hpp>
 #include <llfs/packed_page_id.hpp>
 #include <llfs/page_cache.hpp>
 #include <llfs/pinned_page.hpp>
@@ -119,6 +120,7 @@ Status build_bloom_filter_for_leaf(llfs::PageCache& page_cache,
                                                       BATT_OVERLOADS_OF(get_key),
                                                       llfs::BloomFilterLayout::kBlocked512,
                                                       filter_bits_per_key,
+                                                      /*opt_hash_count=*/None,
                                                       leaf_page_id,
                                                       alloc.filter_buffer));
 

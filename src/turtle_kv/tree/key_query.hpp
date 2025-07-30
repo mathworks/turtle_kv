@@ -161,7 +161,7 @@ struct KeyQuery {
         *filter_page_id,
         llfs::PageLoadOptions{
 #if TURTLE_KV_USE_BLOOM_FILTER
-            llfs::BloomFilterPageView::page_layout_id(),
+            llfs::PackedBloomFilterPage::page_layout_id(),
 
 #endif
 #if TURTLE_KV_USE_QUOTIENT_FILTER
