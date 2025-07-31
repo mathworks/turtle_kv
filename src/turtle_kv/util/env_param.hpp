@@ -9,7 +9,7 @@ template <typename Param, typename T = typename Param::value_type>
 inline typename Param::value_type getenv_param() noexcept
 {
   static const T value_ = [] {
-    T value = getenv_as<bool>(Param::get_name()).value_or(Param::get_default_value());
+    T value = getenv_as<T>(Param::get_name()).value_or(Param::get_default_value());
     LOG(INFO) << Param::get_name() << "=" << value;
     return value;
   }();
