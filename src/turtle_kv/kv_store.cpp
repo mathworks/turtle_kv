@@ -322,6 +322,17 @@ u64 query_page_loader_reset_every_n()
 #endif  // TURTLE_KV_ENABLE_TCMALLOC_HEAP_PROFILING
 #endif  // TURTLE_KV_ENABLE_TCMALLOC
 
+#if 0
+    if (getenv_param<turtlekv_use_bloom_filters>() &&
+        getenv_param<turtle_kv_use_vector_quotient_filters>()) {
+      BATT_PANIC() << "Select either bloom filters or quotient filters, not both!";
+    }
+    if (!getenv_param<turtlekv_use_bloom_filters>() &&
+        !getenv_param<turtle_kv_use_vector_quotient_filters>()) {
+      BATT_PANIC() << "Select either bloom filters or quotient filters!";
+    }
+#endif
+
     return OkStatus();
   }();
 
