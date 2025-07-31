@@ -264,7 +264,10 @@ class TreeOptions
     if (BATT_HINT_TRUE(this->trie_index_reserve_size_)) {
       return *this->trie_index_reserve_size_;
     }
-    return ((this->expected_items_per_leaf() * this->key_size_hint() + 15) / 16) * 5 / 8;
+    if (this->key_size_hint() > 16) {
+      return ((this->expected_items_per_leaf() * this->key_size_hint() + 15) / 16) * 5 / 8;
+    }
+    return ((this->expected_items_per_leaf() * this->key_size_hint() + 7) / 8) * 3 / 4;
   }
 
   Self& set_trie_index_reserve_size(Optional<usize> n_bytes)
