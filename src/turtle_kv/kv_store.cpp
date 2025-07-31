@@ -1218,6 +1218,8 @@ std::function<void(std::ostream&)> KVStore::debug_info() noexcept
       }
     }
     const u64 on_disk_footprint = page_bytes_in_use + change_log_file.size();
+    const double space_amp =
+        (double)on_disk_footprint / (double)change_log_writer.received_user_byte_count.get();
 
     double page_reads_per_get_4k = page_reads_per_get[12];
     double page_reads_per_get_8k = page_reads_per_get[13];
@@ -1433,6 +1435,7 @@ std::function<void(std::ostream&)> KVStore::debug_info() noexcept
         << BATT_INSPECT(sharded_level_scanner.full_page_success) << "\n"               //
         << "\n"                                                                        //
         << BATT_INSPECT(on_disk_footprint) << "\n"                                     //
+        << BATT_INSPECT(space_amp) << "\n"                                             //
         ;
   };
 }
