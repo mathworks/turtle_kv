@@ -13,11 +13,11 @@
 
 /** \brief Set to 1 to enable Bloom Filters.
  */
-#define TURTLE_KV_USE_BLOOM_FILTER 0
+#define TURTLE_KV_USE_BLOOM_FILTER 1
 
 /** \brief Set to 1 to enable Quotient Filters.
  */
-#define TURTLE_KV_USE_QUOTIENT_FILTER 1
+#define TURTLE_KV_USE_QUOTIENT_FILTER 0
 
 #if !(TURTLE_KV_USE_BLOOM_FILTER == 0 || TURTLE_KV_USE_BLOOM_FILTER == 1)
 #error TURTLE_KV_USE_BLOOM_FILTER must be 0 or 1
