@@ -1202,6 +1202,23 @@ std::function<void(std::ostream&)> KVStore::debug_info() noexcept
       }
     };
 
+    u64 page_bytes_in_use = 0;
+    {
+      const auto leaf_size = this->tree_options_.leaf_size();
+      const auto filter_size = this->tree_options_.filter_page_size();
+
+      for (const llfs::PageDeviceEntry* entry : cache.all_devices()) {
+        if (!entry->can_alloc || !entry->arena.has_allocator()) {
+          continue;
+        }
+        page_bytes_in_use += entry->arena.allocator().in_use_bytes();
+        if (entry->arena.allocator().page_size() == leaf_size) {
+          page_bytes_in_use += entry->arena.allocator().in_use_count() * filter_size;
+        }
+      }
+    }
+    const u64 on_disk_footprint = page_bytes_in_use + change_log_file.size();
+
     double page_reads_per_get_4k = page_reads_per_get[12];
     double page_reads_per_get_8k = page_reads_per_get[13];
     double page_reads_per_get_16k = page_reads_per_get[14];
@@ -1415,7 +1432,7 @@ std::function<void(std::ostream&)> KVStore::debug_info() noexcept
         << BATT_INSPECT(sharded_level_scanner.full_page_attempts) << "\n"              //
         << BATT_INSPECT(sharded_level_scanner.full_page_success) << "\n"               //
         << "\n"                                                                        //
-        << dump_memory_stats() << "\n"                                                 //
+        << BATT_INSPECT(on_disk_footprint) << "\n"                                     //
         ;
   };
 }
