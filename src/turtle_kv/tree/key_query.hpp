@@ -157,16 +157,20 @@ struct KeyQuery {
       return BoolStatus::kUnknown;
     }
 
+    llfs::PageLayoutId filter_layout;
+
+#if TURTLE_KV_USE_BLOOM_FILTER
+    filter_layout = llfs::PackedBloomFilterPage::page_layout_id();
+#elif TURTLE_KV_USE_QUOTIENT_FILTER
+    filter_layout = VqfFilterPageView::page_layout_id();
+#else
+#error No filter type enabled!
+#endif
+
     StatusOr<llfs::PinnedPage> filter_pinned_page = this->page_loader->load_page(  //
         *filter_page_id,
         llfs::PageLoadOptions{
-#if TURTLE_KV_USE_BLOOM_FILTER
-            llfs::PackedBloomFilterPage::page_layout_id(),
-
-#endif
-#if TURTLE_KV_USE_QUOTIENT_FILTER
-            VqfFilterPageView::page_layout_id(),
-#endif
+            filter_layout,
             llfs::PinPageToJob::kDefault,
             llfs::OkIfNotFound{true},
             llfs::LruPriority{kFilterLruPriority},
@@ -181,29 +185,26 @@ struct KeyQuery {
 
     llfs::PinnedPage& pinned_filter_page = *filter_pinned_page;
     const llfs::PageView& page_view = *pinned_filter_page;
-    const auto& filter_page_view =
-#if TURTLE_KV_USE_BLOOM_FILTER
-        static_cast<const llfs::BloomFilterPageView&>(page_view)
-#endif
-#if TURTLE_KV_USE_QUOTIENT_FILTER
-            static_cast<const VqfFilterPageView&>(page_view)
-#endif
-        ;
 
 #if TURTLE_KV_USE_BLOOM_FILTER
+    //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+    //
+    const auto& bloom_filter_page = llfs::PackedBloomFilterPage::view_of(page_view);
+    bloom_filter_page.check_magic();
+
     //+++++++++++-+-+--+----- --- -- -  -  -   -
     // PARAOID CHECK - TODO [tastolfi 2025-04-04] remove once debugged.
     //
     if (false) {
-      filter_page_view.check_integrity();
+      bloom_filter_page.check_integrity();
     }
     //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-    // If we loaded the filter page, but it says it is for a different (src or leaf) page, we can't
-    // reject.
+    // If we loaded the filter page, but it says it is for a different (src or leaf) page, we
+    // can't reject.
     //
-    if (filter_page_view.src_page_id() != page_id_to_reject) {
-      LOG_FIRST_N(INFO, 10) << BATT_INSPECT(filter_page_view.src_page_id())
+    if (bloom_filter_page.src_page_id.unpack() != page_id_to_reject) {
+      LOG_FIRST_N(INFO, 10) << BATT_INSPECT(bloom_filter_page.src_page_id)
                             << BATT_INSPECT(page_id_to_reject);
       Self::metrics().page_id_mismatch_count.add(1);
       return BoolStatus::kUnknown;
@@ -214,13 +215,27 @@ struct KeyQuery {
     const bool reject = BATT_COLLECT_LATENCY_SAMPLE(
         Every2ToTheConst<16>{},
         Self::metrics().filter_lookup_latency,
-        (filter_page_view.bloom_filter().query(this->bloom_filter_query) == false));
-#endif
-#if TURTLE_KV_USE_QUOTIENT_FILTER
+        (bloom_filter_page.bloom_filter.query(this->bloom_filter_query) == false));
+
+#elif TURTLE_KV_USE_QUOTIENT_FILTER
+    //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+    //
+    const auto& vqf_filter_page = PackedVqfFilter::view_of(page_view);
+    vqf_filter_page.check_magic();
+
+    if (vqf_filter_page.src_page_id.unpack() != page_id_to_reject) {
+      LOG_FIRST_N(INFO, 10) << BATT_INSPECT(vqf_filter_page.src_page_id)
+                            << BATT_INSPECT(page_id_to_reject);
+      Self::metrics().page_id_mismatch_count.add(1);
+      return BoolStatus::kUnknown;
+    }
+
     const bool reject =
         TURTLE_KV_COLLECT_LATENCY_SAMPLE(Every2ToTheConst<16>{},
                                          Self::metrics().filter_lookup_latency,
-                                         (filter_page_view.is_present(this->hash_val) == false));
+                                         (vqf_filter_page.is_present(this->hash_val) == false));
+#else
+#error No filter type enabled!
 #endif
 
     if (reject) {

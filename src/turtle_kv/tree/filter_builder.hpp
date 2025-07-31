@@ -92,9 +92,10 @@ struct FilterPageAlloc {
         std::make_shared<ViewT>(batt::make_copy(this->filter_buffer),
                                 BATT_FORWARD(extra_args)...)));
 
-    this->page_cache_.async_write_filter_page(this->pinned_filter_page,
-                                              [](batt::Status /*ignored_for_now*/) mutable {
-                                              });
+    this->page_cache_.async_write_filter_page(
+        this->pinned_filter_page,
+        [keep_page_pinned = this->pinned_filter_page](batt::Status /*ignored_for_now*/) mutable {
+        });
 
     return OkStatus();
   }
@@ -127,6 +128,7 @@ Status build_bloom_filter_for_leaf(llfs::PageCache& page_cache,
                                                       filter_bits_per_key,
                                                       /*opt_hash_count=*/None,
                                                       leaf_page_id,
+                                                      llfs::ComputeChecksum{false},
                                                       alloc.filter_buffer));
 
   timer.stop();
@@ -172,19 +174,19 @@ template <int TAG_BITS, typename ItemsT>
 inline Status build_vqf_filter(const MutableBuffer& filter_buffer,
                                const ItemsT& items,
                                u64 nslots,
+                               llfs::PageId leaf_page_id,
                                usize hash_val_shift = 0)
 {
   auto& metrics = QuotientFilterMetrics::instance();
 
   LatencyTimer timer{Every2ToTheConst<8>{}, metrics.build_page_latency};
 
-  auto* const packed_filter_header = static_cast<PackedVqfFilter*>(filter_buffer.data());
-  vqf_filter<TAG_BITS>* packed_filter = packed_filter_header->get_impl<TAG_BITS>();
   const u64 mask = ~u64{0} << hash_val_shift;
 
-  packed_filter_header->hash_seed = kVqfHashSeed;
-  packed_filter_header->hash_mask = mask;
+  auto* const packed_filter_header = static_cast<PackedVqfFilter*>(filter_buffer.data());
+  packed_filter_header->initialize(leaf_page_id, mask);
 
+  vqf_filter<TAG_BITS>* packed_filter = packed_filter_header->get_impl<TAG_BITS>();
   vqf_init_in_place(packed_filter, nslots);
 
   const u64 actual_size = vqf_filter_size(packed_filter);
@@ -263,11 +265,11 @@ Status build_quotient_filter_for_leaf(llfs::PageCache& page_cache,
 
   if (load_factor_16bit <= kMaxQuotientFilterLoadFactor && n_slots_16bit <= max_slots_16bit) {
     filter_size = vqf_required_size<16>(n_slots_16bit);
-    BATT_REQUIRE_OK(build_vqf_filter<16>(filter_buffer, items, n_slots_16bit));
+    BATT_REQUIRE_OK(build_vqf_filter<16>(filter_buffer, items, n_slots_16bit, leaf_page_id));
 
   } else if (n_slots_8bit <= max_slots_8bit) {
     filter_size = vqf_required_size<8>(n_slots_8bit);
-    BATT_REQUIRE_OK(build_vqf_filter<8>(filter_buffer, items, n_slots_8bit));
+    BATT_REQUIRE_OK(build_vqf_filter<8>(filter_buffer, items, n_slots_8bit, leaf_page_id));
 
   } else {
     BATT_CHECK_GT(max_slots_8bit, max_slots_16bit);
@@ -280,7 +282,8 @@ Status build_quotient_filter_for_leaf(llfs::PageCache& page_cache,
                              << BATT_INSPECT(hash_val_shift);
 
     filter_size = vqf_required_size<8>(max_slots_8bit);
-    BATT_REQUIRE_OK(build_vqf_filter<8>(filter_buffer, items, max_slots_8bit, hash_val_shift));
+    BATT_REQUIRE_OK(
+        build_vqf_filter<8>(filter_buffer, items, max_slots_8bit, leaf_page_id, hash_val_shift));
   }
   BATT_CHECK_NE(filter_size, 0);
 

@@ -2,7 +2,11 @@
 
 #include <turtle_kv/core/key_view.hpp>
 
+#include <turtle_kv/util/page_buffers.hpp>
+
+#include <turtle_kv/import/buffer.hpp>
 #include <turtle_kv/import/int_types.hpp>
+#include <turtle_kv/import/status.hpp>
 
 #include <llfs/page_cache.hpp>
 #include <llfs/page_reader.hpp>
@@ -57,11 +61,42 @@ inline double vqf_filter_load_factor(usize bits_per_key_int)
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 //
 struct PackedVqfFilter {
+  using Self = PackedVqfFilter;
+
+  static constexpr u64 kMagic = 0x16015305e0f43a7dull;
+
+  template <typename T>
+  static const PackedVqfFilter& view_of(T&& t) noexcept
+  {
+    const ConstBuffer buffer = get_page_const_payload(t);
+    BATT_CHECK_GE(buffer.size(), sizeof(PackedVqfFilter));
+
+    return *static_cast<const PackedVqfFilter*>(buffer.data());
+  }
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  little_u64 magic;
+  llfs::PackedPageId src_page_id;
   little_u64 hash_seed;
   little_u64 hash_mask;
   vqf_metadata metadata;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  void initialize(llfs::PageId src_page_id, u64 mask) noexcept
+  {
+    std::memset(this, 0, sizeof(PackedVqfFilter));
+    this->magic = Self::kMagic;
+    this->hash_seed = kVqfHashSeed;
+    this->hash_mask = mask;
+    this->src_page_id = llfs::PackedPageId::from(src_page_id);
+  }
+
+  void check_magic() const noexcept
+  {
+    BATT_CHECK_EQ(this->magic, Self::kMagic);
+  }
 
   template <int TAG_BITS>
   vqf_filter<TAG_BITS>* get_impl()
@@ -74,10 +109,23 @@ struct PackedVqfFilter {
   {
     return reinterpret_cast<const vqf_filter<TAG_BITS>*>(std::addressof(this->metadata));
   }
+
+  bool is_present(u64 hash_val) const
+  {
+    if ((hash_val & this->hash_mask.value()) != hash_val) {
+      return true;
+    }
+
+    if (this->metadata.key_remainder_bits == 8) {
+      return vqf_is_present(this->get_impl<8>(), hash_val);
+    }
+
+    BATT_CHECK_EQ(this->metadata.key_remainder_bits, 16);
+    return vqf_is_present(this->get_impl<16>(), hash_val);
+  }
 };
 
-BATT_STATIC_ASSERT_EQ(sizeof(PackedVqfFilter),
-                      sizeof(little_u64) + sizeof(little_u64) + sizeof(vqf_metadata));
+BATT_STATIC_ASSERT_EQ(sizeof(PackedVqfFilter), 32 + sizeof(vqf_metadata));
 
 BATT_STATIC_ASSERT_EQ(offsetof(vqf_filter<8>, metadata), 0);
 BATT_STATIC_ASSERT_EQ(offsetof(vqf_filter<16>, metadata), 0);
@@ -160,16 +208,7 @@ class VqfFilterPageView : public llfs::PageView
 
   bool is_present(u64 hash_val) const
   {
-    if ((hash_val & this->packed_filter_->hash_mask.value()) != hash_val) {
-      return true;
-    }
-
-    if (this->packed_filter_->metadata.key_remainder_bits == 8) {
-      return vqf_is_present(this->packed_filter_->get_impl<8>(), hash_val);
-    } else {
-      BATT_CHECK_EQ(this->packed_filter_->metadata.key_remainder_bits, 16);
-      return vqf_is_present(this->packed_filter_->get_impl<16>(), hash_val);
-    }
+    return this->packed_filter_->is_present(hash_val);
   }
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
