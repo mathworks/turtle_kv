@@ -15,7 +15,8 @@ namespace turtle_kv {
 
 struct PageFileSpec {
   std::filesystem::path filename;
-  llfs::PageCount page_count;
+  llfs::PageCount initial_page_count;
+  Optional<llfs::PageCount> max_page_count = None;
   llfs::PageSize page_size;
 };
 
@@ -27,7 +28,7 @@ Status create_page_file(llfs::StorageContext& storage_context,                  
 
 inline Status create_page_file(llfs::StorageContext& storage_context,                   //
                                const std::filesystem::path& filename,                   //
-                               llfs::PageCount page_count,                              //
+                               llfs::PageCount max_page_count,                          //
                                llfs::PageSize page_size,                                //
                                RemoveExisting remove_existing = RemoveExisting{false},  //
                                Optional<llfs::page_device_id_int> device_id = None      //
@@ -36,7 +37,8 @@ inline Status create_page_file(llfs::StorageContext& storage_context,           
   return create_page_file(storage_context,  //
                           PageFileSpec{
                               .filename = filename,
-                              .page_count = page_count,
+                              .initial_page_count = llfs::PageCount{0},
+                              .max_page_count = max_page_count,
                               .page_size = page_size,
                           },                //
                           remove_existing,  //

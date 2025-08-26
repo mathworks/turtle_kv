@@ -5,6 +5,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "data_root.test.hpp"
+
 #include <turtle_kv/core/testing/generate.hpp>
 #include <turtle_kv/testing/workload.test.hpp>
 
@@ -41,12 +43,15 @@ using turtle_kv::testing::SequentialStringGenerator;
 //
 TEST(KVStoreTest, CreateAndOpen)
 {
+  batt::StatusOr<std::filesystem::path> root = turtle_kv::data_root();
+  ASSERT_TRUE(root.ok());
+
+  std::filesystem::path test_kv_store_dir = *root / "turtle_kv_Test/kv_scan_stress";
+
   std::thread test_thread{[&] {
     BATT_CHECK_OK(batt::pin_thread_to_cpu(0));
 
     for (bool size_tiered : {false, true}) {
-      std::filesystem::path test_kv_store_dir = "/mnt/kv-bakeoff/turtle_kv_Test/kv_store";
-
       KVStore::Config kv_store_config;
 
       kv_store_config.initial_capacity_bytes = 512 * kMiB;
@@ -88,7 +93,8 @@ TEST(KVStoreTest, CreateAndOpen)
 
           {
             auto p_storage_context =
-                llfs::StorageContext::make_shared(batt::Runtime::instance().default_scheduler(),  //
+                llfs::StorageContext::make_shared(batt::Runtime::instance().default_scheduler(),
+                                                  //
                                                   scoped_io_ring->get_io_ring());
 
             Status create_status = KVStore::create(*p_storage_context,  //
@@ -172,6 +178,11 @@ TEST(KVStoreTest, StdMapWorkloadTest)
 //
 TEST(KVStoreTest, ScanStressTest)
 {
+  batt::StatusOr<std::filesystem::path> root = turtle_kv::data_root();
+  ASSERT_TRUE(root.ok());
+
+  std::filesystem::path test_kv_store_dir = *root / "turtle_kv_Test/kv_scan_stress";
+
   const usize kNumKeys = 1 * 1000 * 1000;
   const double kNumScansPerKey = 0.15;
   const usize kMinScanLenLog2 = 1;
@@ -184,11 +195,9 @@ TEST(KVStoreTest, ScanStressTest)
 
   StdMapTable expected_table;
 
-  std::filesystem::path test_kv_store_dir = "/mnt/kv-bakeoff/turtle_kv_Test/kv_scan_stress";
-
   KVStore::Config kv_store_config;
 
-  kv_store_config.initial_capacity_bytes = 512 * kMiB;
+  kv_store_config.initial_capacity_bytes = 0 * kMiB;
   kv_store_config.change_log_size_bytes = 512 * kMiB * 10;
 
   TreeOptions& tree_options = kv_store_config.tree_options;
