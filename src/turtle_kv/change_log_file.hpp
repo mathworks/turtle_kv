@@ -74,6 +74,10 @@ class ChangeLogFile
     }
   };
 
+  // The flag O_DIRECT is set to true when reading some files. In order for the
+  // O_DIRECT flag to work on all filesystems, PackedConfig (the file we're reading) needs to have
+  // its starting address be aligned with 4096.
+  //
   struct alignas(llfs::kDirectIOBlockAlign) PackedConfig {
     static constexpr u64 kMagic = 0x53ee6863bf7a1254ull;
 

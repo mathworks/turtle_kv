@@ -45,7 +45,7 @@ set(CMAKE_LINKER_FLAGS_DEBUG "${CMAKE_LINKER_FLAGS_DEBUG} -fno-omit-frame-pointe
 
 set(CMAKE_CXX_FLAGS_RELEASE  "-O3 -DNDEBUG -march=native")
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-omit-frame-pointer -march=native -mbmi2 -mavx2 -msse2 -msse4.2")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-omit-frame-pointer -march=native -mbmi2 -mavx2 -msse2 -msse4.2 -Wno-address-of-packed-member")
 set(CMAKE_LINKER_FLAGS "${CMAKE_LINKER_FLAGS} -fno-omit-frame-pointer")
 
 add_subdirectory(src)

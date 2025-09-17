@@ -39,9 +39,14 @@ void rm_rf(std::filesystem::path p) noexcept
 //
 TEST(CheckpointLogTest, CreateOpen)
 {
-  auto filename = turtle_kv::data_root() / "checkpoint_log.llfs";
+  batt::StatusOr<std::filesystem::path> root = turtle_kv::data_root();
+  ASSERT_TRUE(root.ok());
 
-  mkdir_p(filename.parent_path());
+  std::filesystem::path test_dir = *root / "checkpoint_log_test/create_open";
+
+  std::filesystem::path filename = test_dir / "checkpoint_log.llfs";
+
+  mkdir_p(test_dir);
   rm_rf(filename);
 
   llfs::ScopedIoRing scoped_io_ring = BATT_OK_RESULT_OR_PANIC(
@@ -78,6 +83,11 @@ TEST(CheckpointLogTest, CreateOpen)
 //
 TEST(CheckpointLogTest, CreatePageFiles)
 {
+  batt::StatusOr<std::filesystem::path> root = turtle_kv::data_root();
+  ASSERT_TRUE(root.ok());
+
+  std::filesystem::path test_dir = *root / "checkpoint_log_test/create_page_files";
+
   llfs::ScopedIoRing scoped_io_ring = BATT_OK_RESULT_OR_PANIC(
       llfs::ScopedIoRing::make_new(llfs::MaxQueueDepth{64}, llfs::ThreadPoolSize{1}));
 
@@ -85,18 +95,18 @@ TEST(CheckpointLogTest, CreatePageFiles)
 
   for (auto spec : {
            PageFileSpec{
-               .filename = turtle_kv::data_root() / "pages_4k.llfs",
-               .page_count = llfs::PageCount{100},
+               .filename = test_dir / "pages_4k.llfs",
+               .initial_page_count = llfs::PageCount{100},
                .page_size = llfs::PageSize{4096},
            },
            PageFileSpec{
-               .filename = turtle_kv::data_root() / "pages_32k.llfs",
-               .page_count = llfs::PageCount{50},
+               .filename = test_dir / "pages_32k.llfs",
+               .initial_page_count = llfs::PageCount{50},
                .page_size = llfs::PageSize{32768},
            },
            PageFileSpec{
-               .filename = turtle_kv::data_root() / "pages_2mb.llfs",
-               .page_count = llfs::PageCount{40},
+               .filename = test_dir / "pages_2mb.llfs",
+               .initial_page_count = llfs::PageCount{40},
                .page_size = llfs::PageSize{2 * 1024 * 1024},
            },
        }) {
@@ -126,7 +136,7 @@ TEST(CheckpointLogTest, CreatePageFiles)
       }
     }
 
-    EXPECT_GT(std::filesystem::file_size(spec.filename), spec.page_count * spec.page_size);
+    EXPECT_GT(std::filesystem::file_size(spec.filename), spec.initial_page_count * spec.page_size);
   }
 }
 

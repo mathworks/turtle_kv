@@ -1,5 +1,9 @@
 #pragma once
 
+#if __cplusplus < 202002L
+#error "This code requires at least C++20. Please compile with -std=c++20 or higher."
+#endif
+
 #include <turtle_kv/import/int_types.hpp>
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------

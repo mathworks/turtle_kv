@@ -44,6 +44,7 @@ class KVStore : public Table
   struct Config {
     TreeOptions tree_options = TreeOptions::with_default_values();
     u64 initial_capacity_bytes = 0;
+    u64 max_capacity_bytes = 4 * kTB;
     u64 change_log_size_bytes = 0;
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -

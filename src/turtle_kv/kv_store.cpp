@@ -186,29 +186,45 @@ u64 query_page_loader_reset_every_n()
     const llfs::PageCount leaf_count{kv_store_config.initial_capacity_bytes /
                                      tree_options.leaf_size()};
 
+    const llfs::PageCount max_leaf_count{kv_store_config.max_capacity_bytes /
+                                         tree_options.leaf_size()};
+
     const llfs::PageCount node_count{leaf_count / 2};
+
+    const llfs::PageCount max_node_count{max_leaf_count / 2};
 
     const llfs::PageCount filter_count{leaf_count};
 
-    BATT_REQUIRE_OK(create_page_file(storage_context,                   //
-                                     dir_path / leaf_page_file_name(),  //
-                                     leaf_count,                        //
-                                     tree_options.leaf_size(),          //
-                                     RemoveExisting{false},             //
+    const llfs::PageCount max_filter_count{max_leaf_count};
+
+    BATT_REQUIRE_OK(create_page_file(storage_context,
+                                     PageFileSpec{
+                                         .filename = dir_path / leaf_page_file_name(),
+                                         .initial_page_count = leaf_count,
+                                         .max_page_count = max_leaf_count,
+                                         .page_size = tree_options.leaf_size(),
+                                     },
+                                     RemoveExisting{false},
                                      /*device_id=*/0));
 
-    BATT_REQUIRE_OK(create_page_file(storage_context,                   //
-                                     dir_path / node_page_file_name(),  //
-                                     node_count,                        //
-                                     tree_options.node_size(),          //
-                                     RemoveExisting{false},             //
+    BATT_REQUIRE_OK(create_page_file(storage_context,
+                                     PageFileSpec{
+                                         .filename = dir_path / node_page_file_name(),
+                                         .initial_page_count = node_count,
+                                         .max_page_count = max_node_count,
+                                         .page_size = tree_options.node_size(),
+                                     },
+                                     RemoveExisting{false},
                                      /*device_id=*/1));
 
-    BATT_REQUIRE_OK(create_page_file(storage_context,                     //
-                                     dir_path / filter_page_file_name(),  //
-                                     filter_count,                        //
-                                     tree_options.filter_page_size(),     //
-                                     RemoveExisting{false},               //
+    BATT_REQUIRE_OK(create_page_file(storage_context,
+                                     PageFileSpec{
+                                         .filename = dir_path / filter_page_file_name(),
+                                         .initial_page_count = filter_count,
+                                         .max_page_count = max_filter_count,
+                                         .page_size = tree_options.filter_page_size(),
+                                     },
+                                     RemoveExisting{false},
                                      /*device_id=*/2));
   }
 
