@@ -44,7 +44,7 @@ System (LLFS)](https://github.com/mathworks/llfs/) library.
 
 ## Getting Started
 
-***The build instructions are currently broken, see [issues/1](issues/1) for updates***
+***The build instructions are currently broken, see Issue #1 for updates***
 
 **Note: TurtleKV is currently only supported on x86_64 architecture, on the GNU/Linux operating system.**
 
