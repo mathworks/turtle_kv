@@ -25,12 +25,12 @@ _optimized writes in the past increase the cost of future reads for
 the lifetime of stored data_.
 
 TurtleKV is different.  Instead of using a write- or read-optimized
-on-disk structure, TurtleKV uses a balanced data structure, the Turtle
-Tree.  Turtle Trees can be read or write optimized by allocating
+on-disk structure, TurtleKV uses a balanced data structure, the
+TurtleTree.  TurtleTrees can be read or write optimized by allocating
 memory to either page caching (reads) or update/checkpoint buffering
 (writes) without changing their durable structure.  This means
 applications can pay to optimize the most important operations
-_dynamically_, without locking in future costs.
+dynamically_, without locking in future costs.
 
 Today, TurtleKV offers excellent performance relative to other
 state-of-the-art key-value stores.  Because its tuning optimization
@@ -44,6 +44,8 @@ system](https://conan.io/), and is built on MathWorks' [Low Level File
 System (LLFS)](https://github.com/mathworks/llfs/) library.
 
 ## Getting Started
+
+***The build instructions are currently broken, see #1 for updates***
 
 **Note: TurtleKV is currently only supported on x86_64 architecture, on the GNU/Linux operating system.**
 
@@ -95,7 +97,7 @@ int main()
   //
   KVStore& kv = **opened_kv_store;
 
-  BATT_CHECK_OK(kv.put("hello"), ValueView::from_str("world"));
+  BATT_CHECK_OK(kv.put("hello", ValueView::from_str("world"));
 
   StatusOr<ValueView> value = kv.get("hello");
   BATT_CHECK_OK(value);
