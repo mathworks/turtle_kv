@@ -9,7 +9,7 @@ class TurtleKvRecipe(ConanFile):
     python_requires_extend = "cor_recipe_utils.ConanFileBase"
 
     tool_requires = [
-        "cmake/[>=3.20.0]",
+        "cmake/[>=3.20.0 <4]",
         "ninja/1.12.1",
     ]
 
@@ -37,41 +37,43 @@ class TurtleKvRecipe(ConanFile):
     #+++++++++++-+-+--+----- --- -- -  -  -   -
     # Optional metadata
     #
-    license = "TODO"
+    license = "Apache 2.0"
 
-    author = "TODO"
+    author = "MathWorks"
 
-    url = "TODO"
+    url = "https://github.com/mathworks/turtle_kv"
 
-    description = "TODO"
+    description = (
+        "A high-performance embedded key-value database supporting dynamic "
+        "memory-based performance tuning"
+    )
 
-    topics = ("TODO",)
+    topics = ("database", "mathworks", "key-value")
     #
     #+++++++++++-+-+--+----- --- -- -  -  -   -
 
     def requirements(self):
         VISIBLE = self.cor.VISIBLE
-        OVERRIDE = self.cor.OVERRIDE
+        OVERRIDE = {
+            "force": True,
+        }
 
-        self.requires("abseil/[>=20250127.0]", **VISIBLE, **OVERRIDE)
-        #self.requires("batteries/[>=0.59.0 <1]", **VISIBLE, **OVERRIDE)
-        self.requires("batteries/0.59.3-devel", **VISIBLE)
-        self.requires("boost/[>=1.85.0 <2]", **VISIBLE, **OVERRIDE)
-        self.requires("glog/[>=0.7.0 <1]", **VISIBLE)
-        self.requires("gperftools/[>=2.16 <3]", **VISIBLE)
-        #self.requires("jemalloc/5.3.0", **VISIBLE, **OVERRIDE)
-        #self.requires("llfs/[>=0.41.18 <1]", **VISIBLE)
-        self.requires("llfs/0.41.20.dev22", **VISIBLE)
-        self.requires("pcg-cpp/[>=cci.20220409]", **VISIBLE)
-        self.requires("vqf/[>=0.2.4 <1]", **VISIBLE)
-        self.requires("zlib/[>=1.3 <2]", **OVERRIDE)
+        self.requires("abseil/20250127.0", **VISIBLE, **OVERRIDE)
+        self.requires("batteries/0.60.2", **VISIBLE, **OVERRIDE)
+        self.requires("boost/1.88.0", **VISIBLE, **OVERRIDE)
+        self.requires("glog/0.7.1", **VISIBLE)
+        self.requires("gperftools/2.16", **VISIBLE)
+        self.requires("llfs/0.42.1-devel", **VISIBLE)
+        self.requires("pcg-cpp/cci.20220409", **VISIBLE)
+        self.requires("vqf/0.2.4", **VISIBLE)
+        self.requires("zlib/1.3.1", **OVERRIDE)
 
         if platform.system() == "Linux":
-            self.requires("libfuse/[>=3.16.2 <4]", **VISIBLE)
-            self.requires("libunwind/[>=1.8.0 <2]", **VISIBLE, **OVERRIDE)
-            self.requires("liburing/[>=2.4 <3]", **VISIBLE)
+            self.requires("libfuse/3.16.2", **VISIBLE)
+            self.requires("libunwind/1.8.1", **VISIBLE, **OVERRIDE)
+            self.requires("liburing/2.11", **VISIBLE)
 
-        self.test_requires("gtest/[>=1.14.0 <2]")
+        self.test_requires("gtest/1.16.0")
 
     def configure(self):
         self.options["gtest"].shared = False
