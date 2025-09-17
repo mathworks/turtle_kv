@@ -1,10 +1,9 @@
 # TurtleKV: High Performance, Dynamically Tuned Key-Value Storage
 
-[Link to Paper: "Dynamic read &amp; write optimization with TurtleKV"](https://arxiv.org/abs/2509.10714)
-
-TurtleKV is a general-purpose, embedded key-value storage engine
-designed with the goal of being the best choice for the widest
-possible range of applications and workloads.
+[TurtleKV](https://arxiv.org/abs/2509.10714) is a general-purpose,
+embedded key-value storage engine designed with the goal of being the
+best choice for the widest possible range of applications and
+workloads.
 
 Key-Value storage offers an extremely general and powerful interface
 for durably stored data: the dictionary.  Ideally, one would like to
