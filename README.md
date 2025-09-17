@@ -111,7 +111,7 @@ int main()
 }
 ```
 
-## Limitations / Caveats
+## Limitations
 
 TurtleKV is a work-in-progress.  It should currently be considered a
 research prototype developed to demonstrate proof-of-concept for
