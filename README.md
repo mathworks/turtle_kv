@@ -134,6 +134,7 @@ the software suitable for production use will begin with version
 We currently support:
 
 - Creating/opening an empty K/V store at runtime
+- Multiple independent K/V stores open at from the same process
 - Concurrent get/put/scan from multiple application threads
 - Dynamic control of page cache size and checkpoint distance (to tune
   overall memory usage and control how much of the memory budget is
@@ -152,3 +153,7 @@ Currently missing/under development:
   *are* currently supported)
 - Saving/loading full point-in-time snapshots
 - `fsync` like blocking call to ensure updates are durable (in the WAL)
+
+Limitations (out-of-scope):
+
+- A K/V store may only be opened by one process at a time
