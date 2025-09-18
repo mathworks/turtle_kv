@@ -194,11 +194,6 @@ class VqfFilterPageView : public llfs::PageView
     return batt::None;
   }
 
-  std::shared_ptr<llfs::PageFilter> build_filter() const override
-  {
-    return std::make_shared<llfs::NullPageFilter>(this->page_id());
-  }
-
   void dump_to_ostream(std::ostream& out) const override
   {
     out << "VqfFilter";

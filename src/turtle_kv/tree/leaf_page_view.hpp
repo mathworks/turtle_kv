@@ -10,7 +10,6 @@
 
 #include <llfs/page_buffer.hpp>
 #include <llfs/page_cache.hpp>
-#include <llfs/page_filter.hpp>
 #include <llfs/page_layout_id.hpp>
 #include <llfs/page_reader.hpp>
 #include <llfs/page_view.hpp>
@@ -56,11 +55,6 @@ class LeafPageView : public llfs::PageView
   Optional<KeyView> min_key() const override;
 
   Optional<KeyView> max_key() const override;
-
-  std::shared_ptr<llfs::PageFilter> build_filter() const override
-  {
-    return std::make_shared<llfs::NullPageFilter>(this->page_id());
-  }
 
   void dump_to_ostream(std::ostream& out) const override
   {

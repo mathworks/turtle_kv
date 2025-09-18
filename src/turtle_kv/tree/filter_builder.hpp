@@ -1,11 +1,13 @@
 #pragma once
 
 #include <turtle_kv/config.hpp>
+//
 
 #include <turtle_kv/tree/tree_options.hpp>
 
 #include <turtle_kv/util/pipeline_channel.hpp>
 
+#include <turtle_kv/filter_config.hpp>
 #include <turtle_kv/vqf_filter_page_view.hpp>
 
 #include <turtle_kv/import/buffer.hpp>
@@ -14,7 +16,6 @@
 #include <turtle_kv/import/status.hpp>
 
 #include <llfs/bloom_filter.hpp>
-#include <llfs/bloom_filter_page.hpp>
 #include <llfs/bloom_filter_page_view.hpp>
 #include <llfs/packed_bloom_filter_page.hpp>
 #include <llfs/packed_page_id.hpp>
@@ -73,7 +74,8 @@ struct FilterPageAlloc {
     this->status = [&]() -> Status {
       BATT_ASSIGN_OK_RESULT(
           this->pinned_filter_page,
-          page_cache.allocate_filter_page_for(leaf_page_id,
+          page_cache.allocate_paired_page_for(leaf_page_id,
+                                              kPairedFilterForLeaf,
                                               llfs::LruPriority{kNewFilterLruPriority}));
 
       this->filter_page_id = this->pinned_filter_page.page_id();
@@ -92,8 +94,9 @@ struct FilterPageAlloc {
         std::make_shared<ViewT>(batt::make_copy(this->filter_buffer),
                                 BATT_FORWARD(extra_args)...)));
 
-    this->page_cache_.async_write_filter_page(
+    this->page_cache_.async_write_paired_page(
         this->pinned_filter_page,
+        kPairedFilterForLeaf,
         [keep_page_pinned = this->pinned_filter_page](batt::Status /*ignored_for_now*/) mutable {
         });
 

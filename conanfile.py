@@ -5,13 +5,8 @@ import os, sys, platform
 class TurtleKvRecipe(ConanFile):
     name = "turtle_kv"
 
-    python_requires = "cor_recipe_utils/0.10.0"
+    python_requires = "cor_recipe_utils/0.12.1"
     python_requires_extend = "cor_recipe_utils.ConanFileBase"
-
-    tool_requires = [
-        "cmake/[>=3.20.0 <4]",
-        "ninja/1.12.1",
-    ]
 
     settings = "os", "compiler", "build_type", "arch"
 
@@ -73,7 +68,10 @@ class TurtleKvRecipe(ConanFile):
             self.requires("libunwind/1.8.1", **VISIBLE, **OVERRIDE)
             self.requires("liburing/2.11", **VISIBLE)
 
-        self.test_requires("gtest/1.16.0")
+    def build_requirements(self):
+        self.tool_requires("cmake/[>=3.20.0 <4]")
+        self.tool_requires("ninja/[>=1.10.2 <2]")
+        self.test_requires("gtest/[>=1.16.0 <2]")
 
     def configure(self):
         self.options["gtest"].shared = False

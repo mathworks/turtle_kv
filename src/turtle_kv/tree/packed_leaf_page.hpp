@@ -715,16 +715,12 @@ inline PackedLeafPage* build_leaf_page(MutableBuffer buffer,
 
       llfs::BPTrie in_memory_trie{pivot_keys};
 
-      const usize packed_trie_size = in_memory_trie.packed_size(/*verbose=*/false);
+      const usize packed_trie_size = in_memory_trie.packed_size();
       llfs::DataPacker packer{MutableBuffer{trie_buffer.data(), trie_buffer.size()}};
 
       BATT_DEBUG_INFO(BATT_INSPECT(packed_trie_size)
                       << BATT_INSPECT(trie_buffer.size()) << BATT_INSPECT(pivot_keys.size())
-                      << BATT_INSPECT(step_size) << BATT_INSPECT(in_memory_trie.size())
-                      << BATT_INSPECT(in_memory_trie.node_count()) << [&](std::ostream& out) {
-                           out << std::endl;
-                           (void)in_memory_trie.packed_size(/*verbose=*/true);
-                         });
+                      << BATT_INSPECT(step_size) << BATT_INSPECT(in_memory_trie.size()));
 
       const llfs::PackedBPTrie* packed_trie = (packed_trie_size > trie_buffer.size())
                                                   ? nullptr

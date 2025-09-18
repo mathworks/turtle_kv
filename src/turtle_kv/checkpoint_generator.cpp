@@ -114,9 +114,6 @@ StatusOr<usize> CheckpointGenerator::push_batch(std::unique_ptr<DeltaBatch>&& ba
       batt::getenv_as<usize>("TURTLE_KV_SERIALIZE_EVERY_N_BATCHES").value_or(0);
 
   if (serialize_limit != 0 && (this->current_batch_count_ % serialize_limit) == 0) {
-    // const i64 pinned_before_count = this->job_->pinned_page_count();
-    // const i64 new_before_count = this->job_->new_page_count();
-
     BATT_REQUIRE_OK(this->serialize_checkpoint());
 
     const llfs::PageId root_id = batt::get_or_panic(this->base_checkpoint_.maybe_root_id());
@@ -127,9 +124,6 @@ StatusOr<usize> CheckpointGenerator::push_batch(std::unique_ptr<DeltaBatch>&& ba
 
     this->job_->delete_root(root_id);
     this->job_->unpin_all();
-
-    // const i64 pinned_after_count = this->job_->pinned_page_count();
-    // const i64 new_after_count = this->job_->new_page_count();
   }
 
   return {1u};
@@ -142,7 +136,6 @@ void CheckpointGenerator::initialize_job()
   if (this->job_ == nullptr) {
     this->job_ = this->cache_.new_job();
     this->job_->set_base_job(this->base_job_);
-    this->job_->debug_mask.set(llfs::PageCacheJob::kDebugLogCacheSlotsFull);
   }
 }
 
