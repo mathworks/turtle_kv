@@ -2,6 +2,7 @@
 
 #include <turtle_kv/config.hpp>
 
+#include <turtle_kv/filter_config.hpp>
 #include <turtle_kv/vqf_filter_page_view.hpp>
 
 #include <turtle_kv/tree/tree_options.hpp>
@@ -120,7 +121,7 @@ struct KeyQuery {
    */
   BATT_ALWAYS_INLINE Optional<llfs::PageId> filter_page_id_for(llfs::PageId page_id) const
   {
-    return this->page_cache->filter_page_id_for(page_id);
+    return this->page_cache->paired_page_id_for(page_id, kPairedFilterForLeaf);
   }
 
   /** \brief If there is a filter page available for `page_id`, prefetches that page in

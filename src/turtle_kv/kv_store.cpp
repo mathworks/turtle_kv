@@ -15,7 +15,6 @@
 #include <turtle_kv/tree/sharded_level_scanner.hpp>
 #include <turtle_kv/tree/storage_config.hpp>
 
-#include <turtle_kv/util/memory_profiler.hpp>
 #include <turtle_kv/util/memory_stats.hpp>
 
 #include <turtle_kv/import/constants.hpp>
@@ -433,7 +432,8 @@ u64 query_page_loader_reset_every_n()
     BATT_CHECK_OK(llfs::BloomFilterPageView::register_layout(this->page_cache()));
     BATT_CHECK_OK(VqfFilterPageView::register_layout(this->page_cache()));
 
-    Status status = this->page_cache().assign_filter_device(this->tree_options_.leaf_size(),
+    Status status = this->page_cache().assign_paired_device(this->tree_options_.leaf_size(),
+                                                            kPairedFilterForLeaf,
                                                             this->tree_options_.filter_page_size());
 
     if (!status.ok()) {
@@ -463,14 +463,6 @@ u64 query_page_loader_reset_every_n()
 //
 KVStore::~KVStore() noexcept
 {
-#if 0
-  {
-    HeapMetrics& heap = HeapMetrics::instance();
-    LOG(INFO) << BATT_INSPECT(heap.active_stats) << BATT_INSPECT(heap.active_count())
-              << BATT_INSPECT(heap.new_count) << BATT_INSPECT(heap.large_count);
-  }
-#endif
-
   {
     auto& merge_compactor = MergeCompactor::metrics();
     LOG(INFO) << BATT_INSPECT(merge_compactor.output_buffer_waste);
