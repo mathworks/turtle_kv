@@ -1164,288 +1164,275 @@ void KVStore::epoch_thread_main()
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-std::function<void(std::ostream&)> KVStore::debug_info() noexcept
+void KVStore::collect_stats(
+    std::function<void(std::string_view /*name*/, double /*value*/)> fn) const noexcept
+{
+  auto& kv_store = this->metrics_;
+  auto& checkpoint_log = *this->checkpoint_log_;
+  auto& cache = checkpoint_log.cache();
+  auto& change_log_file = this->log_writer_->change_log_file();
+  auto& change_log_writer = this->log_writer_->metrics();
+
+  [[maybe_unused]] auto& cache_slot_pool = llfs::PageCacheSlot::Pool::Metrics::instance();
+
+  [[maybe_unused]] auto& page_cache = cache.metrics();
+
+  [[maybe_unused]] auto& node = InMemoryNode::metrics();
+
+  [[maybe_unused]] auto& scanner = KVStoreScanner::metrics();
+
+  [[maybe_unused]] auto& sharded_level_scanner = ShardedLevelScannerMetrics::instance();
+
+  [[maybe_unused]] auto& query_page_loader = PinningPageLoader::metrics();
+
+  std::array<double, 32> page_reads_per_get, page_reads_per_scan;
+  page_reads_per_get.fill(0);
+  page_reads_per_scan.fill(0);
+
+  [[maybe_unused]] double total_get_count = kv_store.total_get_count();
+  [[maybe_unused]] double total_scan_count = kv_store.scan_count.get();
+
+  for (usize i = 12; i < 28; ++i) {
+    page_reads_per_get[i] =
+        (double)llfs::PageDeviceMetrics::instance().read_count_per_page_size_log2[i] /
+        total_get_count;
+
+    page_reads_per_scan[i] =
+        (double)llfs::PageDeviceMetrics::instance().read_count_per_page_size_log2[i] /
+        total_scan_count;
+  }
+
+  [[maybe_unused]] const auto print_page_alloc_info = [&](std::ostream& out) {
+    for (const llfs::PageDeviceEntry* entry : cache.all_devices()) {
+      if (!entry->can_alloc || !entry->arena.has_allocator()) {
+        continue;
+      }
+      out << entry->arena.allocator().debug_info() << "\n";
+    }
+  };
+
+  [[maybe_unused]] u64 page_bytes_in_use = 0;
+  {
+    const auto leaf_size = this->tree_options_.leaf_size();
+    const auto filter_size = this->tree_options_.filter_page_size();
+
+    for (const llfs::PageDeviceEntry* entry : cache.all_devices()) {
+      if (!entry->can_alloc || !entry->arena.has_allocator()) {
+        continue;
+      }
+      page_bytes_in_use += entry->arena.allocator().in_use_bytes();
+      if (entry->arena.allocator().page_size() == leaf_size) {
+        page_bytes_in_use += entry->arena.allocator().in_use_count() * filter_size;
+      }
+    }
+  }
+  [[maybe_unused]] const u64 on_disk_footprint = page_bytes_in_use + change_log_file.size();
+  [[maybe_unused]] const double space_amp =
+      (double)on_disk_footprint / (double)change_log_writer.received_user_byte_count.get();
+
+  fn("kv_store.mem_table_get.count", kv_store.mem_table_get_count.get());
+
+  fn("kv_store.delta_001_get.count", kv_store.delta_log2_get_count[0].get());
+  fn("kv_store.delta_002_get.count", kv_store.delta_log2_get_count[1].get());
+  fn("kv_store.delta_004_get.count", kv_store.delta_log2_get_count[2].get());
+  fn("kv_store.delta_008_get.count", kv_store.delta_log2_get_count[3].get());
+  fn("kv_store.delta_016_get.count", kv_store.delta_log2_get_count[4].get());
+  fn("kv_store.delta_032_get.count", kv_store.delta_log2_get_count[5].get());
+  fn("kv_store.delta_064_get.count", kv_store.delta_log2_get_count[6].get());
+  fn("kv_store.delta_128_get.count", kv_store.delta_log2_get_count[7].get());
+
+  fn("kv_store.delta_get_latency.count", kv_store.delta_get_latency.count.get());
+  fn("kv_store.delta_get_latency.seconds", kv_store.delta_get_latency.total_seconds());
+
+  fn("kv_store.checkpoint_get.count", kv_store.checkpoint_get_count.get());
+  fn("kv_store.checkpoint_get_latency.count", kv_store.checkpoint_get_latency.count.get());
+  fn("kv_store.checkpoint_get_latency.seconds", kv_store.checkpoint_get_latency.total_seconds());
+
+  //  << BATT_INSPECT(kv_store.checkpoint_pinned_pages_stats) << "\n"                //
+
+  fn("page_reads_per_get_004k", page_reads_per_get[12]);
+  fn("page_reads_per_get_008k", page_reads_per_get[13]);
+  fn("page_reads_per_get_016k", page_reads_per_get[14]);
+  fn("page_reads_per_get_032k", page_reads_per_get[15]);
+  fn("page_reads_per_get_064k", page_reads_per_get[16]);
+  fn("page_reads_per_get_128k", page_reads_per_get[17]);
+  fn("page_reads_per_get_256k", page_reads_per_get[18]);
+  fn("page_reads_per_get_512k", page_reads_per_get[19]);
+  fn("page_reads_per_get_001m", page_reads_per_get[20]);
+  fn("page_reads_per_get_002m", page_reads_per_get[21]);
+  fn("page_reads_per_get_004m", page_reads_per_get[22]);
+  fn("page_reads_per_get_008m", page_reads_per_get[23]);
+  fn("page_reads_per_get_016m", page_reads_per_get[24]);
+  fn("page_reads_per_get_032m", page_reads_per_get[25]);
+  fn("page_reads_per_get_064m", page_reads_per_get[26]);
+
+  fn("page_reads_per_scan_004k", page_reads_per_scan[12]);
+  fn("page_reads_per_scan_008k", page_reads_per_scan[13]);
+  fn("page_reads_per_scan_016k", page_reads_per_scan[14]);
+  fn("page_reads_per_scan_032k", page_reads_per_scan[15]);
+  fn("page_reads_per_scan_064k", page_reads_per_scan[16]);
+  fn("page_reads_per_scan_128k", page_reads_per_scan[17]);
+  fn("page_reads_per_scan_256k", page_reads_per_scan[18]);
+  fn("page_reads_per_scan_512k", page_reads_per_scan[19]);
+  fn("page_reads_per_scan_001m", page_reads_per_scan[20]);
+  fn("page_reads_per_scan_002m", page_reads_per_scan[21]);
+  fn("page_reads_per_scan_004m", page_reads_per_scan[22]);
+  fn("page_reads_per_scan_008m", page_reads_per_scan[23]);
+  fn("page_reads_per_scan_016m", page_reads_per_scan[24]);
+  fn("page_reads_per_scan_032m", page_reads_per_scan[25]);
+  fn("page_reads_per_scan_064m", page_reads_per_scan[26]);
+
+  fn("leaf.find_key_success.count", PackedLeafPage::metrics().find_key_success_count.get());
+  fn("leaf.find_key_failure.count", PackedLeafPage::metrics().find_key_failure_count.get());
+  fn("leaf.find_key_latency.count", PackedLeafPage::metrics().find_key_latency.count.get());
+  fn("leaf.find_key_latency.seconds", PackedLeafPage::metrics().find_key_latency.total_seconds());
+
+#if 0
+  << "\n"                                                                        //
+  << BATT_INSPECT(node.level_depth_stats) << "\n"                                //
+  << "\n"                                                                        //
+  << BATT_INSPECT(page_cache.get_count) << "\n"                                  //
+  << BATT_INSPECT(page_cache.allocate_page_alloc_latency) << "\n"                //
+  << BATT_INSPECT(page_cache.total_bytes_read) << "\n"                           //
+  << "\n"                                                                        //
+  << BATT_INSPECT(query_page_loader.prefetch_hint_latency) << "\n"               //
+  << BATT_INSPECT(query_page_loader.hash_map_lookup_latency) << "\n"             //
+  << BATT_INSPECT(query_page_loader.get_page_from_cache_latency) << "\n"         //
+  << BATT_INSPECT(query_page_loader.get_page_count) << "\n"                      //
+  << BATT_INSPECT(query_page_loader.hash_map_miss_count) << "\n"                 //
+  << "\n"                                                                        //
+  << BATT_INSPECT(kv_store.checkpoint_count) << "\n"                             //
+  << BATT_INSPECT(kv_store.batch_edits_count) << "\n"                            //
+  << BATT_INSPECT(kv_store.avg_edits_per_batch()) << "\n"                        //
+  << BATT_INSPECT(kv_store.compact_batch_latency) << "\n"                        //
+  << BATT_INSPECT(kv_store.push_batch_latency) << "\n"                           //
+  << BATT_INSPECT(kv_store.finalize_checkpoint_latency) << "\n"                  //
+  << BATT_INSPECT(kv_store.append_job_latency) << "\n"                           //
+  << "\n"                                                                        //
+  << BATT_INSPECT(PackedLeafPage::metrics().find_key_success_count) << "\n"      //
+  << BATT_INSPECT(PackedLeafPage::metrics().find_key_failure_count) << "\n"      //
+  << BATT_INSPECT(PackedLeafPage::metrics().find_key_latency) << "\n"            //
+  << "\n"                                                                        //
+  << BATT_INSPECT(kv_store.scan_init_latency) << "\n"                            //
+  << "\n"                                                                        //
+  << BATT_INSPECT(BloomFilterMetrics::instance().word_count_stats) << "\n"       //
+  << BATT_INSPECT(BloomFilterMetrics::instance().byte_size_stats) << "\n"        //
+  << BATT_INSPECT(BloomFilterMetrics::instance().bit_size_stats) << "\n"         //
+  << BATT_INSPECT(BloomFilterMetrics::instance().bit_count_stats) << "\n"        //
+  << BATT_INSPECT(BloomFilterMetrics::instance().item_count_stats) << "\n"       //
+  << BATT_INSPECT(BloomFilterMetrics::instance().build_page_latency) << "\n"     //
+  << "\n"                                                                        //
+  << BATT_INSPECT(QuotientFilterMetrics::instance().byte_size_stats) << "\n"     //
+  << BATT_INSPECT(QuotientFilterMetrics::instance().bit_size_stats) << "\n"      //
+  << BATT_INSPECT(QuotientFilterMetrics::instance().item_count_stats) << "\n"    //
+  << BATT_INSPECT(QuotientFilterMetrics::instance().bits_per_key_stats) << "\n"  //
+  << BATT_INSPECT(QuotientFilterMetrics::instance().build_page_latency) << "\n"  //
+  << "\n"                                                                        //
+  << BATT_INSPECT(KeyQuery::metrics().reject_page_latency) << "\n"               //
+  << BATT_INSPECT(KeyQuery::metrics().filter_lookup_latency) << "\n"             //
+  << BATT_INSPECT(KeyQuery::metrics().total_filter_query_count) << "\n"          //
+  << BATT_INSPECT(KeyQuery::metrics().no_filter_page_count) << "\n"              //
+  << BATT_INSPECT(KeyQuery::metrics().filter_page_load_failed_count) << "\n"     //
+  << BATT_INSPECT(KeyQuery::metrics().page_id_mismatch_count) << "\n"            //
+  << BATT_INSPECT(KeyQuery::metrics().filter_reject_count) << "\n"               //
+  << BATT_INSPECT(KeyQuery::metrics().try_pin_leaf_count) << "\n"                //
+  << BATT_INSPECT(KeyQuery::metrics().try_pin_leaf_success_count) << "\n"        //
+  << BATT_INSPECT(KeyQuery::metrics().sharded_view_find_count) << "\n"           //
+  << BATT_INSPECT(KeyQuery::metrics().sharded_view_find_success_count) << "\n"   //
+  << BATT_INSPECT(KeyQuery::metrics().filter_positive_count) << "\n"             //
+  << BATT_INSPECT(KeyQuery::metrics().filter_false_positive_count) << "\n"       //
+  << "\n"                                                                        //
+  << BATT_INSPECT(KeyQuery::metrics().filter_false_positive_rate()) << "\n"      //
+  << "\n"                                                                        //
+  << BATT_INSPECT(checkpoint_log.root_log_space()) << "\n"                       //
+  << BATT_INSPECT(checkpoint_log.root_log_size()) << "\n"                        //
+  << BATT_INSPECT(checkpoint_log.root_log_capacity()) << "\n"                    //
+  << "\n"                                                                        //
+  << BATT_INSPECT(change_log_file.active_blocks()) << "\n"                       //
+  << BATT_INSPECT(change_log_file.active_block_count()) << "\n"                  //
+  << BATT_INSPECT(change_log_file.config().block_count) << "\n"                  //
+  << BATT_INSPECT(change_log_file.capacity()) << "\n"                            //
+  << BATT_INSPECT(change_log_file.size()) << "\n"                                //
+  << BATT_INSPECT(change_log_file.space()) << "\n"                               //
+  << BATT_INSPECT(change_log_file.available_block_tokens()) << "\n"              //
+  << BATT_INSPECT(change_log_file.in_use_block_tokens()) << "\n"                 //
+  << BATT_INSPECT(change_log_file.reserved_block_tokens()) << "\n"               //
+  << BATT_INSPECT(change_log_file.metrics().freed_blocks_count) << "\n"          //
+  << BATT_INSPECT(change_log_file.metrics().reserved_blocks_count) << "\n"       //
+  << "\n"                                                                        //
+  << BATT_INSPECT(change_log_writer.received_user_byte_count) << "\n"            //
+  << BATT_INSPECT(change_log_writer.received_block_byte_count) << "\n"           //
+  << BATT_INSPECT(change_log_writer.written_user_byte_count) << "\n"             //
+  << BATT_INSPECT(change_log_writer.written_block_byte_count) << "\n"            //
+  << BATT_INSPECT(change_log_writer.sleep_count) << "\n"                         //
+  << BATT_INSPECT(change_log_writer.write_count) << "\n"                         //
+  << BATT_INSPECT(change_log_writer.block_alloc_count) << "\n"                   //
+  << BATT_INSPECT(change_log_writer.block_utilization_rate()) << "\n"            //
+  << "\n"                                                                        //
+  << BATT_INSPECT(cache_slot_pool.hit_rate()) << "\n"                            //
+  << BATT_INSPECT(cache_slot_pool.admit_byte_count) << "\n"                      //
+  << BATT_INSPECT(cache_slot_pool.evict_byte_count) << "\n"                      //
+  << BATT_INSPECT(cache_slot_pool.allocate_count) << "\n"                        //
+  << BATT_INSPECT(cache_slot_pool.allocate_free_queue_count) << "\n"             //
+  << BATT_INSPECT(cache_slot_pool.allocate_construct_count) << "\n"              //
+  << BATT_INSPECT(cache_slot_pool.allocate_evict_count) << "\n"                  //
+  << BATT_INSPECT(cache_slot_pool.construct_count) << "\n"                       //
+  << BATT_INSPECT(cache_slot_pool.free_queue_insert_count) << "\n"               //
+  << BATT_INSPECT(cache_slot_pool.free_queue_remove_count) << "\n"               //
+  << BATT_INSPECT(cache_slot_pool.evict_count) << "\n"                           //
+  << BATT_INSPECT(cache_slot_pool.evict_prior_generation_count) << "\n"          //
+  << "\n"                                                                        //
+  << BATT_INSPECT_RANGE_PRETTY(page_cache.page_read_latency)                     //
+  << "\n"                                                                        //
+  << print_page_alloc_info                                                       //
+  << "\n"                                                                        //
+  << BATT_INSPECT(kv_store.mem_table_alloc) << "\n"                              //
+  << BATT_INSPECT(kv_store.mem_table_free) << "\n"                               //
+  << BATT_INSPECT(kv_store.mem_table_count_stats) << "\n"                        //
+  << "\n"                                                                        //
+  << BATT_INSPECT(scanner.ctor_latency) << "\n"                                  //
+  << BATT_INSPECT(scanner.ctor_count) << "\n"                                    //
+  << "\n"                                                                        //
+  << BATT_INSPECT(scanner.start_count) << "\n"                                   //
+  << BATT_INSPECT(scanner.start_latency) << "\n"                                 //
+  << BATT_INSPECT(scanner.start_deltas_latency) << "\n"                          //
+  << BATT_INSPECT(scanner.start_enter_subtree_latency) << "\n"                   //
+  << BATT_INSPECT(scanner.start_resume_latency) << "\n"                          //
+  << BATT_INSPECT(scanner.start_build_heap_latency) << "\n"                      //
+  << "\n"                                                                        //
+  << BATT_INSPECT(scanner.init_heap_size_stats) << "\n"                          //
+  << "\n"                                                                        //
+  << BATT_INSPECT(scanner.next_latency) << "\n"                                  //
+  << BATT_INSPECT(scanner.next_count) << "\n"                                    //
+  << BATT_INSPECT(scanner.heap_insert_latency) << "\n"                           //
+  << BATT_INSPECT(scanner.heap_update_latency) << "\n"                           //
+  << BATT_INSPECT(scanner.heap_remove_latency) << "\n"                           //
+  << BATT_INSPECT(scanner.art_advance_latency) << "\n"                           //
+  << BATT_INSPECT(scanner.art_advance_count) << "\n"                             //
+  << BATT_INSPECT(scanner.scan_level_advance_latency) << "\n"                    //
+  << BATT_INSPECT(scanner.scan_level_advance_count) << "\n"                      //
+  << BATT_INSPECT(scanner.pull_next_sharded_latency) << "\n"                     //
+  << BATT_INSPECT(scanner.pull_next_sharded_count) << "\n"                       //
+  << BATT_INSPECT(scanner.full_leaf_attempts) << "\n"                            //
+  << BATT_INSPECT(scanner.full_leaf_success) << "\n"                             //
+  << "\n"                                                                        //
+  << BATT_INSPECT(sharded_level_scanner.full_page_attempts) << "\n"              //
+  << BATT_INSPECT(sharded_level_scanner.full_page_success) << "\n"               //
+  << "\n"                                                                        //
+  << BATT_INSPECT(on_disk_footprint) << "\n"                                     //
+  << BATT_INSPECT(space_amp) << "\n"                                             //
+      ;
+#endif
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+std::function<void(std::ostream&)> KVStore::debug_info() const noexcept
 {
   return [this](std::ostream& out) {
-    auto& kv_store = this->metrics_;
-    auto& checkpoint_log = *this->checkpoint_log_;
-    auto& cache = checkpoint_log.cache();
-    auto& change_log_file = this->log_writer_->change_log_file();
-    auto& change_log_writer = this->log_writer_->metrics();
-
-    auto& cache_slot_pool = llfs::PageCacheSlot::Pool::Metrics::instance();
-
-    auto& page_cache = cache.metrics();
-
-    auto& node = InMemoryNode::metrics();
-
-    auto& scanner = KVStoreScanner::metrics();
-
-    auto& sharded_level_scanner = ShardedLevelScannerMetrics::instance();
-
-    auto& query_page_loader = PinningPageLoader::metrics();
-
-    std::array<double, 32> page_reads_per_get, page_reads_per_scan;
-    page_reads_per_get.fill(0);
-    page_reads_per_scan.fill(0);
-
-    double total_get_count = kv_store.total_get_count();
-    double total_scan_count = kv_store.scan_count.get();
-
-    for (usize i = 12; i < 28; ++i) {
-      page_reads_per_get[i] =
-          (double)llfs::PageDeviceMetrics::instance().read_count_per_page_size_log2[i] /
-          total_get_count;
-
-      page_reads_per_scan[i] =
-          (double)llfs::PageDeviceMetrics::instance().read_count_per_page_size_log2[i] /
-          total_scan_count;
-    }
-
-    const auto print_page_alloc_info = [&](std::ostream& out) {
-      for (const llfs::PageDeviceEntry* entry : cache.all_devices()) {
-        if (!entry->can_alloc || !entry->arena.has_allocator()) {
-          continue;
-        }
-        out << entry->arena.allocator().debug_info() << "\n";
-      }
-    };
-
-    u64 page_bytes_in_use = 0;
-    {
-      const auto leaf_size = this->tree_options_.leaf_size();
-      const auto filter_size = this->tree_options_.filter_page_size();
-
-      for (const llfs::PageDeviceEntry* entry : cache.all_devices()) {
-        if (!entry->can_alloc || !entry->arena.has_allocator()) {
-          continue;
-        }
-        page_bytes_in_use += entry->arena.allocator().in_use_bytes();
-        if (entry->arena.allocator().page_size() == leaf_size) {
-          page_bytes_in_use += entry->arena.allocator().in_use_count() * filter_size;
-        }
-      }
-    }
-    const u64 on_disk_footprint = page_bytes_in_use + change_log_file.size();
-    const double space_amp =
-        (double)on_disk_footprint / (double)change_log_writer.received_user_byte_count.get();
-
-    double page_reads_per_get_4k = page_reads_per_get[12];
-    double page_reads_per_get_8k = page_reads_per_get[13];
-    double page_reads_per_get_16k = page_reads_per_get[14];
-    double page_reads_per_get_32k = page_reads_per_get[15];
-    double page_reads_per_get_64k = page_reads_per_get[16];
-    double page_reads_per_get_128k = page_reads_per_get[17];
-    double page_reads_per_get_256k = page_reads_per_get[18];
-    double page_reads_per_get_512k = page_reads_per_get[19];
-    double page_reads_per_get_1m = page_reads_per_get[20];
-    double page_reads_per_get_2m = page_reads_per_get[21];
-    double page_reads_per_get_4m = page_reads_per_get[22];
-    double page_reads_per_get_8m = page_reads_per_get[23];
-    double page_reads_per_get_16m = page_reads_per_get[24];
-    double page_reads_per_get_32m = page_reads_per_get[25];
-    double page_reads_per_get_64m = page_reads_per_get[26];
-
-    double page_reads_per_scan_4k = page_reads_per_scan[12];
-    double page_reads_per_scan_8k = page_reads_per_scan[13];
-    double page_reads_per_scan_16k = page_reads_per_scan[14];
-    double page_reads_per_scan_32k = page_reads_per_scan[15];
-    double page_reads_per_scan_64k = page_reads_per_scan[16];
-    double page_reads_per_scan_128k = page_reads_per_scan[17];
-    double page_reads_per_scan_256k = page_reads_per_scan[18];
-    double page_reads_per_scan_512k = page_reads_per_scan[19];
-    double page_reads_per_scan_1m = page_reads_per_scan[20];
-    double page_reads_per_scan_2m = page_reads_per_scan[21];
-    double page_reads_per_scan_4m = page_reads_per_scan[22];
-    double page_reads_per_scan_8m = page_reads_per_scan[23];
-    double page_reads_per_scan_16m = page_reads_per_scan[24];
-    double page_reads_per_scan_32m = page_reads_per_scan[25];
-    double page_reads_per_scan_64m = page_reads_per_scan[26];
-
-    out << "\n"
-        << BATT_INSPECT(kv_store.mem_table_get_count) << "\n"                          //
-        << BATT_INSPECT(kv_store.mem_table_get_latency) << "\n"                        //
-        << "\n"                                                                        //
-        << BATT_INSPECT(kv_store.delta_log2_get_count[0]) << "\n"                      //
-        << BATT_INSPECT(kv_store.delta_log2_get_count[1]) << "\n"                      //
-        << BATT_INSPECT(kv_store.delta_log2_get_count[2]) << "\n"                      //
-        << BATT_INSPECT(kv_store.delta_log2_get_count[3]) << "\n"                      //
-        << BATT_INSPECT(kv_store.delta_log2_get_count[4]) << "\n"                      //
-        << BATT_INSPECT(kv_store.delta_log2_get_count[5]) << "\n"                      //
-        << BATT_INSPECT(kv_store.delta_log2_get_count[6]) << "\n"                      //
-        << BATT_INSPECT(kv_store.delta_log2_get_count[7]) << "\n"                      //
-        << "\n"                                                                        //
-        << BATT_INSPECT(kv_store.delta_get_latency) << "\n"                            //
-        << "\n"                                                                        //
-        << BATT_INSPECT(kv_store.checkpoint_get_count) << "\n"                         //
-        << BATT_INSPECT(kv_store.checkpoint_get_latency) << "\n"                       //
-        << BATT_INSPECT(kv_store.checkpoint_pinned_pages_stats) << "\n"                //
-        << "\n"                                                                        //
-        << BATT_INSPECT(node.level_depth_stats) << "\n"                                //
-        << "\n"                                                                        //
-        << BATT_INSPECT(page_cache.get_count) << "\n"                                  //
-        << BATT_INSPECT(page_cache.allocate_page_alloc_latency) << "\n"                //
-        << BATT_INSPECT(page_cache.total_bytes_read) << "\n"                           //
-        << "\n"                                                                        //
-        << BATT_INSPECT(query_page_loader.prefetch_hint_latency) << "\n"               //
-        << BATT_INSPECT(query_page_loader.hash_map_lookup_latency) << "\n"             //
-        << BATT_INSPECT(query_page_loader.get_page_from_cache_latency) << "\n"         //
-        << BATT_INSPECT(query_page_loader.get_page_count) << "\n"                      //
-        << BATT_INSPECT(query_page_loader.hash_map_miss_count) << "\n"                 //
-        << "\n"                                                                        //
-        << BATT_INSPECT(kv_store.checkpoint_count) << "\n"                             //
-        << BATT_INSPECT(kv_store.batch_edits_count) << "\n"                            //
-        << BATT_INSPECT(kv_store.avg_edits_per_batch()) << "\n"                        //
-        << BATT_INSPECT(kv_store.compact_batch_latency) << "\n"                        //
-        << BATT_INSPECT(kv_store.push_batch_latency) << "\n"                           //
-        << BATT_INSPECT(kv_store.finalize_checkpoint_latency) << "\n"                  //
-        << BATT_INSPECT(kv_store.append_job_latency) << "\n"                           //
-        << "\n"                                                                        //
-        << BATT_INSPECT(PackedLeafPage::metrics().find_key_success_count) << "\n"      //
-        << BATT_INSPECT(PackedLeafPage::metrics().find_key_failure_count) << "\n"      //
-        << BATT_INSPECT(PackedLeafPage::metrics().find_key_latency) << "\n"            //
-        << "\n"                                                                        //
-        << BATT_INSPECT(kv_store.scan_init_latency) << "\n"                            //
-        << "\n"                                                                        //
-        << BATT_INSPECT(BloomFilterMetrics::instance().word_count_stats) << "\n"       //
-        << BATT_INSPECT(BloomFilterMetrics::instance().byte_size_stats) << "\n"        //
-        << BATT_INSPECT(BloomFilterMetrics::instance().bit_size_stats) << "\n"         //
-        << BATT_INSPECT(BloomFilterMetrics::instance().bit_count_stats) << "\n"        //
-        << BATT_INSPECT(BloomFilterMetrics::instance().item_count_stats) << "\n"       //
-        << BATT_INSPECT(BloomFilterMetrics::instance().build_page_latency) << "\n"     //
-        << "\n"                                                                        //
-        << BATT_INSPECT(QuotientFilterMetrics::instance().byte_size_stats) << "\n"     //
-        << BATT_INSPECT(QuotientFilterMetrics::instance().bit_size_stats) << "\n"      //
-        << BATT_INSPECT(QuotientFilterMetrics::instance().item_count_stats) << "\n"    //
-        << BATT_INSPECT(QuotientFilterMetrics::instance().bits_per_key_stats) << "\n"  //
-        << BATT_INSPECT(QuotientFilterMetrics::instance().build_page_latency) << "\n"  //
-        << "\n"                                                                        //
-        << BATT_INSPECT(KeyQuery::metrics().reject_page_latency) << "\n"               //
-        << BATT_INSPECT(KeyQuery::metrics().filter_lookup_latency) << "\n"             //
-        << BATT_INSPECT(KeyQuery::metrics().total_filter_query_count) << "\n"          //
-        << BATT_INSPECT(KeyQuery::metrics().no_filter_page_count) << "\n"              //
-        << BATT_INSPECT(KeyQuery::metrics().filter_page_load_failed_count) << "\n"     //
-        << BATT_INSPECT(KeyQuery::metrics().page_id_mismatch_count) << "\n"            //
-        << BATT_INSPECT(KeyQuery::metrics().filter_reject_count) << "\n"               //
-        << BATT_INSPECT(KeyQuery::metrics().try_pin_leaf_count) << "\n"                //
-        << BATT_INSPECT(KeyQuery::metrics().try_pin_leaf_success_count) << "\n"        //
-        << BATT_INSPECT(KeyQuery::metrics().sharded_view_find_count) << "\n"           //
-        << BATT_INSPECT(KeyQuery::metrics().sharded_view_find_success_count) << "\n"   //
-        << BATT_INSPECT(KeyQuery::metrics().filter_positive_count) << "\n"             //
-        << BATT_INSPECT(KeyQuery::metrics().filter_false_positive_count) << "\n"       //
-        << "\n"                                                                        //
-        << BATT_INSPECT(KeyQuery::metrics().filter_false_positive_rate()) << "\n"      //
-        << "\n"                                                                        //
-        << BATT_INSPECT(checkpoint_log.root_log_space()) << "\n"                       //
-        << BATT_INSPECT(checkpoint_log.root_log_size()) << "\n"                        //
-        << BATT_INSPECT(checkpoint_log.root_log_capacity()) << "\n"                    //
-        << "\n"                                                                        //
-        << BATT_INSPECT(change_log_file.active_blocks()) << "\n"                       //
-        << BATT_INSPECT(change_log_file.active_block_count()) << "\n"                  //
-        << BATT_INSPECT(change_log_file.config().block_count) << "\n"                  //
-        << BATT_INSPECT(change_log_file.capacity()) << "\n"                            //
-        << BATT_INSPECT(change_log_file.size()) << "\n"                                //
-        << BATT_INSPECT(change_log_file.space()) << "\n"                               //
-        << BATT_INSPECT(change_log_file.available_block_tokens()) << "\n"              //
-        << BATT_INSPECT(change_log_file.in_use_block_tokens()) << "\n"                 //
-        << BATT_INSPECT(change_log_file.reserved_block_tokens()) << "\n"               //
-        << BATT_INSPECT(change_log_file.metrics().freed_blocks_count) << "\n"          //
-        << BATT_INSPECT(change_log_file.metrics().reserved_blocks_count) << "\n"       //
-        << "\n"                                                                        //
-        << BATT_INSPECT(change_log_writer.received_user_byte_count) << "\n"            //
-        << BATT_INSPECT(change_log_writer.received_block_byte_count) << "\n"           //
-        << BATT_INSPECT(change_log_writer.written_user_byte_count) << "\n"             //
-        << BATT_INSPECT(change_log_writer.written_block_byte_count) << "\n"            //
-        << BATT_INSPECT(change_log_writer.sleep_count) << "\n"                         //
-        << BATT_INSPECT(change_log_writer.write_count) << "\n"                         //
-        << BATT_INSPECT(change_log_writer.block_alloc_count) << "\n"                   //
-        << BATT_INSPECT(change_log_writer.block_utilization_rate()) << "\n"            //
-        << "\n"                                                                        //
-        << BATT_INSPECT(cache_slot_pool.hit_rate()) << "\n"                            //
-        << BATT_INSPECT(cache_slot_pool.admit_byte_count) << "\n"                      //
-        << BATT_INSPECT(cache_slot_pool.evict_byte_count) << "\n"                      //
-        << BATT_INSPECT(cache_slot_pool.allocate_count) << "\n"                        //
-        << BATT_INSPECT(cache_slot_pool.allocate_free_queue_count) << "\n"             //
-        << BATT_INSPECT(cache_slot_pool.allocate_construct_count) << "\n"              //
-        << BATT_INSPECT(cache_slot_pool.allocate_evict_count) << "\n"                  //
-        << BATT_INSPECT(cache_slot_pool.construct_count) << "\n"                       //
-        << BATT_INSPECT(cache_slot_pool.free_queue_insert_count) << "\n"               //
-        << BATT_INSPECT(cache_slot_pool.free_queue_remove_count) << "\n"               //
-        << BATT_INSPECT(cache_slot_pool.evict_count) << "\n"                           //
-        << BATT_INSPECT(cache_slot_pool.evict_prior_generation_count) << "\n"          //
-        << "\n"                                                                        //
-        << BATT_INSPECT(page_reads_per_get_4k) << "\n"                                 //
-        << BATT_INSPECT(page_reads_per_get_8k) << "\n"                                 //
-        << BATT_INSPECT(page_reads_per_get_16k) << "\n"                                //
-        << BATT_INSPECT(page_reads_per_get_32k) << "\n"                                //
-        << BATT_INSPECT(page_reads_per_get_64k) << "\n"                                //
-        << BATT_INSPECT(page_reads_per_get_128k) << "\n"                               //
-        << BATT_INSPECT(page_reads_per_get_256k) << "\n"                               //
-        << BATT_INSPECT(page_reads_per_get_512k) << "\n"                               //
-        << BATT_INSPECT(page_reads_per_get_1m) << "\n"                                 //
-        << BATT_INSPECT(page_reads_per_get_2m) << "\n"                                 //
-        << BATT_INSPECT(page_reads_per_get_4m) << "\n"                                 //
-        << BATT_INSPECT(page_reads_per_get_8m) << "\n"                                 //
-        << BATT_INSPECT(page_reads_per_get_16m) << "\n"                                //
-        << BATT_INSPECT(page_reads_per_get_32m) << "\n"                                //
-        << BATT_INSPECT(page_reads_per_get_64m) << "\n"                                //
-        << "\n"                                                                        //
-        << BATT_INSPECT(page_reads_per_scan_4k) << "\n"                                //
-        << BATT_INSPECT(page_reads_per_scan_8k) << "\n"                                //
-        << BATT_INSPECT(page_reads_per_scan_16k) << "\n"                               //
-        << BATT_INSPECT(page_reads_per_scan_32k) << "\n"                               //
-        << BATT_INSPECT(page_reads_per_scan_64k) << "\n"                               //
-        << BATT_INSPECT(page_reads_per_scan_128k) << "\n"                              //
-        << BATT_INSPECT(page_reads_per_scan_256k) << "\n"                              //
-        << BATT_INSPECT(page_reads_per_scan_512k) << "\n"                              //
-        << BATT_INSPECT(page_reads_per_scan_1m) << "\n"                                //
-        << BATT_INSPECT(page_reads_per_scan_2m) << "\n"                                //
-        << BATT_INSPECT(page_reads_per_scan_4m) << "\n"                                //
-        << BATT_INSPECT(page_reads_per_scan_8m) << "\n"                                //
-        << BATT_INSPECT(page_reads_per_scan_16m) << "\n"                               //
-        << BATT_INSPECT(page_reads_per_scan_32m) << "\n"                               //
-        << BATT_INSPECT(page_reads_per_scan_64m) << "\n"                               //
-        << "\n"                                                                        //
-        << BATT_INSPECT_RANGE_PRETTY(page_cache.page_read_latency)                     //
-        << "\n"                                                                        //
-        << print_page_alloc_info                                                       //
-        << "\n"                                                                        //
-        << BATT_INSPECT(kv_store.mem_table_alloc) << "\n"                              //
-        << BATT_INSPECT(kv_store.mem_table_free) << "\n"                               //
-        << BATT_INSPECT(kv_store.mem_table_count_stats) << "\n"                        //
-        << "\n"                                                                        //
-        << BATT_INSPECT(scanner.ctor_latency) << "\n"                                  //
-        << BATT_INSPECT(scanner.ctor_count) << "\n"                                    //
-        << "\n"                                                                        //
-        << BATT_INSPECT(scanner.start_count) << "\n"                                   //
-        << BATT_INSPECT(scanner.start_latency) << "\n"                                 //
-        << BATT_INSPECT(scanner.start_deltas_latency) << "\n"                          //
-        << BATT_INSPECT(scanner.start_enter_subtree_latency) << "\n"                   //
-        << BATT_INSPECT(scanner.start_resume_latency) << "\n"                          //
-        << BATT_INSPECT(scanner.start_build_heap_latency) << "\n"                      //
-        << "\n"                                                                        //
-        << BATT_INSPECT(scanner.init_heap_size_stats) << "\n"                          //
-        << "\n"                                                                        //
-        << BATT_INSPECT(scanner.next_latency) << "\n"                                  //
-        << BATT_INSPECT(scanner.next_count) << "\n"                                    //
-        << BATT_INSPECT(scanner.heap_insert_latency) << "\n"                           //
-        << BATT_INSPECT(scanner.heap_update_latency) << "\n"                           //
-        << BATT_INSPECT(scanner.heap_remove_latency) << "\n"                           //
-        << BATT_INSPECT(scanner.art_advance_latency) << "\n"                           //
-        << BATT_INSPECT(scanner.art_advance_count) << "\n"                             //
-        << BATT_INSPECT(scanner.scan_level_advance_latency) << "\n"                    //
-        << BATT_INSPECT(scanner.scan_level_advance_count) << "\n"                      //
-        << BATT_INSPECT(scanner.pull_next_sharded_latency) << "\n"                     //
-        << BATT_INSPECT(scanner.pull_next_sharded_count) << "\n"                       //
-        << BATT_INSPECT(scanner.full_leaf_attempts) << "\n"                            //
-        << BATT_INSPECT(scanner.full_leaf_success) << "\n"                             //
-        << "\n"                                                                        //
-        << BATT_INSPECT(sharded_level_scanner.full_page_attempts) << "\n"              //
-        << BATT_INSPECT(sharded_level_scanner.full_page_success) << "\n"               //
-        << "\n"                                                                        //
-        << BATT_INSPECT(on_disk_footprint) << "\n"                                     //
-        << BATT_INSPECT(space_amp) << "\n"                                             //
-        ;
+    this->collect_stats([&out](std::string_view name, double value) {
+      out << " " << name << " == " << value << "\n";
+    });
   };
 }
 

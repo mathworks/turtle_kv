@@ -176,7 +176,10 @@ class KVStore : public Table
 
   Status force_checkpoint();
 
-  std::function<void(std::ostream&)> debug_info() noexcept;
+  std::function<void(std::ostream&)> debug_info() const noexcept;
+
+  void collect_stats(
+      std::function<void(std::string_view /*name*/, double /*value*/)> fn) const noexcept;
 
   llfs::PageCache& page_cache() noexcept
   {

@@ -97,6 +97,8 @@ void usage(int argc, char** argv)
 //
 void apply_params(keyvcr::WorkloadPlayer<Driver>& player)
 {
+  BATT_CHECK_OK(player.consumer().param("dbname", "turtlekv"));
+
   BATT_CHECK_OK(player.consumer().param("turtlekv.buffer_level_trim",  //
                                         getenv_param<turtlekv_buffer_level_trim>()));
 
