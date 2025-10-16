@@ -13,5 +13,6 @@ target_link_libraries(
   turtle_kv_bench
   PUBLIC
   turtle_kv
+  keyvcr::keyvcr
   gtest::gtest
   )

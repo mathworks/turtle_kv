@@ -22,6 +22,7 @@
 
 #include <batteries/async/watch.hpp>
 #include <batteries/hint.hpp>
+#include <batteries/operators.hpp>
 #include <batteries/small_vec.hpp>
 
 #include <absl/synchronization/mutex.h>
@@ -129,6 +130,9 @@ class KVStore : public Table
   static Status global_init();
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  KVStore(const KVStore&) = delete;
+  KVStore& operator=(const KVStore&) = delete;
 
   ~KVStore() noexcept;
 
@@ -306,5 +310,12 @@ class KVStore : public Table
 
   Optional<std::thread> epoch_thread_;
 };
+
+BATT_OBJECT_PRINT_IMPL((inline),
+                       KVStore::RuntimeOptions,
+                       (initial_checkpoint_distance,
+                        use_threaded_checkpoint_pipeline,
+                        cache_size_bytes,
+                        memtable_compact_threads))
 
 }  // namespace turtle_kv

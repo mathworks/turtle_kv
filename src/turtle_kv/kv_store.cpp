@@ -442,6 +442,7 @@ u64 query_page_loader_reset_every_n()
   }
 
   if (this->runtime_options_.use_threaded_checkpoint_pipeline) {
+    BATT_CHECK_GT(this->runtime_options_.memtable_compact_threads, 0);
     for (usize i = 0; i < this->runtime_options_.memtable_compact_threads; ++i) {
       this->memtable_compact_threads_.emplace_back([this, i] {
         this->memtable_compact_thread_main(i);
@@ -1127,8 +1128,8 @@ void KVStore::add_obsolete_state(const State* old_state)
 //
 void KVStore::epoch_thread_main()
 {
-  constexpr i64 kMinEpochUsec = 15;  // 12500;
-  constexpr i64 kMaxEpochUsec = 20;  // 15000;
+  constexpr i64 kMinEpochUsec = 12500;
+  constexpr i64 kMaxEpochUsec = 15000;
 
   std::default_random_engine rng{std::random_device{}()};
   std::uniform_int_distribution<i64> pick_delay_usec{kMinEpochUsec, kMaxEpochUsec};
