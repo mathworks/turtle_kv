@@ -90,7 +90,7 @@ int main(int argc, char** argv)
 //
 void usage(int argc, char** argv)
 {
-  std::cerr << "usage: " << argv[0] << " WORKLOAD_FILE_PATH" << std::endl;
+  std::cerr << "usage: " << argv[0] << " WORKLOAD_FILE_PATH [SQL_OUTPUT_PATH]" << std::endl;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
