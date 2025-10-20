@@ -116,13 +116,15 @@ class ARTBase
   struct Node16;
   struct Node48;
   struct Node256;
+  struct LeafNode;
 
   enum struct NodeType : u8 {
-    kNode4 = 0,
-    kNode16 = 1,
-    kNode48 = 2,
-    kNode256 = 3,
-    kNodeBase = 4,
+    kLeafNode = 0,
+    kNode4 = 1,
+    kNode16 = 2,
+    kNode48 = 3,
+    kNode256 = 4,
+    kNodeBase = 5,
   };
 
   //----- --- -- -  -  -   -
@@ -308,6 +310,84 @@ class ARTBase
     }
   };
 
+  struct LeafNode : NodeBase {
+    using Self = LeafNode;
+    using Super = NodeBase;
+    using NoInit = ARTBase::NoInit;
+
+    explicit LeafNode() noexcept : Super{NodeType::kLeafNode}
+    {
+    }
+
+    explicit LeafNode(NoInit no_init) noexcept : Super{NodeType::kLeafNode, no_init}
+    {
+    }
+
+    static usize add_branch()
+    {
+      BATT_PANIC() << "not supported!";
+      return 0;
+    }
+
+    static void set_branch_index(u8 key_byte [[maybe_unused]], usize index [[maybe_unused]])
+    {
+      BATT_PANIC() << "not supported!";
+    }
+
+    static void set_branch_pointer(usize index [[maybe_unused]], NodeBase* child [[maybe_unused]])
+    {
+      BATT_PANIC() << "not supported!";
+    }
+
+    static constexpr usize max_branch_count()
+    {
+      return 0;
+    }
+
+    static constexpr usize branch_count()
+    {
+      return 0;
+    }
+
+    static constexpr usize index_of_branch(u8 key_byte [[maybe_unused]])
+    {
+      return 0;
+    }
+
+    static NodeBase*& get_branch_ref(usize i [[maybe_unused]])
+    {
+      static NodeBase* null_ = nullptr;
+      return null_;
+    }
+
+    //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+    struct ScanState {
+      explicit ScanState(Self&, ByteInt /*min_key*/) noexcept
+      {
+      }
+
+      static constexpr ByteInt get_key_byte()
+      {
+        return ByteInt::from_char('\0');
+      }
+
+      static constexpr NodeBase* get_branch()
+      {
+        return nullptr;
+      }
+
+      static constexpr bool is_done()
+      {
+        return true;
+      }
+
+      static constexpr void advance()
+      {
+      }
+    };
+  };
+
   struct BranchView {
     NodeBase** p_ptr;
     NodeBase* ptr;
@@ -374,7 +454,7 @@ class ARTBase
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-    std::array<NodeBase*, kBranchCount> branches;
+    std::array<NodeBase*, kBranchCount> branches_;
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -408,6 +488,16 @@ class ARTBase
       return i;
     }
 
+    NodeBase*& get_branch_ref(usize i) BATT_ALWAYS_INLINE
+    {
+      return this->branches_[i];
+    }
+
+    void set_branch_pointer(usize i, NodeBase* child) BATT_ALWAYS_INLINE
+    {
+      this->branches_[i] = child;
+    }
+
     static constexpr usize max_branch_count()
     {
       return kBranchCount;
@@ -416,8 +506,8 @@ class ARTBase
     void assign_from(const Self& that, usize prefix_offset = 0)
     {
       this->Super::assign_from(static_cast<const Super&>(that), prefix_offset);
-      __builtin_memcpy(this->branches.data(),
-                       that.branches.data(),
+      __builtin_memcpy(this->branches_.data(),
+                       that.branches_.data(),
                        this->branch_count() * sizeof(NodeBase*));
     }
   };
@@ -499,7 +589,7 @@ class ARTBase
           if (key_byte < min_key) {
             continue;
           }
-          branch_for_byte[key_byte.to_i32()] = this->self_.branches[i];
+          branch_for_byte[key_byte.to_i32()] = this->self_.branches_[i];
           key_bitmap[(key_byte.to_i32() >> 6) & 3] |= (u64{1} << (key_byte.to_i32() & 0x3f));
         }
 
@@ -564,7 +654,7 @@ class ARTBase
       return index_of(key_byte, this->key);
     }
 
-    void set_branch_index(u8 key_byte, usize i)
+    void set_branch_index(u8 key_byte, usize i) BATT_ALWAYS_INLINE
     {
       this->key[i] = key_byte;
     }
@@ -606,7 +696,7 @@ class ARTBase
 
       NodeBase* get_branch() const
       {
-        return this->self_.branches[this->branch_i_];
+        return this->self_.branches_[this->branch_i_];
       }
 
       bool is_done() const
@@ -654,7 +744,7 @@ class ARTBase
       return this->branch_for_key[key_byte];
     }
 
-    void set_branch_index(u8 key_byte, usize i)
+    void set_branch_index(u8 key_byte, usize i) BATT_ALWAYS_INLINE
     {
       this->branch_for_key[key_byte] = i;
     }
@@ -703,7 +793,7 @@ class ARTBase
 
       NodeBase* get_branch() const
       {
-        return this->self_.branches[this->key_byte_.to_i32()];
+        return this->self_.branches_[this->key_byte_.to_i32()];
       }
 
       bool is_done() const
@@ -728,13 +818,13 @@ class ARTBase
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-    std::array<NodeBase*, 256> branches;
+    std::array<NodeBase*, 256> branches_;
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
 
     Node256() noexcept : Super{NodeType::kNode256}
     {
-      this->branches.fill(nullptr);
+      this->branches_.fill(nullptr);
     }
 
     explicit Node256(NoInit no_init) noexcept : Super{NodeType::kNode256, no_init}
@@ -771,10 +861,15 @@ class ARTBase
     {
     }
 
+    NodeBase*& get_branch_ref(usize i) BATT_ALWAYS_INLINE
+    {
+      return this->branches_[i];
+    }
+
     void assign_from(const Self& that, usize prefix_offset = 0)
     {
       this->Super::assign_from(static_cast<const Super&>(that), prefix_offset);
-      this->branches = that.branches;
+      this->branches_ = that.branches_;
     }
   };
 
@@ -969,15 +1064,28 @@ class ART : public ARTBase
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
+  using SmallestParentNode = Node4;
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
   template <typename NodeT, typename = std::enable_if_t<!std::is_same_v<NodeT, Node256>>>
   NodeBase* add_child(NodeT* node, u8 key_byte, NodeBase* child);
 
   NodeBase* add_child(Node256* node, u8 key_byte, NodeBase* child);
 
-  template <typename NodeT>
-  Node4* add_child(NodeT* node, u8 key_byte, const char* new_key_data, usize new_key_len);
+  // template <typename NodeT>
+  // Node4* add_child(NodeT* node, u8 key_byte, const char* new_key_data, usize new_key_len);
 
-  Node4* make_node4(const char* prefix, usize prefix_len);
+  template <typename NodeT>
+  LeafNode* add_child_leaf(NodeT* node, u8 key_byte, const char* new_key_data, usize new_key_len);
+
+  LeafNode* make_leaf_node(const char* prefix, usize prefix_len);
+
+  Node4* make_parent_node(const char* prefix, usize prefix_len);
+
+  // Node4* make_node4(const char* prefix, usize prefix_len);
+
+  Node4* grow_node(LeafNode* old_node);
 
   Node16* grow_node(Node4* old_node);
 
@@ -986,6 +1094,8 @@ class ART : public ARTBase
   Node256* grow_node(Node48* old_node);
 
   Node256* grow_node(Node256*);
+
+  LeafNode* clone_node(LeafNode* orig_node, usize prefix_offset);
 
   Node4* clone_node(Node4* orig_node, usize prefix_offset);
 
@@ -1016,6 +1126,10 @@ inline void ARTBase::NodeBase::visit(CaseFns&&... case_fns)
   const NodeType observed = this->node_type;
 
   switch (observed) {
+    case NodeType::kLeafNode:
+      visitor(static_cast<LeafNode*>(this));
+      break;
+
     case NodeType::kNode4:
       visitor(static_cast<Node4*>(this));
       break;
@@ -1187,12 +1301,14 @@ template <ARTBase::Synchronized kSynchronized>
 class ART<ValueT>::Scanner : public detail::ValueStorageBase<ValueT, kSynchronized>
 {
  public:
+  using LeafNode = ARTBase::LeafNode;
   using Node4 = ARTBase::Node4;
   using Node16 = ARTBase::Node16;
   using Node48 = ARTBase::Node48;
   using Node256 = ARTBase::Node256;
 
   using NodeScanState = std::variant<batt::NoneType,
+                                     LeafNode::ScanState,
                                      Node4::ScanState,
                                      Node16::ScanState,
                                      Node48::ScanState,

@@ -269,7 +269,8 @@ void run_put_contains_test()
             << BATT_INSPECT(scanner_nosync_latency) << std::endl
             << BATT_INSPECT(item_latency) << std::endl
             << BATT_INSPECT(item_nosync_latency) << std::endl
-            << BATT_INSPECT(sort_latency) << std::endl;
+            << BATT_INSPECT(sort_latency) << std::endl
+            << BATT_INSPECT(ART::metrics().bytes_per_insert()) << std::endl;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -345,7 +346,8 @@ TEST(ArtTest, SingleThreadTest)
         ASSERT_TRUE(index.contains(key));
       }
     }
-    std::cerr << BATT_INSPECT(insert_latency) << std::endl;
+    std::cerr << BATT_INSPECT(insert_latency) << std::endl
+              << BATT_INSPECT(ART::metrics().bytes_per_insert()) << std::endl;
   }
 }
 
@@ -661,6 +663,8 @@ void run_benchmark_test()
       }
     }
   }
+
+  std::cerr << BATT_INSPECT(turtle_kv::ART<ValueT>::metrics().bytes_per_insert()) << std::endl;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
