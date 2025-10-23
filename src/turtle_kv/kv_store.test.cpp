@@ -52,7 +52,7 @@ TEST(KVStoreTest, CreateAndOpen)
     BATT_CHECK_OK(batt::pin_thread_to_cpu(0));
 
     for (bool size_tiered : {false, true}) {
-      KVStore::Config kv_store_config;
+      KVStore::Config kv_store_config = KVStore::Config::with_default_values();
 
       kv_store_config.initial_capacity_bytes = 512 * kMiB;
       kv_store_config.change_log_size_bytes = 64 * kMiB * 100;
@@ -195,7 +195,7 @@ TEST(KVStoreTest, ScanStressTest)
 
   StdMapTable expected_table;
 
-  KVStore::Config kv_store_config;
+  KVStore::Config kv_store_config = KVStore::Config::with_default_values();
 
   kv_store_config.initial_capacity_bytes = 0 * kMiB;
   kv_store_config.change_log_size_bytes = 512 * kMiB * 10;

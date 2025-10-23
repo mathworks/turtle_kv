@@ -2,6 +2,7 @@
 
 #include <turtle_kv/tree/batch_update.hpp>
 #include <turtle_kv/tree/key_query.hpp>
+#include <turtle_kv/tree/subtree_metrics.hpp>
 #include <turtle_kv/tree/subtree_viability.hpp>
 #include <turtle_kv/tree/tree_options.hpp>
 #include <turtle_kv/tree/tree_serialize_context.hpp>

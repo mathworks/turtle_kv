@@ -132,6 +132,16 @@ class TreeOptions
     return *this;
   }
 
+  double min_flush_factor() const
+  {
+    return this->min_flush_factor_;
+  }
+
+  double max_flush_factor() const
+  {
+    return this->max_flush_factor_;
+  }
+
   usize min_flush_size() const
   {
     const usize nominal = this->flush_size() * this->min_flush_factor_;

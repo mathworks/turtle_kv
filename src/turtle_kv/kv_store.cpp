@@ -81,29 +81,6 @@ u64 query_page_loader_reset_every_n()
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-/*static*/ KVStore::Config KVStore::Config::with_default_values() noexcept
-{
-  return Config{
-      .tree_options = TreeOptions::with_default_values(),
-      .initial_capacity_bytes = 512 * kMiB,
-      .change_log_size_bytes = 32 * kMiB,
-  };
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-/*static*/ KVStore::RuntimeOptions KVStore::RuntimeOptions::with_default_values() noexcept
-{
-  return RuntimeOptions{
-      .initial_checkpoint_distance = 1,
-      .use_threaded_checkpoint_pipeline = true,
-      .cache_size_bytes = 4 * kGiB,
-      .memtable_compact_threads = 4,
-  };
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
 /*static*/ Status KVStore::configure_storage_context(llfs::StorageContext& storage_context,
                                                      const TreeOptions& tree_options,
                                                      const RuntimeOptions& runtime_options) noexcept
