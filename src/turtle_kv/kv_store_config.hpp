@@ -229,8 +229,9 @@ class ConfigParam
                        KVStoreConfig* config,
                        KVStoreRuntimeOptions* runtime_options) const
   {
-    BATT_ASSIGN_OK_RESULT(TypedValue value, this->parse(str));
-    return this->set(value, config, runtime_options);
+    StatusOr<TypedValue> status_or_value = this->parse(str);
+    BATT_REQUIRE_OK(status_or_value) << BATT_INSPECT(str);
+    return this->set(std::move(*status_or_value), config, runtime_options);
   }
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -264,7 +265,7 @@ class DefaultParser : public ConfigParam::Parser
   {
     auto value = batt::make_default<T>();
     is >> value;
-    if (!is.good()) {
+    if (!is.good() && !(is.eof() && !is.fail())) {
       return {batt::StatusCode::kInvalidArgument};
     }
     return {ConfigParam::TypedValue{std::move(value)}};

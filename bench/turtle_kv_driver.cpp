@@ -120,7 +120,10 @@ Status KVStoreDriver::param(std::string_view name, std::string_view value)
     this->kv_store_path_ = std::string{value};
 
   } else if (name.starts_with(kParamPrefix)) {
-    BATT_REQUIRE_OK(parse_config(name, value, &this->kv_store_config_, &this->runtime_options_));
+    BATT_REQUIRE_OK(parse_config(name.substr(kParamPrefix.size()),
+                                 value,
+                                 &this->kv_store_config_,
+                                 &this->runtime_options_));
   }
 
   return OkStatus();

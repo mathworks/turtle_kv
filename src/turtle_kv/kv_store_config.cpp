@@ -103,11 +103,20 @@ std::vector<ConfigParam> initialize_config_params()
   // TreeOptions
 
   //----- --- -- -  -  -   -
-  // node_size_kb
+  // node_size / node_size_kb
   //
   static TypePropertyGetter<TreeOptions, u64, llfs::PageSize> node_size_getter{
       &TreeOptions::node_size};
   static TypePropertySetter<TreeOptions, u64> node_size_setter{&TreeOptions::set_node_size};
+
+  params.push_back(ConfigParam{
+      "node_size",
+      node_size_getter,
+      node_size_setter,
+      DefaultParser<u64>::instance(),
+      DefaultFormatter::instance(),
+  });
+
   static ScaleConversion<u64> node_size_kb_get_set{node_size_getter, node_size_setter, kKiB};
 
   params.push_back(ConfigParam{
@@ -119,11 +128,20 @@ std::vector<ConfigParam> initialize_config_params()
   });
 
   //----- --- -- -  -  -   -
-  // leaf_size_kb
+  // leaf_size / leaf_size_kb
   //
   static TypePropertyGetter<TreeOptions, u64, llfs::PageSize> leaf_size_getter{
       &TreeOptions::leaf_size};
   static TypePropertySetter<TreeOptions, u64> leaf_size_setter{&TreeOptions::set_leaf_size};
+
+  params.push_back(ConfigParam{
+      "leaf_size",
+      leaf_size_getter,
+      leaf_size_setter,
+      DefaultParser<u64>::instance(),
+      DefaultFormatter::instance(),
+  });
+
   static ScaleConversion<u64> leaf_size_kb_get_set{leaf_size_getter, leaf_size_setter, kKiB};
 
   params.push_back(ConfigParam{
@@ -305,39 +323,6 @@ std::vector<ConfigParam> initialize_config_params()
   //
   return params;
 }
-#if 0
-  {
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-const std::unordered_map<std::string_view, ParamParseFn>& param_parser_map()
-{
-  static const std::unordered_map<std::string_view, ParamParseFn>& cached_ =
-      []() -> const std::unordered_map<std::string_view, ParamParseFn>& {
-    static std::unordered_map<std::string_view, ParamParseFn> map_;
-
-
-    //----- --- -- -  -  -   -
-    //
-    map_["wal_size_mb"] = [](std::string_view name [[maybe_unused]],
-                             std::string_view value [[maybe_unused]],
-                             KVStoreConfig* config [[maybe_unused]],
-                             KVStoreRuntimeOptions* runtime_options [[maybe_unused]]) -> Status {
-      BATT_REQUIRE_NE(config, nullptr);
-      BATT_REQUIRE_NE(runtime_options, nullptr);
-      BATT_ASSIGN_OK_RESULT(usize n, parse_value<usize>(value));
-
-      config->change_log_size_bytes = n * kMiB;
-
-      return OkStatus();
-    };
-
-    return map_;
-  }();
-
-  return cached_;
-}
-  }
-#endif
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
@@ -379,8 +364,11 @@ Status parse_config(std::string_view name [[maybe_unused]],
                     KVStoreConfig* config [[maybe_unused]],
                     KVStoreRuntimeOptions* runtime_options [[maybe_unused]])
 {
+  VLOG(1) << BATT_INSPECT_STR(name) << BATT_INSPECT_STR(value);
+
   auto iter = config_param_map().find(name);
   if (iter == config_param_map().end()) {
+    VLOG(1) << " -- name not found in config_param_map()";
     return batt::StatusCode::kInvalidArgument;
   }
 
