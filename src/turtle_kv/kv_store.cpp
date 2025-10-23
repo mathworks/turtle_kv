@@ -1264,6 +1264,11 @@ void KVStore::collect_stats(
   fn("leaf.find_key_latency.count", PackedLeafPage::metrics().find_key_latency.count.get());
   fn("leaf.find_key_latency.seconds", PackedLeafPage::metrics().find_key_latency.total_seconds());
 
+  for (usize i = 0; i < SubtreeMetrics::kMaxTreeHeight + 1; ++i) {
+    const double value = Subtree::metrics().batch_count_per_height[i].get();
+    fn(batt::to_string("subtree.batch_count_height_", std::setw(2), std::setfill('0'), i), value);
+  }
+
 #if 0
   << "\n"                                                                        //
   << BATT_INSPECT(node.level_depth_stats) << "\n"                                //

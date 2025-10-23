@@ -121,6 +121,9 @@ Status Subtree::apply_batch_update(const TreeOptions& tree_options,
   BATT_CHECK_GT(parent_height, 0);
   BATT_CHECK(!this->locked_.load());
 
+  BATT_CHECK_LT(parent_height - 1, SubtreeMetrics::kMaxTreeHeight + 1);
+  Subtree::metrics().batch_count_per_height[parent_height - 1].add(1);
+
   Subtree& subtree = *this;
 
   StatusOr<Subtree> new_subtree = batt::case_of(  //
