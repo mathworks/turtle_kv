@@ -84,17 +84,15 @@ Status KVStoreDriver::begin_workload(std::string_view workload_basename)
 {
   BATT_REQUIRE_OK(this->initialize_database());
 
+  this->workload_basename_ = std::string{workload_basename};
+
   if (!this->workload_stats_) {
-    this->workload_stats_ = std::make_shared<std::vector<StatsSnapshot>>();
+    this->workload_stats_ = std::make_shared<keyvcr::StatsSnapshotCollector<double>>();
   }
-  auto& snapshot = this->workload_stats_->emplace_back(StatsSnapshot{
-      .workload_basename = std::string{workload_basename},
-      .before = {},
-      .after = {},
-  });
-  this->kv_store_->collect_stats([&snapshot](std::string_view name, double value) {
-    snapshot.before.emplace(name, value);
-  });
+
+  this->workload_stats_->begin_workload(workload_basename,
+                                        Self::collect_stats_map(*this->kv_store_));
+
   return OkStatus();
 }
 
@@ -102,12 +100,12 @@ Status KVStoreDriver::begin_workload(std::string_view workload_basename)
 //
 void KVStoreDriver::end_workload()
 {
-  if (this->workload_stats_ && !this->workload_stats_->empty()) {
-    auto& snapshot = this->workload_stats_->back();
-    this->kv_store_->collect_stats([&snapshot](std::string_view name, double value) {
-      snapshot.after.emplace(name, value);
-    });
+  if (this->workload_stats_) {
+    this->workload_stats_->end_workload(this->workload_basename_,
+                                        Self::collect_stats_map(*this->kv_store_));
   }
+
+  this->workload_basename_ = "";
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -150,24 +148,6 @@ Status KVStoreDriver::join_thread(u32 child_thread_id)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-std::map<std::string, double> KVStoreDriver::StatsSnapshot::get_deltas() const noexcept
-{
-  std::map<std::string, double> delta;
-
-  for (const auto& [name, before_value] : this->before) {
-    auto iter = this->after.find(name);
-    if (iter == this->after.end()) {
-      continue;
-    }
-    const double after_value = iter->second;
-    delta.emplace(name, after_value - before_value);
-  }
-
-  return delta;
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
 /*static*/ std::map<std::string, double> KVStoreDriver::collect_stats_map(const KVStore& kv_store)
 {
   std::map<std::string, double> m;
@@ -181,66 +161,14 @@ std::map<std::string, double> KVStoreDriver::StatsSnapshot::get_deltas() const n
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-/*static*/ void KVStoreDriver::report_stats_map(const std::string& workload_basename,
-                                                Optional<u32> thread_id,
-                                                const std::map<std::string, double>& src,
-                                                keyvcr::ReportEmitter& dst)
-{
-  //----- --- -- -  -  -   -
-  const auto emit_metric = [&dst, &workload_basename, &thread_id](std::string_view name,
-                                                                  double value) {
-    dst.report_metric(
-        keyvcr::MetricSpec{
-            .workload_basename = workload_basename,
-            .thread_id = thread_id,
-            .metric_name = batt::to_string(kMetricPrefix, name),
-        },
-        value);
-  };
-  //----- --- -- -  -  -   -
-
-  for (const auto& [name, value] : src) {
-    emit_metric(name, value);
-
-    static const std::string latency_count = "latency.count";
-    static const std::string count = ".count";
-    static const std::string seconds = ".seconds";
-    static const std::string avg_seconds = ".avg_seconds";
-
-    if (value != 0 && name.ends_with(latency_count)) {
-      const std::string stem = name.substr(0, name.size() - count.size());
-      auto iter = src.find(stem + seconds);
-      const double sample_count = value;
-      const double total_seconds = iter->second;
-      if (iter != src.end() && total_seconds != 0) {
-        const double avg_seconds_value = total_seconds / sample_count;
-        emit_metric(stem + avg_seconds, avg_seconds_value);
-      }
-    }
-  }
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
 void KVStoreDriver::emit_report_impl(keyvcr::ReportEmitter& dst)
 {
   if (this->thread_id_ == None) {
-    // Report overall stats for the entire run.
-    //
-    Self::report_stats_map(/*workload_basename=*/"",
-                           this->thread_id_,
-                           Self::collect_stats_map(*this->kv_store_),
-                           dst);
-
     // Report workload-specific stats.
     //
     if (this->workload_stats_) {
-      for (const KVStoreDriver::StatsSnapshot& snapshot : *this->workload_stats_) {
-        Self::report_stats_map(snapshot.workload_basename,
-                               this->thread_id_,
-                               snapshot.get_deltas(),
-                               dst);
-      }
+      this->workload_stats_->set_name_prefix(kMetricPrefix);
+      this->workload_stats_->emit_report_impl(this->thread_id_, dst);
     }
 
     dst.report_param(

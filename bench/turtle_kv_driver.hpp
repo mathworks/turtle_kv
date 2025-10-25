@@ -9,6 +9,7 @@
 #include <turtle_kv/import/status.hpp>
 
 #include <keyvcr/report.hpp>
+#include <keyvcr/stats_snapshot.hpp>
 
 #include <batteries/suppress.hpp>
 
@@ -71,13 +72,6 @@ class KVStoreDriver : private KVStoreDriverConfigBase
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-#if 0
-  TreeOptions& tree_options() noexcept
-  {
-    return this->kv_store_config_.tree_options;
-  }
-#endif
-
   KVStore& kv_store()
   {
     return *this->kv_store_;
@@ -136,25 +130,7 @@ class KVStoreDriver : private KVStoreDriverConfigBase
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
-  struct StatsSnapshot {
-    std::string workload_basename;
-    std::map<std::string, double> before;
-    std::map<std::string, double> after;
-
-    // ----- --- -- -  -  -   -
-
-    /** \brief Returns a map of (this->after[key] - this->before[key], for all keys in both before
-     * and after.
-     */
-    std::map<std::string, double> get_deltas() const noexcept;
-  };
-
   static std::map<std::string, double> collect_stats_map(const KVStore& kv_store);
-
-  static void report_stats_map(const std::string& workload_basename,
-                               Optional<u32> thread_id,
-                               const std::map<std::string, double>& src,
-                               keyvcr::ReportEmitter& dst);
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -168,7 +144,9 @@ class KVStoreDriver : private KVStoreDriverConfigBase
 
   std::map<std::string, std::string> saved_params_;
 
-  std::shared_ptr<std::vector<StatsSnapshot>> workload_stats_;
+  std::string workload_basename_;
+
+  std::shared_ptr<keyvcr::StatsSnapshotCollector<double>> workload_stats_;
 };
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
