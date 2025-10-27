@@ -156,6 +156,10 @@ class TreeOptions
 
   //----- --- -- -  -  -   -
 
+  // TODO [tastolfi 2025-10-27] add enable_update_buffer option (for B+-tree emulation mode)
+
+  //----- --- -- -  -  -   -
+
   Self& set_filter_bits_per_key(Optional<u16> bits_per_key)
   {
     this->filter_bits_per_key_ = bits_per_key;
