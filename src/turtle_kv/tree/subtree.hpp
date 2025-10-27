@@ -69,6 +69,13 @@ class Subtree
     return metrics_;
   }
 
+  /** \brief Fixes the viability of the passed Subtree, if necessary.
+   */
+  static Status make_root_viable(Subtree& new_subtree,
+                                 const TreeOptions& tree_options,
+                                 BatchUpdateContext& update_context,
+                                 const KeyView& key_upper_bound);
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   Subtree() = default;
@@ -152,6 +159,16 @@ class Subtree
   /** \brief Attempt to make the root viable by flushing a batch.
    */
   Status try_flush(BatchUpdateContext& context);
+
+  /** \brief Force all buffered updates to be flushed down to the leaf level.
+   *
+   * NOTE: for now, only affects in-memory subtrees!
+   */
+  Status force_flush_all(const TreeOptions& tree_options,
+                         ParentNodeHeight parent_height,
+                         BatchUpdateContext& context,
+                         const KeyView& key_upper_bound,
+                         IsRoot is_root);
 
   /** \brief Returns true iff this Subtree has no in-memory modifications.
    */

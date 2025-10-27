@@ -188,6 +188,30 @@ StatusOr<Checkpoint> Checkpoint::flush_batch(batt::WorkerPool& worker_pool,
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+Status Checkpoint::force_flush_all(batt::WorkerPool& worker_pool,
+                                   llfs::PageCacheJob& job,
+                                   const TreeOptions& tree_options,
+                                   const batt::CancelToken& cancel_token)
+{
+  BatchUpdateContext update_context{
+      .worker_pool = worker_pool,
+      .page_loader = job,
+      .cancel_token = cancel_token,
+  };
+
+  BATT_REQUIRE_OK(this->tree_->force_flush_all(tree_options,
+                                               ParentNodeHeight{this->tree_height_ + 1},
+                                               update_context,
+                                               /*key_upper_bound=*/global_max_key(),
+                                               IsRoot{true}));
+
+  BATT_ASSIGN_OK_RESULT(this->tree_height_, this->tree_->get_height(job));
+
+  return OkStatus();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 Checkpoint Checkpoint::clone() const noexcept
 {
   return Checkpoint{this->root_id_,

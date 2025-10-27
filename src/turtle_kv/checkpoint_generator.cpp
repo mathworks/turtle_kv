@@ -145,6 +145,8 @@ Status CheckpointGenerator::serialize_checkpoint() noexcept
 {
   BATT_CHECK_NOT_NULLPTR(this->job_);
 
+  LatencyTimer timer{this->metrics_.serialize_latency};
+
   // Serialize the checkpoint so we know its root page id.
   //
   BATT_ASSIGN_OK_RESULT(
@@ -183,6 +185,29 @@ StatusOr<std::unique_ptr<CheckpointJob>> CheckpointGenerator::finalize_checkpoin
 
   BATT_CHECK_NOT_NULLPTR(this->job_)
       << "At least one batch must be pushed to the generator to finalize a new checkpoint!";
+
+  //----- --- -- -  -  -   -
+  // If we are in B+-tree mode, then flush all update buffers down to the leaf level.
+  //
+  if (this->tree_options_.is_b_tree_mode_enabled()) {
+    batt::CancelToken cancel_token;
+
+    *this->cancel_token_.lock() = cancel_token;
+    auto on_scope_exit = batt::finally([this] {
+      *this->cancel_token_.lock() = batt::None;
+    });
+
+    {
+      LatencyTimer timer{this->metrics_.force_flush_all_latency};
+
+      BATT_REQUIRE_OK(this->base_checkpoint_.force_flush_all(this->worker_pool_,
+                                                             *this->job_,
+                                                             this->tree_options_,
+                                                             cancel_token));
+    }
+    LOG_EVERY_N(INFO, 10) << BATT_INSPECT(this->metrics_.force_flush_all_latency);
+  }
+  //----- --- -- -  -  -   -
 
   const usize batch_count = this->current_batch_count_;
 

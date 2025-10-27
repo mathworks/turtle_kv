@@ -31,8 +31,12 @@ PackedNodePage* build_node_page(const MutableBuffer& buffer, const InMemoryNode&
 
   PackedNodePage* packed_node = static_cast<PackedNodePage*>(payload_buffer.data());
 
-  MutableBuffer variable_buffer =
-      payload_buffer + offsetof(PackedNodePage, key_and_flushed_item_data_);
+  MutableBuffer variable_buffer = [&]() -> MutableBuffer {
+    if (src_node.tree_options.is_b_tree_mode_enabled()) {
+      return payload_buffer + offsetof(PackedNodePage, update_buffer);
+    }
+    return payload_buffer + offsetof(PackedNodePage, key_and_flushed_item_data_);
+  }();
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
   const auto pack_key =                                                                       //
@@ -109,11 +113,15 @@ PackedNodePage* build_node_page(const MutableBuffer& buffer, const InMemoryNode&
   //+++++++++++-+-+--+----- --- -- -  -  -   -
   // Pack the update buffer
 
-  using EmptyLevel = InMemoryNode::UpdateBuffer::EmptyLevel;
-  using SegmentedLevel = InMemoryNode::UpdateBuffer::SegmentedLevel;
-  using Segment = InMemoryNode::UpdateBuffer::Segment;
+  if (src_node.tree_options.is_b_tree_mode_enabled()) {
+    packed_node->pivot_count_and_flags |= PackedNodePage::kFlagBTreeMode;
+    BATT_CHECK_EQ(src_node.update_buffer.count_non_empty_levels(), 0);
 
-  {
+  } else {
+    using EmptyLevel = InMemoryNode::UpdateBuffer::EmptyLevel;
+    using SegmentedLevel = InMemoryNode::UpdateBuffer::SegmentedLevel;
+    using Segment = InMemoryNode::UpdateBuffer::Segment;
+
     usize dst_segment_i = 0;
     usize level_i = 0;
     for (; level_i < src_node.update_buffer.levels.size(); ++level_i) {
@@ -176,7 +184,6 @@ PackedNodePage* build_node_page(const MutableBuffer& buffer, const InMemoryNode&
       packed_node->update_buffer.level_start[level_i] = BATT_CHECKED_CAST(u8, dst_segment_i);
     }
   }
-
   page_header->unused_begin = byte_distance(buffer.data(), variable_buffer.data());
   page_header->unused_end = buffer.size();
 

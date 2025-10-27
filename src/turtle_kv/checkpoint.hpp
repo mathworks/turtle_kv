@@ -129,13 +129,20 @@ class Checkpoint
    */
   bool is_durable() const noexcept;
 
-  /** \brief Applys a batch update to this Checkpoint's tree to produce a new Checkpoint.
+  /** \brief Applies a batch update to this Checkpoint's tree to produce a new Checkpoint.
    */
   StatusOr<Checkpoint> flush_batch(batt::WorkerPool& worker_pool,
                                    llfs::PageCacheJob& job,
                                    const TreeOptions& tree_options,
                                    std::unique_ptr<DeltaBatch>&& batch,
                                    const batt::CancelToken& cancel_token) noexcept;
+
+  /** \brief Flushes all update buffers down to the leaf level.
+   */
+  Status force_flush_all(batt::WorkerPool& worker_pool,
+                         llfs::PageCacheJob& job,
+                         const TreeOptions& tree_options,
+                         const batt::CancelToken& cancel_token);
 
   /** \brief Returns a copy of this Checkpoint's CheckpointLock.
    */

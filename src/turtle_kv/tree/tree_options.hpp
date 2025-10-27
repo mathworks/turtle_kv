@@ -156,7 +156,18 @@ class TreeOptions
 
   //----- --- -- -  -  -   -
 
-  // TODO [tastolfi 2025-10-27] add enable_update_buffer option (for B+-tree emulation mode)
+  // TODO [tastolfi 2025-10-27] add b_tree_mode option.
+
+  Self& set_b_tree_mode_enabled(bool b)
+  {
+    this->b_tree_mode_ = b;
+    return *this;
+  }
+
+  bool is_b_tree_mode_enabled() const
+  {
+    return this->b_tree_mode_;
+  }
 
   //----- --- -- -  -  -   -
 
@@ -277,6 +288,9 @@ class TreeOptions
   {
     if (BATT_HINT_TRUE(this->trie_index_reserve_size_)) {
       return *this->trie_index_reserve_size_;
+    }
+    if (this->leaf_size() < 128 * kKiB) {
+      return 0;
     }
     if (this->key_size_hint() > 16) {
       return ((this->expected_items_per_leaf() * this->key_size_hint() + 15) / 16) * 5 / 8;
@@ -406,6 +420,8 @@ class TreeOptions
   double max_flush_factor_ = 1.0;
 
   IsSizeTiered size_tiered_{false};
+
+  bool b_tree_mode_{false};
 };
 
 }  // namespace turtle_kv

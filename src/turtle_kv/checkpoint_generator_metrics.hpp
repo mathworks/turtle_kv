@@ -1,0 +1,13 @@
+#pragma once
+#define TURTLE_KV_CHECKPOINT_GENERATOR_METRICS_HPP
+
+#include <turtle_kv/import/metrics.hpp>
+
+namespace turtle_kv {
+
+struct CheckpointGeneratorMetrics {
+  LatencyMetric serialize_latency;
+  LatencyMetric force_flush_all_latency;
+};
+
+}  // namespace turtle_kv

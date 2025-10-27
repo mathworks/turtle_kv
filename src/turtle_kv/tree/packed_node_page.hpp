@@ -47,6 +47,7 @@ struct PackedNodePage {
       kMaxPivots + 1 /*max_key*/ + 1 /*common_prefix*/ + 1 /*final_offset*/;
 
   static constexpr u8 kFlagSizeTiered = 0x80;
+  static constexpr u8 kFlagBTreeMode = 0x40;
   static constexpr u8 kPivotCountMask = 0x3f;
 
   using Key = PackedNodePageKey;
@@ -244,6 +245,15 @@ struct PackedNodePage {
     return packed_node_page;
   }
 
+  static usize variable_data_space(bool b_tree_mode)
+  {
+    if (b_tree_mode) {
+      return sizeof(PackedNodePage::update_buffer) +
+             sizeof(PackedNodePage::key_and_flushed_item_data_);
+    }
+    return sizeof(PackedNodePage::key_and_flushed_item_data_);
+  }
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   u8 pivot_count() const
@@ -254,6 +264,11 @@ struct PackedNodePage {
   IsSizeTiered is_size_tiered() const
   {
     return IsSizeTiered{(this->pivot_count_and_flags & kFlagSizeTiered) == kFlagSizeTiered};
+  }
+
+  bool is_b_tree_mode() const
+  {
+    return (this->pivot_count_and_flags & kFlagBTreeMode) == kFlagBTreeMode;
   }
 
   const llfs::PackedPageId* children_begin() const

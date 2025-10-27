@@ -1,6 +1,7 @@
 #pragma once
 
 #include <turtle_kv/checkpoint.hpp>
+#include <turtle_kv/checkpoint_generator_metrics.hpp>
 #include <turtle_kv/checkpoint_job.hpp>
 #include <turtle_kv/checkpoint_lock.hpp>
 #include <turtle_kv/delta_batch.hpp>
@@ -46,6 +47,8 @@ namespace turtle_kv {
 class CheckpointGenerator
 {
  public:
+  using Metrics = CheckpointGeneratorMetrics;
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   explicit CheckpointGenerator(batt::WorkerPool& worker_pool,    //
@@ -98,6 +101,11 @@ class CheckpointGenerator
     return *this->job_;
   }
 
+  Metrics& metrics() noexcept
+  {
+    return this->metrics_;
+  }
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
   /** \brief Creates `this->job_` if not already created.  Sets dependency on `base_job_`.
@@ -120,6 +128,10 @@ class CheckpointGenerator
   StatusOr<batt::Grant> reserve_slot_grant_for_checkpoints(usize slot_grant_size);
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  // Diagnostic metrics.
+  //
+  Metrics metrics_;
 
   // Used to parallelize work during batch updates.
   //

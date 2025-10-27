@@ -331,7 +331,6 @@ struct InMemoryNode {
     using Level = std::variant<EmptyLevel, MergedLevel, SegmentedLevel>;
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
-
     SmallVec<Level, 6> levels;
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -

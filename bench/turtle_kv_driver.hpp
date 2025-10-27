@@ -33,53 +33,76 @@ class KVStoreDriverConfigBase
  public:
   KVStoreDriverConfigBase() noexcept;
 
- protected:
-  std::filesystem::path kv_store_path_;
-
-  KVStore::Config kv_store_config_;
-
-  KVStore::RuntimeOptions runtime_options_;
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
 };
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 //
-class KVStoreDriver : private KVStoreDriverConfigBase
+class KVStoreDriver
 {
   friend void emit_report(KVStoreDriver& src, keyvcr::ReportEmitter& dst);
 
  public:
-  using Super = KVStoreDriverConfigBase;
   using Self = KVStoreDriver;
 
-  template <typename T>
-  T parse_value(const std::string_view& sv)
-  {
-    std::optional<T> opt_value = batt::from_string<T>(std::string{sv});
-    BATT_CHECK(opt_value);
-    VLOG(1) << BATT_INSPECT(opt_value);
-    return std::move(*opt_value);
-  }
+  //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+  //
+  struct SharedState {
+    std::filesystem::path kv_store_path;
+
+    KVStore::Config kv_store_config;
+
+    KVStore::RuntimeOptions runtime_options;
+
+    std::unique_ptr<KVStore> kv_store;
+
+    /** \brief Captures the full config used to initialize the KVStore.
+     */
+    std::map<std::string, std::string> saved_params;
+
+    //----- --- -- -  -  -   -
+    // Custom config params
+
+    bool checkpoint_after_workload = false;
+
+    //----- --- -- -  -  -   -
+    // Runtime state
+
+    std::string workload_basename;
+
+    keyvcr::StatsSnapshotCollector<double> workload_stats;
+
+    //----- --- -- -  -  -   -
+
+    SharedState() noexcept;
+
+    ~SharedState() noexcept;
+  };
+
+  //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+  //
+  struct ThreadState {
+    std::shared_ptr<SharedState> shared_;
+
+    Optional<u32> id;
+  };
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  KVStoreDriver() noexcept : Super{}
-  {
-  }
+  KVStoreDriver() noexcept;
 
-  explicit KVStoreDriver(Optional<u32> thread_id) noexcept : Super{}, thread_id_{thread_id}
-  {
-  }
+  explicit KVStoreDriver(Optional<u32> thread_id, std::shared_ptr<SharedState>&& shared) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   KVStore& kv_store()
   {
-    return *this->kv_store_;
+    return *this->shared_->kv_store;
   }
 
   Optional<u32> thread_id() const noexcept
   {
-    return this->thread_id_;
+    return this->thread_->id;
   }
 
   //----- --- -- -  -  -   -
@@ -103,12 +126,12 @@ class KVStoreDriver : private KVStoreDriverConfigBase
 
   Status put(std::string_view key, std::string_view value)
   {
-    return this->kv_store_->put(key, ValueView::from_str(value));
+    return this->kv_store().put(key, ValueView::from_str(value));
   }
 
   Status get(std::string_view key)
   {
-    BATT_REQUIRE_OK(this->kv_store_->get(key));
+    BATT_REQUIRE_OK(this->kv_store().get(key));
     return OkStatus();
   }
 
@@ -118,7 +141,7 @@ class KVStoreDriver : private KVStoreDriverConfigBase
     BATT_CHECK_LE(count, out_buf.size());
 
     StatusOr<usize> n_read =
-        this->kv_store_->scan(/*min_key=*/key, as_slice(out_buf.data(), count));
+        this->kv_store().scan(/*min_key=*/key, as_slice(out_buf.data(), count));
     BATT_CHECK_OK(n_read);
 
     return OkStatus();
@@ -128,25 +151,19 @@ class KVStoreDriver : private KVStoreDriverConfigBase
 
   Status join_thread(u32 child_thread_id);
 
+  //----- --- -- -  -  -   -
+
+  void emit_report_impl(keyvcr::ReportEmitter& dst);
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
   static std::map<std::string, double> collect_stats_map(const KVStore& kv_store);
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  void emit_report_impl(keyvcr::ReportEmitter& dst);
+  std::shared_ptr<SharedState> shared_;
 
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-
-  std::shared_ptr<KVStore> kv_store_;
-
-  Optional<u32> thread_id_;
-
-  std::map<std::string, std::string> saved_params_;
-
-  std::string workload_basename_;
-
-  std::shared_ptr<keyvcr::StatsSnapshotCollector<double>> workload_stats_;
+  std::unique_ptr<ThreadState> thread_ = std::make_unique<ThreadState>();
 };
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

@@ -62,66 +62,72 @@ using PackedSegment = PackedUpdateBuffer::Segment;
   }
   node->pivot_keys_[pivot_count] = packed_node.get_pivot_key(pivot_count);
 
-  // Unpack the update buffer.
-  //
-  if (packed_node.is_size_tiered()) {
-    node->update_buffer.levels.resize(packed_node.update_buffer.segment_count());
+  if (packed_node.is_b_tree_mode()) {
+    node->update_buffer.levels.resize(0);
+
   } else {
-    node->update_buffer.levels.resize(tree_options.max_buffer_levels());
-  }
-  const usize in_memory_level_count = node->update_buffer.levels.size();
-
-  const usize packed_level_count = packed_node.is_size_tiered()
-                                       ? packed_node.update_buffer.segment_count()
-                                       : PackedNodePage::kMaxLevels;
-
-  for (usize level_i = 0; level_i < packed_level_count; ++level_i) {
-    const PackedLevel level = packed_node.is_size_tiered() ? packed_node.get_tier(level_i)
-                                                           : packed_node.get_level(level_i);
-
-    const Slice<const PackedSegment> level_segments = level.segments_slice;
-
-    if (level_segments.empty()) {
-      // Base case: empty level.
-      //
-      if (level_i < in_memory_level_count) {
-        node->update_buffer.levels[level_i] = EmptyLevel{};
-      }
-
+    // Unpack the update buffer.
+    //
+    if (packed_node.is_size_tiered()) {
+      node->update_buffer.levels.resize(packed_node.update_buffer.segment_count());
     } else {
-      BATT_CHECK_LT(level_i, in_memory_level_count);
+      node->update_buffer.levels.resize(tree_options.max_buffer_levels());
+    }
+    const usize in_memory_level_count = node->update_buffer.levels.size();
 
-      // General case: non-empty level.
-      //
-      SegmentedLevel& segmented_level =
-          node->update_buffer.levels[level_i].emplace<SegmentedLevel>();
+    const usize packed_level_count = packed_node.is_size_tiered()
+                                         ? packed_node.update_buffer.segment_count()
+                                         : PackedNodePage::kMaxLevels;
 
-      const usize segment_count = level_segments.size();
-      segmented_level.segments.resize(segment_count);
+    for (usize level_i = 0; level_i < packed_level_count; ++level_i) {
+      const PackedLevel level = packed_node.is_size_tiered() ? packed_node.get_tier(level_i)
+                                                             : packed_node.get_level(level_i);
 
-      if (packed_node.is_size_tiered()) {
-        BATT_CHECK_LE(segment_count, 1);
-      }
+      const Slice<const PackedSegment> level_segments = level.segments_slice;
 
-      for (usize segment_i = 0; segment_i < segment_count; ++segment_i) {
-        const PackedNodePage::UpdateBuffer::Segment& packed_segment = level_segments[segment_i];
-        Segment& segment = segmented_level.segments[segment_i];
-
-        segment.page_id_slot = llfs::PageIdSlot::from_page_id(packed_segment.leaf_page_id.unpack());
-        segment.active_pivots = packed_segment.active_pivots;
-        segment.flushed_pivots = packed_segment.flushed_pivots;
-
-        Slice<const little_u32> packed_flushed_item_upper_bounds =
-            packed_node.get_flushed_item_upper_bounds(level_i, segment_i);
-
-        BATT_CHECK_EQ(packed_flushed_item_upper_bounds.size(),
-                      bit_count(segment.get_flushed_pivots()));
-
-        for (const little_u32& upper_bound : packed_flushed_item_upper_bounds) {
-          segment.flushed_item_upper_bound_.emplace_back(upper_bound);
+      if (level_segments.empty()) {
+        // Base case: empty level.
+        //
+        if (level_i < in_memory_level_count) {
+          node->update_buffer.levels[level_i] = EmptyLevel{};
         }
 
-        segment.check_invariants(__FILE__, __LINE__);
+      } else {
+        BATT_CHECK_LT(level_i, in_memory_level_count);
+
+        // General case: non-empty level.
+        //
+        SegmentedLevel& segmented_level =
+            node->update_buffer.levels[level_i].emplace<SegmentedLevel>();
+
+        const usize segment_count = level_segments.size();
+        segmented_level.segments.resize(segment_count);
+
+        if (packed_node.is_size_tiered()) {
+          BATT_CHECK_LE(segment_count, 1);
+        }
+
+        for (usize segment_i = 0; segment_i < segment_count; ++segment_i) {
+          const PackedNodePage::UpdateBuffer::Segment& packed_segment = level_segments[segment_i];
+          Segment& segment = segmented_level.segments[segment_i];
+
+          segment.page_id_slot =
+              llfs::PageIdSlot::from_page_id(packed_segment.leaf_page_id.unpack());
+          segment.active_pivots = packed_segment.active_pivots;
+          segment.flushed_pivots = packed_segment.flushed_pivots;
+
+          Slice<const little_u32> packed_flushed_item_upper_bounds =
+              packed_node.get_flushed_item_upper_bounds(level_i, segment_i);
+
+          BATT_CHECK_EQ(packed_flushed_item_upper_bounds.size(),
+                        bit_count(segment.get_flushed_pivots()));
+
+          for (const little_u32& upper_bound : packed_flushed_item_upper_bounds) {
+            segment.flushed_item_upper_bound_.emplace_back(upper_bound);
+          }
+
+          segment.check_invariants(__FILE__, __LINE__);
+        }
       }
     }
   }
@@ -924,6 +930,10 @@ usize InMemoryNode::flushed_item_counts_byte_size() const
         });
   }
 
+  if (this->tree_options.is_b_tree_mode_enabled()) {
+    BATT_CHECK_EQ(count, 0);
+  }
+
   return count * sizeof(little_u32);
 }
 
@@ -933,11 +943,13 @@ SubtreeViability InMemoryNode::get_viability() const
 {
   NeedsSplit needs_split;
 
-  const usize variable_space = sizeof(PackedNodePage::key_and_flushed_item_data_);
+  const bool b_tree_mode = this->tree_options.is_b_tree_mode_enabled();
+  const usize variable_space = PackedNodePage::variable_data_space(b_tree_mode);
   const usize keys_size = this->key_data_byte_size();
   const usize counts_size = this->flushed_item_counts_byte_size();
   const bool variables_too_large = (keys_size + counts_size) > variable_space;
 
+  needs_split.pivot_count = this->pivot_count();
   needs_split.too_many_pivots = (this->pivot_count() > this->max_pivot_count());
   needs_split.too_many_segments = (this->segment_count() > this->max_segment_count());
   needs_split.keys_too_large = (keys_size > variable_space);
@@ -1284,7 +1296,7 @@ bool InMemoryNode::is_packable() const
 Status InMemoryNode::start_serialize(TreeSerializeContext& context)
 {
   BATT_CHECK(!batt::is_case<NeedsSplit>(this->get_viability()))
-      << BATT_INSPECT(this->get_viability());
+      << BATT_INSPECT(this->get_viability()) << BATT_INSPECT(this->pivot_count());
 
   usize total_segments = 0;
 

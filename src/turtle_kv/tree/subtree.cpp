@@ -252,29 +252,41 @@ Status Subtree::apply_batch_update(const TreeOptions& tree_options,
   // If this is the root level and tree needs to grow/shrink in height, do so now.
   //
   if (is_root) {
-    BATT_REQUIRE_OK(batt::case_of(
-        new_subtree->get_viability(),
-        [](const Viable&) -> Status {
-          // Nothing to fix; tree is viable!
-          return OkStatus();
-        },
-        [&](NeedsSplit needs_split) {
-          Status status =
-              new_subtree->split_and_grow(update.context, tree_options, key_upper_bound);
-
-          if (!status.ok()) {
-            LOG(INFO) << "split_and_grow failed;" << BATT_INSPECT(needs_split);
-          }
-          return status;
-        },
-        [&](const NeedsMerge& needs_merge) {
-          BATT_CHECK(!needs_merge.single_pivot)
-              << "TODO [tastolfi 2025-03-26] implement flush and shrink";
-          return OkStatus();
-        }));
+    BATT_REQUIRE_OK(
+        Subtree::make_root_viable(*new_subtree, tree_options, update.context, key_upper_bound));
   }
 
   subtree = std::move(*new_subtree);
+
+  return OkStatus();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+/*static*/ Status Subtree::make_root_viable(Subtree& new_subtree,
+                                            const TreeOptions& tree_options,
+                                            BatchUpdateContext& update_context,
+                                            const KeyView& key_upper_bound)
+{
+  BATT_REQUIRE_OK(batt::case_of(
+      new_subtree.get_viability(),
+      [](const Viable&) -> Status {
+        // Nothing to fix; tree is viable!
+        return OkStatus();
+      },
+      [&](NeedsSplit needs_split) {
+        Status status = new_subtree.split_and_grow(update_context, tree_options, key_upper_bound);
+
+        if (!status.ok()) {
+          LOG(INFO) << "split_and_grow failed;" << BATT_INSPECT(needs_split);
+        }
+        return status;
+      },
+      [&](const NeedsMerge& needs_merge) {
+        BATT_CHECK(!needs_merge.single_pivot)
+            << "TODO [tastolfi 2025-03-26] implement flush and shrink";
+        return OkStatus();
+      }));
 
   return OkStatus();
 }
@@ -549,6 +561,95 @@ Status Subtree::try_flush(BatchUpdateContext& context)
       [&](const std::unique_ptr<InMemoryNode>& node) -> Status {
         return node->try_flush(context);
       });
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Status Subtree::force_flush_all(const TreeOptions& tree_options,
+                                ParentNodeHeight parent_height,
+                                BatchUpdateContext& update_context,
+                                const KeyView& key_upper_bound,
+                                IsRoot is_root)
+{
+  BATT_CHECK(!this->locked_.load());
+
+  BATT_REQUIRE_OK(batt::case_of(
+      this->impl_,
+
+      [&](const llfs::PageIdSlot& page_id_slot [[maybe_unused]]) -> Status {
+        return {batt::StatusCode::kUnimplemented};
+      },
+
+      [&](const std::unique_ptr<InMemoryLeaf>& leaf [[maybe_unused]]) -> Status {
+        return OkStatus();
+      },
+
+      [&](const std::unique_ptr<InMemoryNode>& node) -> Status {
+        // Iterate through all pivots, repeatedly flushing from the buffer until there are no bytes
+        // pending.
+        //
+        for (usize pivot_i = 0; pivot_i < node->pivot_count(); ++pivot_i) {
+          BATT_CHECK_LT(pivot_i, node->pending_bytes.size());
+          for (;;) {
+            const usize pivot_count_before_flush = node->pivot_count();
+            const usize pivot_bytes_pending_before_flush = node->pending_bytes[pivot_i];
+            if (pivot_bytes_pending_before_flush == 0) {
+              break;
+            }
+            BATT_REQUIRE_OK(node->flush_to_pivot(update_context, pivot_i));
+            BATT_CHECK(batt::is_case<Viable>(node->children[pivot_i].get_viability()));
+
+            if (pivot_count_before_flush == node->pivot_count()) {
+              BATT_CHECK_LT(node->pending_bytes[pivot_i], pivot_bytes_pending_before_flush);
+            } else {
+              --pivot_i;
+              break;
+            }
+          }
+        }
+
+        // Now recursively call force_flush_all on all subtrees.
+        //
+        for (usize pivot_i = 0; pivot_i < node->pivot_count(); ++pivot_i) {
+          BATT_CHECK_LT(pivot_i, node->children.size());
+          BATT_CHECK_EQ(node->height, parent_height - 1);
+
+          Subtree& child_subtree = node->children[pivot_i];
+          Status child_status =
+              child_subtree.force_flush_all(tree_options,
+                                            ParentNodeHeight{node->height},
+                                            update_context,
+                                            /*key_upper_bound=*/node->get_pivot_key(pivot_i + 1),
+                                            IsRoot{false});
+
+          if (child_status == batt::StatusCode::kUnimplemented) {
+            continue;
+          }
+          BATT_REQUIRE_OK(child_status);
+          BATT_REQUIRE_OK(node->make_child_viable(update_context, pivot_i));
+
+          BATT_CHECK(batt::is_case<Viable>(node->children[pivot_i].get_viability()));
+        }
+
+        // Sanity check: make sure the buffer at this level is now empty.
+        //
+        for (usize pivot_i = 0; pivot_i < node->pivot_count(); ++pivot_i) {
+          BATT_CHECK_LT(pivot_i, node->pending_bytes.size());
+          BATT_CHECK_EQ(node->pending_bytes[pivot_i], 0);
+        }
+
+        return OkStatus();
+      }));
+
+  // If this is the root level and tree needs to grow/shrink in height, do so now.
+  //
+  if (is_root) {
+    BATT_REQUIRE_OK(
+        Subtree::make_root_viable(*this, tree_options, update_context, key_upper_bound));
+  } else {
+  }
+
+  return OkStatus();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

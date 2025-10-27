@@ -261,6 +261,22 @@ std::vector<ConfigParam> initialize_config_params()
       DefaultFormatter::instance(),
   });
 
+  //----- --- -- -  -  -   -
+  // b-tree mode
+  //
+  static TypePropertyGetter<TreeOptions, bool> b_tree_mode_getter{
+      &TreeOptions::is_b_tree_mode_enabled};
+  static TypePropertySetter<TreeOptions, bool> b_tree_mode_setter{
+      &TreeOptions::set_b_tree_mode_enabled};
+
+  params.push_back(ConfigParam{
+      "b_tree_mode",
+      b_tree_mode_getter,
+      b_tree_mode_setter,
+      DefaultParser<bool>::instance(),
+      DefaultFormatter::instance(),
+  });
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
   // KVStoreRuntimeOptions
 

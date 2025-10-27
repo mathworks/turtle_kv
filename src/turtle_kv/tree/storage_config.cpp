@@ -18,7 +18,10 @@ llfs::PageCacheOptions page_cache_options_from(const TreeOptions& tree_options,
   std::set<llfs::PageSize> sharded_leaf_views;
 
   sharded_leaf_views.insert(llfs::PageSize{4 * kKiB});
-  sharded_leaf_views.insert(tree_options.trie_index_sharded_view_size());
+
+  if (tree_options.trie_index_reserve_size() != 0) {
+    sharded_leaf_views.insert(tree_options.trie_index_sharded_view_size());
+  }
 
   for (llfs::PageSize view_size : sharded_leaf_views) {
     if (tree_options.leaf_size() != view_size) {

@@ -44,6 +44,8 @@ inline std::ostream& operator<<(std::ostream& out, const NeedsMerge& t)
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 //
 struct NeedsSplit {
+  usize pivot_count = 0;
+
   bool items_too_large : 1 = false;
   bool keys_too_large : 1 = false;
   bool too_many_pivots : 1 = false;
@@ -62,13 +64,13 @@ struct NeedsSplit {
   }
 };
 
-BATT_STATIC_ASSERT_EQ(sizeof(NeedsSplit), 1);
+BATT_STATIC_ASSERT_EQ(sizeof(NeedsSplit), 16);
 
 inline std::ostream& operator<<(std::ostream& out, const NeedsSplit& t)
 {
   return out << "NeedsSplit{.items_too_large=" << t.items_too_large
              << ", .keys_too_large=" << t.keys_too_large
-             << ", .too_many_pivots=" << t.too_many_pivots
+             << ", .too_many_pivots=" << t.too_many_pivots << ", .pivot_count=" << t.pivot_count
              << ", .too_many_segments=" << t.too_many_segments
              << ", .flushed_item_counts_too_large=" << t.flushed_item_counts_too_large << ",}";
 }

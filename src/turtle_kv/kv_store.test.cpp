@@ -51,7 +51,8 @@ TEST(KVStoreTest, CreateAndOpen)
   std::thread test_thread{[&] {
     BATT_CHECK_OK(batt::pin_thread_to_cpu(0));
 
-    for (bool size_tiered : {false, true}) {
+    for (const auto& [size_tiered, b_tree_mode] :
+         std::array<std::pair<bool, bool>, 3>{{{false, false}, {true, false}, {false, true}}}) {
       KVStore::Config kv_store_config = KVStore::Config::with_default_values();
 
       kv_store_config.initial_capacity_bytes = 512 * kMiB;
@@ -65,10 +66,11 @@ TEST(KVStoreTest, CreateAndOpen)
       tree_options.set_leaf_size(1 * kMiB);
       tree_options.set_key_size_hint(24);
       tree_options.set_value_size_hint(10);
-      if (!size_tiered) {
+      if (!size_tiered && !b_tree_mode) {
         tree_options.set_buffer_level_trim(3);
       }
       tree_options.set_size_tiered(size_tiered);
+      tree_options.set_b_tree_mode_enabled(b_tree_mode);
 
       auto runtime_options = KVStore::RuntimeOptions::with_default_values();
       runtime_options.use_threaded_checkpoint_pipeline = true;
@@ -149,8 +151,8 @@ TEST(KVStoreTest, CreateAndOpen)
             double rate =
                 (time_points[i].op_count - time_points[i - 1].op_count) / std::max(1e-10, elapsed);
 
-            LOG(INFO) << BATT_INSPECT(chi) << " | " << time_points[i].label << ": " << rate
-                      << " ops/sec";
+            LOG(INFO) << "st:" << size_tiered << " bt:" << b_tree_mode << BATT_INSPECT(chi) << " | "
+                      << time_points[i].label << ": " << rate << " ops/sec";
           }
         }
       }
