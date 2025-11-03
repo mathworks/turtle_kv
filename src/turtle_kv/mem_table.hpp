@@ -78,6 +78,14 @@ class MemTable : public batt::RefCounted<MemTable>
   static constexpr u32 kCompactionState_InProgress = 1;
   static constexpr u32 kCompactionState_Complete = 3;
 
+  /** \brief this->magic_num_ is initialized to this value when a MemTable is constructed.
+   */
+  static constexpr u64 kAliveMagicNum = 0xeeb37c44b3a4598dull;
+
+  /** \brief this->magic_num_ is set to this value when a MemTable is destructed.
+   */
+  static constexpr u64 kDeadMagicNum = 0xc910d14e24d0a51aull;
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   static constexpr u64 first_id()
@@ -237,6 +245,8 @@ class MemTable : public batt::RefCounted<MemTable>
   std::vector<EditView> compact_art_index();
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  std::atomic<u64> magic_num_{Self::kAliveMagicNum};
 
   llfs::PageCache& page_cache_;
 

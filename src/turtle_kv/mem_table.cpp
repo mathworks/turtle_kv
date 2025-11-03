@@ -83,6 +83,10 @@ TURTLE_KV_ENV_PARAM(u32, turtlekv_memtable_hash_bucket_div, 32);
 //
 MemTable::~MemTable() noexcept
 {
+  // Try to detect double-deletions.
+  //
+  BATT_CHECK_EQ(this->magic_num_.exchange(Self::kDeadMagicNum), Self::kAliveMagicNum);
+
   for (ChangeLogWriter::BlockBuffer* buffer : this->blocks_) {
     buffer->remove_ref(1);
   }

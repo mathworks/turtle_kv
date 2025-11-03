@@ -77,6 +77,12 @@ class ShardedKeyValueSlice
       return unpack_value_view(pkv.value_data(), pkv.value_size());
     }
 
+#if TURTLE_KV_PACK_KEYS_TOGETHER
+
+    return pkv.shifted_value_view(this->key_data_offset_);
+
+#else  // TURTLE_KV_PACK_KEYS_TOGETHER
+
     // Sanity checks to assert that all the necessary member variables used to load value data are
     // set.
     //
@@ -114,10 +120,13 @@ class ShardedKeyValueSlice
 
     return unpack_value_view(pkv.shifted_value_data(this->key_data_offset_) + value_offset_delta,
                              value_size);
+
+#endif  // TURTLE_KV_PACK_KEYS_TOGETHER
   }
 
   inline void drop_front()
   {
+#if !TURTLE_KV_PACK_KEYS_TOGETHER
     // Before we call drop_front on the slice, update this->value_data_lower_bound_ to reflect the
     // page offset for the new front value's data start. We only need to do this if the slice is in
     // a sharded state and if drop_front won't make the slice empty.
@@ -126,6 +135,7 @@ class ShardedKeyValueSlice
       const PackedKeyValue& pkv = this->kv_range_.front();
       this->value_data_lower_bound_ += pkv.shifted_value_size(this->key_data_offset_);
     }
+#endif  // !TURTLE_KV_PACK_KEYS_TOGETHER
 
     this->kv_range_.drop_front();
   }

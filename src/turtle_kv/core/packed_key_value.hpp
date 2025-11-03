@@ -1,5 +1,8 @@
 #pragma once
 
+#include <turtle_kv/config.hpp>
+//
+
 #include <turtle_kv/core/key_view.hpp>
 #include <turtle_kv/core/packed_value_offset.hpp>
 #include <turtle_kv/core/value_view.hpp>
@@ -29,7 +32,44 @@ inline ValueView unpack_value_view(const ConstBuffer& buffer)
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 //
+// When TURTLE_KV_PACK_KEYS_TOGETHER is 1, this struct points to a data region
+// with this layout:
+//
+// ┌────────────┬───────────────────────┬───────────────────────────────┐
+// │key_size:u16│       key bytes       │          value bytes          │
+// └────────────┴───────────────────────┴───────────────────────────────┘
+//               ◀──────key_size───────▶
+//
+//
 struct PackedKeyValue {
+  using Self = PackedKeyValue;
+
+#if TURTLE_KV_PACK_KEYS_TOGETHER
+
+  using PackedKeySize = little_u16;
+
+  static KeyView key_view_from_data_begin(const void* p_data_begin)
+  {
+    auto* p_key_size = static_cast<const PackedKeySize*>(p_data_begin);
+    const char* key_begin = reinterpret_cast<const char*>(p_key_size + 1);
+
+    return KeyView{key_begin, *p_key_size};
+  }
+
+  static ValueView value_view_from_data(const void* p_data_begin, usize data_size)
+  {
+    auto* p_key_size = static_cast<const PackedKeySize*>(p_data_begin);
+    const char* key_begin = reinterpret_cast<const char*>(p_key_size + 1);
+    const char* value_begin = key_begin + *p_key_size;
+    const usize value_size = data_size - (sizeof(PackedKeySize) + *p_key_size);
+
+    return unpack_value_view(value_begin, value_size);
+  }
+
+#endif  // TURTLE_KV_PACK_KEYS_TOGETHER
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
   u32 key_offset;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -49,27 +89,74 @@ struct PackedKeyValue {
     return *(this + 1);
   }
 
+  BATT_ALWAYS_INLINE const char* data_begin() const
+  {
+    return ((const char*)this) + this->key_offset;
+  }
+
+#if TURTLE_KV_PACK_KEYS_TOGETHER
+
+  BATT_ALWAYS_INLINE void set_data_begin(const void* ptr)
+  {
+    this->key_offset = byte_distance(this, ptr);
+  }
+
+  BATT_ALWAYS_INLINE const char* shifted_data_begin(isize offset_delta) const
+  {
+    return this->data_begin() + offset_delta;
+  }
+
+  BATT_ALWAYS_INLINE usize data_size() const
+  {
+    return (this->next().data_begin() - this->data_begin());
+  }
+
+#else  // TURTLE_KV_PACK_KEYS_TOGETHER
+
   void set_key_data(const void* ptr)
   {
     this->key_offset = byte_distance(this, ptr);
   }
 
+#endif  // TURTLE_KV_PACK_KEYS_TOGETHER
+
   BATT_ALWAYS_INLINE const char* key_data() const
   {
-    return ((const char*)this) + this->key_offset;
+#if TURTLE_KV_PACK_KEYS_TOGETHER
+    return this->data_begin() + sizeof(PackedKeySize);
+#else
+    return this->data_begin();
+#endif
   }
 
   BATT_ALWAYS_INLINE usize key_size() const
   {
+#if TURTLE_KV_PACK_KEYS_TOGETHER
+    return reinterpret_cast<const PackedKeySize*>(this->data_begin())->value();
+#else
     return (this->next().key_data() - this->key_data()) - sizeof(PackedValueOffset);
+#endif
   }
 
   BATT_ALWAYS_INLINE KeyView key_view() const
   {
+#if TURTLE_KV_PACK_KEYS_TOGETHER
+    return Self::key_view_from_data_begin(this->data_begin());
+#else
     return KeyView{this->key_data(), this->key_size()};
+#endif
   }
 
   //----- --- -- -  -  -   -
+
+#if TURTLE_KV_PACK_KEYS_TOGETHER
+
+  BATT_ALWAYS_INLINE KeyView shifted_key_view(isize offset_delta) const
+  {
+    return Self::key_view_from_data_begin(this->shifted_data_begin(offset_delta));
+  }
+
+#else  // TURTLE_KV_PACK_KEYS_TOGETHER
 
   BATT_ALWAYS_INLINE const char* shifted_key_data(isize offset_delta) const
   {
@@ -81,7 +168,23 @@ struct PackedKeyValue {
     return KeyView{this->shifted_key_data(offset_delta), this->key_size()};
   }
 
+#endif  // TURTLE_KV_PACK_KEYS_TOGETHER
+
   //----- --- -- -  -  -   -
+
+#if TURTLE_KV_PACK_KEYS_TOGETHER
+
+  BATT_ALWAYS_INLINE const char* value_data() const
+  {
+    return this->key_data() + this->key_size();
+  }
+
+  BATT_ALWAYS_INLINE usize value_size() const
+  {
+    return this->data_size() - (this->key_size() + sizeof(PackedKeySize));
+  }
+
+#else  // TURTLE_KV_PACK_KEYS_TOGETHER
 
   const PackedValueOffset& value_offset() const
   {
@@ -98,7 +201,23 @@ struct PackedKeyValue {
     return this->next().value_data() - this->value_data();
   }
 
+#endif  // TURTLE_KV_PACK_KEYS_TOGETHER
+
   //----- --- -- -  -  -   -
+
+#if TURTLE_KV_PACK_KEYS_TOGETHER
+
+  BATT_ALWAYS_INLINE ValueView value_view() const
+  {
+    return Self::value_view_from_data(this->data_begin(), this->data_size());
+  }
+
+  BATT_ALWAYS_INLINE ValueView shifted_value_view(isize offset_delta) const
+  {
+    return Self::value_view_from_data(this->shifted_data_begin(offset_delta), this->data_size());
+  }
+
+#else  // TURTLE_KV_PACK_KEYS_TOGETHER
 
   const PackedValueOffset& shifted_value_offset(isize offset_delta) const
   {
@@ -141,6 +260,8 @@ struct PackedKeyValue {
   {
     return unpack_value_view(this->value_data(), this->value_size());
   }
+
+#endif  // TURTLE_KV_PACK_KEYS_TOGETHER
 
 }
 //

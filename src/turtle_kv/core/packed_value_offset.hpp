@@ -8,6 +8,8 @@
 
 namespace turtle_kv {
 
+#if !TURTLE_KV_PACK_KEYS_TOGETHER
+
 struct PackedValueOffset {
   PackedValueOffset(const PackedValueOffset&) = delete;
   PackedValueOffset& operator=(const PackedValueOffset&) = delete;
@@ -28,5 +30,7 @@ struct PackedValueOffset {
 
 BATT_STATIC_ASSERT_EQ(sizeof(PackedValueOffset), 4);
 BATT_STATIC_ASSERT_EQ(alignof(PackedValueOffset), 1);
+
+#endif
 
 }  // namespace turtle_kv

@@ -120,12 +120,22 @@ class ShardedLeafPageScanner
     // Calculate the byte range slice of the page containing the items to search.
     //
     const PackedKeyValue* head_items = this->header_->items->data();
+
+#if TURTLE_KV_PACK_KEYS_TOGETHER
+    const Interval<usize> items_page_slice{
+        (usize)byte_distance(this->page_start_, head_items + this->item_range_->lower_bound),
+        (usize)byte_distance(this->page_start_, head_items + (this->item_range_->upper_bound + 1)),
+        //                                                                                     △
+        //                  1 more for the next key so we know the data size of the last item ─┘
+    };
+#else
     const Interval<usize> items_page_slice{
         (usize)byte_distance(this->page_start_, head_items + this->item_range_->lower_bound),
         (usize)byte_distance(this->page_start_, head_items + (this->item_range_->upper_bound + 2)),
         //                                                                                     △
         //                1 for the next key so we know key length, 1 more for the next value ─┘
     };
+#endif
 
     // Load the shard containing the desired slice of items.
     //
@@ -151,12 +161,19 @@ class ShardedLeafPageScanner
     {
       // Start with the key data range for all loaded items.
       //
+#if TURTLE_KV_PACK_KEYS_TOGETHER
+      const Interval<usize> unaligned_key_data_page_slice{
+          (usize)(items_page_slice.lower_bound + this->loaded_items_.begin()->key_offset),
+          (usize)(items_page_slice.upper_bound + this->loaded_items_.end()->key_offset),
+      };
+#else
       const Interval<usize> unaligned_key_data_page_slice{
           (usize)(items_page_slice.lower_bound + this->loaded_items_.begin()->key_offset),
           (usize)(items_page_slice.upper_bound + (this->loaded_items_.end() + 1)->key_offset),
-          //                                                                   △
-          //                1 more for the next value, so we know values size ─┘
+          //                                                                  △
+          //               1 more for the next value, so we know values size ─┘
       };
+#endif
 
       // Find the end of key data for the minimum possible number of keys to keep.  The actual
       // loaded slice must be at least this large (key_data_min_upper_bound).
@@ -165,7 +182,9 @@ class ShardedLeafPageScanner
       if (last_item_i) {
         min_to_load = std::max<usize>(min_to_load, *last_item_i - first_item_i);
       }
+#if !TURTLE_KV_PACK_KEYS_TOGETHER
       ++min_to_load;
+#endif
       const usize key_data_min_upper_bound =
           items_page_slice.lower_bound + (this->loaded_items_[min_to_load].key_offset  //
                                           + sizeof(PackedKeyValue) * min_to_load);
@@ -280,8 +299,12 @@ class ShardedLeafPageScanner
    */
   KeyView front_key() const noexcept
   {
+#if TURTLE_KV_PACK_KEYS_TOGETHER
+    return PackedKeyValue::key_view_from_data_begin(this->key_data_start_);
+#else
     return KeyView{static_cast<const char*>(this->key_data_start_),
                    this->loaded_items_.front().key_size()};
+#endif
   }
 
   /** \brief Loads and returns the value associated with the current key.
@@ -290,6 +313,10 @@ class ShardedLeafPageScanner
    */
   StatusOr<ValueView> front_value() noexcept
   {
+#if TURTLE_KV_PACK_KEYS_TOGETHER
+    return PackedKeyValue::value_view_from_data(this->key_data_start_,
+                                                this->loaded_items_.front().data_size());
+#else
     // Calculate the location within the page containing the value data.
     //
     const PackedKeyValue& key0 = this->loaded_items_[0];
@@ -322,6 +349,7 @@ class ShardedLeafPageScanner
                                        llfs::LruPriority{kLeafValueDataShardLruPriority}));
 
     return unpack_value_view(value_data_buffer);
+#endif
   }
 
   /** \brief Drops one (or more) items from the front of the current range.
@@ -344,6 +372,21 @@ class ShardedLeafPageScanner
     this->item_range_->lower_bound += count;
     this->loaded_items_.drop_front(count);
 
+#if TURTLE_KV_PACK_KEYS_TOGETHER
+
+    const usize new_key_data_min_size =
+        this->loaded_items_.empty() ? usize{0} : this->loaded_items_[0].data_size();
+
+    if (this->loaded_items_.empty() ||
+        (this->key_data_page_slice_.lower_bound + new_key_data_min_size) >
+            this->key_data_page_slice_.upper_bound) {
+      this->key_data_page_slice_.lower_bound = this->key_data_page_slice_.upper_bound;
+      this->loaded_items_ = as_slice(this->loaded_items_.begin(), 0);
+      this->item_range_->upper_bound = this->item_range_->lower_bound;
+    }
+
+#else
+
     // Check that we still have at least two keys' worth of data (we need both to find the correct
     // size of the value of the front key).
     //
@@ -360,6 +403,8 @@ class ShardedLeafPageScanner
       this->loaded_items_ = as_slice(this->loaded_items_.begin(), 0);
       this->item_range_->upper_bound = this->item_range_->lower_bound;
     }
+
+#endif
   }
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -411,8 +456,14 @@ class ShardedLeafPageScanner
     const usize first_item_offset = items_page_offset + (first_item_i * sizeof(PackedKeyValue));
     const usize end_of_shard_offset = Self::round_up_to_shard_offset(first_item_offset + 1);
     usize end_of_shard_item_i = (end_of_shard_offset - items_page_offset) / sizeof(PackedKeyValue);
+
+#if TURTLE_KV_PACK_KEYS_TOGETHER
+    if (end_of_shard_item_i > 1) {
+      end_of_shard_item_i -= 1;
+#else
     if (end_of_shard_item_i > 2) {
       end_of_shard_item_i -= 2;
+#endif
     } else {
       end_of_shard_item_i = 0;
     }

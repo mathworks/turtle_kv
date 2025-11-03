@@ -775,7 +775,11 @@ Status KVStore::update_checkpoint(const State* observed_state)
   });
 
   for (;;) {
+    // Multiple threads are potentially racing to install a new active MemTable;
+    // the important thing is that the old mem table has been replaced.
+    //
     if (observed_state->mem_table_ != old_mem_table) {
+      BATT_CHECK_NE(observed_state, new_state);
       BATT_CHECK_EQ(new_state->use_count(), 1);
       intrusive_ptr_release(new_state);
       return OkStatus();
@@ -1106,7 +1110,7 @@ void KVStore::add_obsolete_state(const State* old_state)
 void KVStore::epoch_thread_main()
 {
   constexpr i64 kMinEpochUsec = 12500;
-  constexpr i64 kMaxEpochUsec = 15000;
+  constexpr i64 kMaxEpochUsec = 25000;
 
   std::default_random_engine rng{std::random_device{}()};
   std::uniform_int_distribution<i64> pick_delay_usec{kMinEpochUsec, kMaxEpochUsec};

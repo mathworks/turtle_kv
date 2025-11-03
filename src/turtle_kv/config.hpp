@@ -56,6 +56,11 @@
  */
 #define TURTLE_KV_ENABLE_METRICS 1
 
+/** \brief Changes layout of leaf pages: if 1, then keys and values are packed together, else (if
+ * 0), keys are packed with keys, values with values.
+ */
+#define TURTLE_KV_PACK_KEYS_TOGETHER 1
+
 namespace turtle_kv {
 
 constexpr i64 kNodeLruPriority = 4;

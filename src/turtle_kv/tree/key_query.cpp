@@ -246,10 +246,18 @@ StatusOr<ValueView> find_key_in_leaf_using_sharded_views(llfs::PageId leaf_page_
   // know the size of the key after that in order to know the value size.
   //
   const PackedKeyValue* head_items = packed_leaf_page.items->data();
+
+#if TURTLE_KV_PACK_KEYS_TOGETHER
+  const Interval<usize> items_slice{
+      (usize)byte_distance(page_start, head_items + search_range.lower_bound),
+      (usize)byte_distance(page_start, head_items + (search_range.upper_bound + 1)),
+  };
+#else
   const Interval<usize> items_slice{
       (usize)byte_distance(page_start, head_items + search_range.lower_bound),
       (usize)byte_distance(page_start, head_items + (search_range.upper_bound + 2)),
   };
+#endif
 
   // To binary-search the keys, we must pin *both* the portion of the items array we will
   // access (items_slice) *and* the key data pointed to by those items.  Once both are pinned,
@@ -266,13 +274,20 @@ StatusOr<ValueView> find_key_in_leaf_using_sharded_views(llfs::PageId leaf_page_
   const auto items_begin = (const PackedKeyValue*)items_buffer.data();
   const auto items_end = items_begin + search_range.size();
 
-  // We must include the data of the two keys beyond the nominal search range; since
-  // `items_end` is already one past, we must add one to that to get the final upper bound.
-  //
+// We must include the data of the two keys beyond the nominal search range; since
+// `items_end` is already one past, we must add one to that to get the final upper bound.
+//
+#if TURTLE_KV_PACK_KEYS_TOGETHER
+  Interval<usize> key_data_slice{
+      (usize)(items_slice.lower_bound + items_begin->key_offset),
+      (usize)(items_slice.upper_bound + items_end->key_offset),
+  };
+#else
   Interval<usize> key_data_slice{
       (usize)(items_slice.lower_bound + items_begin->key_offset),
       (usize)(items_slice.upper_bound + (items_end + 1)->key_offset),
   };
+#endif
 
   PageSliceStorage key_data_storage;
   BATT_ASSIGN_OK_RESULT(ConstBuffer key_data_buffer,
@@ -328,6 +343,12 @@ StatusOr<ValueView> find_key_in_leaf_using_sharded_views(llfs::PageId leaf_page_
 
   VLOG(1) << "Key matches!" << BATT_INSPECT(item_index_out) << " Reading value";
 
+#if TURTLE_KV_PACK_KEYS_TOGETHER
+
+  return found_item->shifted_value_view(offset_delta);
+
+#else  // TURTLE_KV_PACK_KEYS_TOGETHER
+
   // Calculate the location within the page containing the value data.
   //
   Interval<usize> value_data_slice;
@@ -348,6 +369,8 @@ StatusOr<ValueView> find_key_in_leaf_using_sharded_views(llfs::PageId leaf_page_
                                                 llfs::LruPriority{kLeafValueDataShardLruPriority}));
 
   return unpack_value_view(value_data_buffer);
+
+#endif  // TURTLE_KV_PACK_KEYS_TOGETHER
 }
 
 }  // namespace

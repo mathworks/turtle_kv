@@ -113,7 +113,11 @@ struct PackedLeafPage {
     if (payload_size) {
       BATT_CHECK_GE(*payload_size, this->total_packed_size);
     }
+#if TURTLE_KV_PACK_KEYS_TOGETHER
+    BATT_CHECK_EQ(this->key_count, this->items->size() - 1);
+#else
     BATT_CHECK_EQ(this->key_count, this->items->size() - 2);
+#endif
   }
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -333,6 +337,13 @@ struct PackedLeafLayoutPlan {
   usize key_headers_begin;
   usize key_headers_end;
 
+#if TURTLE_KV_PACK_KEYS_TOGETHER
+
+  usize key_value_data_begin;
+  usize key_value_data_end;
+
+#else  // TURTLE_KV_PACK_KEYS_TOGETHER
+
   usize key_data_begin;
   usize key_data_end;
 
@@ -341,6 +352,17 @@ struct PackedLeafLayoutPlan {
 
   usize value_data_begin;
   usize value_data_end;
+
+#endif  // !TURTLE_KV_PACK_KEYS_TOGETHER
+
+  BATT_ALWAYS_INLINE usize get_key_value_data_end() const
+  {
+#if TURTLE_KV_PACK_KEYS_TOGETHER
+    return this->key_value_data_end;
+#else
+    return this->value_data_end;
+#endif
+  }
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -357,7 +379,7 @@ struct PackedLeafLayoutPlan {
 
   bool is_valid() const
   {
-    return this->value_data_end <= this->page_size;
+    return this->get_key_value_data_end() <= this->page_size;
   }
 
   void check_valid(std::string_view label) const;
@@ -378,12 +400,18 @@ BATT_OBJECT_PRINT_IMPL((inline),
                         key_array_header_end,
                         key_headers_begin,
                         key_headers_end,
+#if TURTLE_KV_PACK_KEYS_TOGETHER
+                        key_value_data_begin,
+                        key_value_data_end
+#else   // TURTLE_KV_PACK_KEYS_TOGETHER
                         key_data_begin,
                         key_data_end,
                         final_value_offset_begin,
                         final_value_offset_end,
                         value_data_begin,
-                        value_data_end))
+                        value_data_end
+#endif  // TURTLE_KV_PACK_KEYS_TOGETHER
+                        ))
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
@@ -410,9 +438,12 @@ class PackedLeafLayoutPlanBuilder
   Self& add(const std::string_view& key, const ValueView& value)
   {
     this->key_count += 1;
+#if TURTLE_KV_PACK_KEYS_TOGETHER
+    this->key_data_size += key.size() + sizeof(PackedKeyValue::PackedKeySize);
+#else
     this->key_data_size += key.size() + sizeof(PackedValueOffset);
+#endif
     this->value_data_size += 1 + value.size();
-
     return *this;
   }
 
@@ -442,6 +473,18 @@ class PackedLeafLayoutPlanBuilder
              plan.key_array_header_end) =  //
         append(sizeof(llfs::PackedArray<PackedKeyValue>));
 
+#if TURTLE_KV_PACK_KEYS_TOGETHER
+
+    std::tie(plan.key_headers_begin,  //
+             plan.key_headers_end) =  //
+        append(sizeof(PackedKeyValue) * (this->key_count + 1));
+
+    std::tie(plan.key_value_data_begin,  //
+             plan.key_value_data_end) =  //
+        append(this->key_data_size + this->value_data_size);
+
+#else  /// TURTLE_KV_PACK_KEYS_TOGETHER
+
     std::tie(plan.key_headers_begin,  //
              plan.key_headers_end) =  //
         append(sizeof(PackedKeyValue) * (this->key_count + 2));
@@ -458,16 +501,19 @@ class PackedLeafLayoutPlanBuilder
              plan.value_data_end) =  //
         append(this->value_data_size);
 
+#endif  // !TURTLE_KV_PACK_KEYS_TOGETHER
+
     if (check) {
       plan.check_valid("first");
     }
 
     if (plan.trie_index_reserved_size > 0) {
-      BATT_CHECK_GE(this->page_size - plan.value_data_end, plan.trie_index_reserved_size - 63);
+      BATT_CHECK_GE(this->page_size - plan.get_key_value_data_end(),
+                    plan.trie_index_reserved_size - 63);
 
       const usize space_for_trie =
           batt::round_down_bits(6,
-                                std::min(this->page_size - plan.value_data_end,  //
+                                std::min(this->page_size - plan.get_key_value_data_end(),  //
                                          plan.trie_index_reserved_size));
 
       offset = plan.leaf_header_end;
@@ -480,12 +526,17 @@ class PackedLeafLayoutPlanBuilder
                &plan.key_array_header_end,
                &plan.key_headers_begin,
                &plan.key_headers_end,
+#if TURTLE_KV_PACK_KEYS_TOGETHER
+               &plan.key_value_data_begin,
+               &plan.key_value_data_end,
+#else   // TURTLE_KV_PACK_KEYS_TOGETHER
                &plan.key_data_begin,
                &plan.key_data_end,
                &plan.final_value_offset_begin,
                &plan.final_value_offset_end,
                &plan.value_data_begin,
                &plan.value_data_end,
+#endif  // TURTLE_KV_PACK_KEYS_TOGETHER
            }) {
         *fixup += space_for_trie;
       }
@@ -526,7 +577,11 @@ struct AddLeafItemsSummary {
       return LeafItemsSummary{
           .drop_count = prior.drop_count,
           .key_count = prior.key_count + 1,
+#if TURTLE_KV_PACK_KEYS_TOGETHER
+          .key_data_size = prior.key_data_size + (edit.key.size() + 2),
+#else
           .key_data_size = prior.key_data_size + (edit.key.size() + 4),
+#endif
           .value_data_size = prior.value_data_size + (1 + edit.value.size()),
       };
     }
@@ -603,13 +658,13 @@ inline PackedLeafPage* build_leaf_page(MutableBuffer buffer,
                                        const Items& items)
 {
   BATT_CHECK_EQ(plan.key_count, std::end(items) - std::begin(items));
-  BATT_CHECK_LE(plan.value_data_end, buffer.size());
+  BATT_CHECK_LE(plan.get_key_value_data_end(), buffer.size());
 
   auto* const p_header = plan.place<PackedLeafPage>(buffer, plan.leaf_header_begin);
 
   p_header->magic = PackedLeafPage::kMagic;
   p_header->key_count = plan.key_count;
-  p_header->total_packed_size = plan.value_data_end - plan.leaf_header_begin;
+  p_header->total_packed_size = plan.get_key_value_data_end() - plan.leaf_header_begin;
 
   PackedLeafPage::Metrics& metrics = PackedLeafPage::metrics();
 
@@ -619,13 +674,64 @@ inline PackedLeafPage* build_leaf_page(MutableBuffer buffer,
   auto* const p_keys = plan.place<llfs::PackedArray<PackedKeyValue>>(buffer,  //
                                                                      plan.key_array_header_begin);
 
+#if TURTLE_KV_PACK_KEYS_TOGETHER
+  p_keys->initialize(plan.key_count + 1);
+#else
   p_keys->initialize(plan.key_count + 2);
+#endif
+
   p_keys->initialize_size_in_bytes(plan.key_headers_end - plan.key_headers_begin);
 
   BufferBoundsChecker bounds_checker{buffer};
 
   p_header->items.reset(p_keys, &bounds_checker);
 
+#if TURTLE_KV_PACK_KEYS_TOGETHER
+  {
+    auto* p_key_header = plan.place<PackedKeyValue>(buffer, plan.key_headers_begin);
+    char* p_key_value_data = plan.place<char>(buffer, plan.key_value_data_begin);
+    char* const p_key_value_data_expected_end = plan.place<char>(buffer, plan.key_value_data_end);
+
+    for (const auto& item : items) {
+      const KeyView& key_view = get_key(item);
+      const usize key_size = key_view.size();
+      const ValueView& value_view = get_value(item);
+      const usize value_size = value_view.size();
+
+      p_key_header->set_data_begin(p_key_value_data);
+
+      // Pack the key size (little-endian u16).
+      //
+      *reinterpret_cast<PackedKeyValue::PackedKeySize*>(p_key_value_data) =
+          BATT_CHECKED_CAST(u16, key_size);
+      p_key_value_data += sizeof(PackedKeyValue::PackedKeySize);
+
+      // Pack the key bytes.
+      //
+      std::memcpy(p_key_value_data, key_view.data(), key_size);
+      p_key_value_data += key_size;
+
+      // Pack the value op code.
+      //
+      *p_key_value_data = static_cast<u8>(value_view.op());
+      ++p_key_value_data;
+
+      // Pack the value bytes.
+      //
+      std::memcpy(p_key_value_data, value_view.data(), value_size);
+      p_key_value_data += value_size;
+
+      // Update the p_key_header pointer.
+      //
+      ++p_key_header;
+    }
+
+    // Set the final p_key_header offset.
+    //
+    p_key_header->set_data_begin(p_key_value_data);
+    BATT_CHECK_EQ((void*)p_key_value_data, (void*)p_key_value_data_expected_end);
+  }
+#else   // TURTLE_KV_PACK_KEYS_TOGETHER
   // First pass - write all key headers and copy all key data.
   //
   {
@@ -685,6 +791,7 @@ inline PackedLeafPage* build_leaf_page(MutableBuffer buffer,
     //
     p_key_header->set_value_data(p_value_data);
   }
+#endif  // TURTLE_KV_PACK_KEYS_TOGETHER
 
   p_header->trie_index.offset = 0;
   p_header->index_step = 0;

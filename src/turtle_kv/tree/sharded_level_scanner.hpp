@@ -736,9 +736,13 @@ inline StatusOr<SliceData> ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::init
     // page offset of the start of the value data, which will be loaded on demand.
     //
     usize front_value_lower_bound =
+#if TURTLE_KV_PACK_KEYS_TOGETHER
+        0;  // not used in this case
+#else
         key_data_slice.lower_bound +
         (usize)byte_distance(key_data_buffer->data(),
                              items_begin->shifted_value_data(offset_delta));
+#endif
 
     return SliceData{offset_delta, front_value_lower_bound, current_end_i, end_i_pkv, items_begin};
   } else {
