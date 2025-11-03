@@ -290,7 +290,7 @@ class KVStoreScanner
                           i32 tree_height,
                           const KeyView& min_key,
                           llfs::PageSize trie_index_sharded_view_size,
-                          Optional<PageSliceStorage> slice_storage) noexcept;
+                          PageSliceStorage* slice_storage) noexcept;
 
   ~KVStoreScanner() noexcept;
 

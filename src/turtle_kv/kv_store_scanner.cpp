@@ -46,10 +46,10 @@ TURTLE_KV_ENV_PARAM(bool, turtlekv_use_sharded_leaf_scanner, false);
                                             i32 tree_height,
                                             const KeyView& min_key,
                                             llfs::PageSize trie_index_sharded_view_size,
-                                            Optional<PageSliceStorage> slice_storage) noexcept
+                                            PageSliceStorage* slice_storage) noexcept
     : pinned_state_{nullptr}
     , page_loader_{page_loader}
-    , slice_storage_{slice_storage ? std::addressof(*slice_storage) : nullptr}
+    , slice_storage_{slice_storage}
     , root_{root}
     , trie_index_sharded_view_size_{trie_index_sharded_view_size}
     , tree_height_{tree_height}

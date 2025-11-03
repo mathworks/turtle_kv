@@ -60,6 +60,7 @@ using turtle_kv::NeedsSplit;
 using turtle_kv::None;
 using turtle_kv::OkStatus;
 using turtle_kv::Optional;
+using turtle_kv::PageSliceStorage;
 using turtle_kv::ParentNodeHeight;
 using turtle_kv::PinningPageLoader;
 using turtle_kv::Slice;
@@ -446,12 +447,14 @@ void SubtreeBatchUpdateScenario::run()
         std::array<std::pair<KeyView, ValueView>, kMaxScanSize> scan_items_buffer;
         KeyView min_key = update.result_set.get_min_key();
 
+        PageSliceStorage page_slice_storage;
+
         KVStoreScanner kv_scanner{*page_loader,
                                   root_ptr->page_id_slot_or_panic(),
                                   BATT_OK_RESULT_OR_PANIC(root_ptr->get_height(*page_loader)),
                                   min_key,
                                   tree_options.trie_index_sharded_view_size(),
-                                  None};
+                                  &page_slice_storage};
 
         usize n_read = 0;
         {
