@@ -488,6 +488,8 @@ StatusOr<BatchUpdate> InMemoryNode::collect_pivot_batch(BatchUpdateContext& upda
 //
 Status InMemoryNode::flush_to_pivot(BatchUpdateContext& update_context, i32 pivot_i)
 {
+  update_context.metrics.flush_count.add(1);
+
   Interval<KeyView> pivot_key_range = in_node(*this).get_pivot_key_range(pivot_i);
 
   BATT_ASSIGN_OK_RESULT(BatchUpdate child_update,
@@ -606,6 +608,8 @@ Status InMemoryNode::make_child_viable(BatchUpdateContext& update_context, i32 p
 //
 Status InMemoryNode::split_child(BatchUpdateContext& update_context, i32 pivot_i)
 {
+  update_context.metrics.split_count.add(1);
+
   Subtree& child = this->children[pivot_i];
 
   StatusOr<Optional<Subtree>> status_or_sibling = child.try_split(update_context);

@@ -521,6 +521,13 @@ void KVStore::join()
 //
 Status KVStore::put(const KeyView& key, const ValueView& value) noexcept /*override*/
 {
+#if TURTLE_KV_PROFILE_UPDATES
+  this->metrics_.put_count.add(1);
+  LatencyTimer put_timer{Every2ToTheConst<8>{}, this->metrics_.put_latency};
+#endif
+
+  // Pin the current state so we can access the active MemTable.
+  //
   const State* const observed_state = this->state_.load();
   BATT_CHECK_GT(observed_state->use_count(), 0);
 
@@ -533,10 +540,31 @@ Status KVStore::put(const KeyView& key, const ValueView& value) noexcept /*overr
   ChangeLogWriter::Context& log_writer_context =
       this->per_thread_.get(this).log_writer_context(observed_mem_table_id);
 
+#if TURTLE_KV_PROFILE_UPDATES
+  LatencyTimer put_memtable_timer{Every2ToTheConst<8>{}, this->metrics_.put_memtable_latency};
+#endif
+
+  // Insert the key/value pair into the active MemTable; this will also append a change log buffer.
+  //
   Status status = observed_mem_table->put(log_writer_context, key, value);
 
+#if TURTLE_KV_PROFILE_UPDATES
+  put_memtable_timer.stop();
+#endif
+
+  // If the MemTable is too full to accept this update, then finalize the current MemTable and try
+  // again.
+  //
   if (status == batt::StatusCode::kResourceExhausted) {
+#if TURTLE_KV_PROFILE_UPDATES
+    this->metrics_.put_memtable_full_count.add(1);
+#endif
+
     BATT_REQUIRE_OK(this->update_checkpoint(observed_state));
+
+#if TURTLE_KV_PROFILE_UPDATES
+    LatencyTimer put_wait_trim_timer{this->metrics_.put_wait_trim_latency};
+#endif
 
     // Limit the number of deltas that can build up.
     //
@@ -544,6 +572,13 @@ Status KVStore::put(const KeyView& key, const ValueView& value) noexcept /*overr
       return n <= this->checkpoint_distance_.load() * 2;
     }));
 
+#if TURTLE_KV_PROFILE_UPDATES
+    put_wait_trim_timer.stop();
+    this->metrics_.put_retry_count.add(1);
+#endif
+
+    // Now that we have a new MemTable with plenty of space, try again.
+    //
     return this->put(key, value);
   }
 
@@ -753,6 +788,10 @@ Status KVStore::remove(const KeyView& key) noexcept /*override*/
 //
 Status KVStore::update_checkpoint(const State* observed_state)
 {
+#if TURTLE_KV_PROFILE_UPDATES
+  LatencyTimer memtable_create_timer{this->metrics_.put_memtable_create_latency};
+#endif
+
   // Gather some information from the current MemTable before we send it off.
   //
   boost::intrusive_ptr<MemTable> old_mem_table = observed_state->mem_table_;
@@ -799,6 +838,10 @@ Status KVStore::update_checkpoint(const State* observed_state)
   }
   this->deltas_size_->fetch_add(1);
 
+#if TURTLE_KV_PROFILE_UPDATES
+  memtable_create_timer.stop();
+#endif
+
   // Since we successfully exchanged the successor to `observed_state`, when this scope exits we
   // must release the ref count once after adding the old state to the obsolete states list.
   // Eventually it will be cleaned up by the epoch thread.
@@ -822,6 +865,10 @@ Status KVStore::update_checkpoint(const State* observed_state)
 
   //----- --- -- -  -  -   -
   if (this->runtime_options_.use_threaded_checkpoint_pipeline) {
+#if TURTLE_KV_PROFILE_UPDATES
+    LatencyTimer queue_push_timer{this->metrics_.put_memtable_queue_push_latency};
+#endif
+
     const usize i = this_mem_table_id % this->memtable_compact_channels_.size();
     BATT_REQUIRE_OK(this->memtable_compact_channels_[i].write(std::move(old_mem_table)));
 
@@ -932,8 +979,8 @@ StatusOr<std::unique_ptr<CheckpointJob>> KVStore::apply_batch_to_checkpoint(
     // Apply the finalized MemTable to the current checkpoint (in-memory).
     //
     StatusOr<usize> push_status =
-        TURTLE_KV_COLLECT_LATENCY(this->metrics_.push_batch_latency,
-                                  this->checkpoint_generator_.push_batch(std::move(delta_batch)));
+        TURTLE_KV_COLLECT_LATENCY(this->metrics_.apply_batch_latency,
+                                  this->checkpoint_generator_.apply_batch(std::move(delta_batch)));
 
     BATT_REQUIRE_OK(push_status);
     BATT_CHECK_EQ(*push_status, 1);
@@ -1211,8 +1258,12 @@ void KVStore::collect_stats(
   [[maybe_unused]] const double space_amp =
       (double)on_disk_footprint / (double)change_log_writer.received_user_byte_count.get();
 
-  fn("kv_store.mem_table_get.count", kv_store.mem_table_get_count.get());
+  const auto emit_latency = [&fn](std::string_view name, const LatencyMetric& metric) {
+    fn(batt::to_string(name, ".count"), metric.count.get());
+    fn(batt::to_string(name, ".seconds"), metric.total_seconds());
+  };
 
+  fn("kv_store.mem_table_get.count", kv_store.mem_table_get_count.get());
   fn("kv_store.delta_001_get.count", kv_store.delta_log2_get_count[0].get());
   fn("kv_store.delta_002_get.count", kv_store.delta_log2_get_count[1].get());
   fn("kv_store.delta_004_get.count", kv_store.delta_log2_get_count[2].get());
@@ -1221,13 +1272,12 @@ void KVStore::collect_stats(
   fn("kv_store.delta_032_get.count", kv_store.delta_log2_get_count[5].get());
   fn("kv_store.delta_064_get.count", kv_store.delta_log2_get_count[6].get());
   fn("kv_store.delta_128_get.count", kv_store.delta_log2_get_count[7].get());
-
-  fn("kv_store.delta_get_latency.count", kv_store.delta_get_latency.count.get());
-  fn("kv_store.delta_get_latency.seconds", kv_store.delta_get_latency.total_seconds());
-
+  fn("kv_store.delta_256_get.count", kv_store.delta_log2_get_count[8].get());
+  fn("kv_store.delta_512_get.count", kv_store.delta_log2_get_count[9].get());
   fn("kv_store.checkpoint_get.count", kv_store.checkpoint_get_count.get());
-  fn("kv_store.checkpoint_get_latency.count", kv_store.checkpoint_get_latency.count.get());
-  fn("kv_store.checkpoint_get_latency.seconds", kv_store.checkpoint_get_latency.total_seconds());
+
+  emit_latency("kv_store.delta_get_latency", kv_store.delta_get_latency);
+  emit_latency("kv_store.checkpoint_get_latency", kv_store.checkpoint_get_latency);
 
   //  << BATT_INSPECT(kv_store.checkpoint_pinned_pages_stats) << "\n"                //
 
@@ -1268,10 +1318,59 @@ void KVStore::collect_stats(
   fn("leaf.find_key_latency.count", PackedLeafPage::metrics().find_key_latency.count.get());
   fn("leaf.find_key_latency.seconds", PackedLeafPage::metrics().find_key_latency.total_seconds());
 
+#if TURTLE_KV_PROFILE_UPDATES
+
+  fn("kv_store.put.count", kv_store.put_count.get());
+  fn("kv_store.put_retry.count", kv_store.put_retry_count.get());
+  fn("kv_store.put_memtable_full.count", kv_store.put_memtable_full_count.get());
+  emit_latency("kv_store.put_latency", kv_store.put_latency);
+  emit_latency("kv_store.put_memtable_latency", kv_store.put_memtable_latency);
+  emit_latency("kv_store.put_wait_trim_latency", kv_store.put_wait_trim_latency);
+  emit_latency("kv_store.put_memtable_create_latency", kv_store.put_memtable_create_latency);
+  emit_latency("kv_store.put_memtable_queue_push_latency",
+               kv_store.put_memtable_queue_push_latency);
+
+#endif  // TURTLE_KV_PROFILE_UPDATES
+
+  fn("kv_store.checkpoint.count", kv_store.checkpoint_count.get());
+  fn("kv_store.batch_edits.count", kv_store.batch_edits_count.get());
+  emit_latency("kv_store.compact_batch_latency", kv_store.compact_batch_latency);
+  emit_latency("kv_store.apply_batch_latency", kv_store.apply_batch_latency);
+  emit_latency("kv_store.finalize_checkpoint_latency", kv_store.finalize_checkpoint_latency);
+  emit_latency("kv_store.append_job_latency", kv_store.append_job_latency);
+
   for (usize i = 0; i < SubtreeMetrics::kMaxTreeHeight + 1; ++i) {
     const double value = Subtree::metrics().batch_count_per_height[i].get();
     fn(batt::to_string("subtree.batch_count_height_", std::setw(2), std::setfill('0'), i), value);
   }
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+  // Report checkpoint generator metrics.
+  //
+  auto& checkpoint = this->checkpoint_generator_.metrics();
+
+  emit_latency("checkpoint.serialize_latency", checkpoint.serialize_latency);
+  emit_latency("checkpoint.force_flush_all_latency", checkpoint.force_flush_all_latency);
+
+  // Checkpoint -> Batch Update Metrics
+  //
+  fn("checkpoint.batch_update.merge_compact.count",
+     checkpoint.batch_update.merge_compact_count.get());
+
+  fn("checkpoint.batch_update.running_total.count",
+     checkpoint.batch_update.running_total_count.get());
+
+  fn("checkpoint.batch_update.flush.count",  //
+     checkpoint.batch_update.flush_count.get());
+
+  fn("checkpoint.batch_update.split.count",  //
+     checkpoint.batch_update.split_count.get());
+
+  emit_latency("checkpoint.batch_update.merge_compact_latency",
+               checkpoint.batch_update.merge_compact_latency);
+
+  emit_latency("checkpoint.batch_update.running_total_latency",
+               checkpoint.batch_update.running_total_latency);
 
 #if 0
   << "\n"                                                                        //

@@ -134,6 +134,7 @@ class Checkpoint
   StatusOr<Checkpoint> flush_batch(batt::WorkerPool& worker_pool,
                                    llfs::PageCacheJob& job,
                                    const TreeOptions& tree_options,
+                                   BatchUpdateMetrics& metrics,
                                    std::unique_ptr<DeltaBatch>&& batch,
                                    const batt::CancelToken& cancel_token) noexcept;
 
@@ -142,6 +143,7 @@ class Checkpoint
   Status force_flush_all(batt::WorkerPool& worker_pool,
                          llfs::PageCacheJob& job,
                          const TreeOptions& tree_options,
+                         BatchUpdateMetrics& metrics,
                          const batt::CancelToken& cancel_token);
 
   /** \brief Returns a copy of this Checkpoint's CheckpointLock.

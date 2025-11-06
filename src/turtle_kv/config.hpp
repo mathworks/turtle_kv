@@ -61,6 +61,10 @@
  */
 #define TURTLE_KV_PACK_KEYS_TOGETHER 1
 
+/** \brief Enable/disable collection of detailed stats to profile update code paths.
+ */
+#define TURTLE_KV_PROFILE_UPDATES 1
+
 namespace turtle_kv {
 
 constexpr i64 kNodeLruPriority = 4;

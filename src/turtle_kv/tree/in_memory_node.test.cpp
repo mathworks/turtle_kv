@@ -366,6 +366,8 @@ void SubtreeBatchUpdateScenario::run()
 
   usize total_items = 0;
 
+  turtle_kv::BatchUpdateMetrics metrics;
+
   for (usize i = 0; i < max_i; ++i) {
     BatchUpdate update{
         .context =
@@ -373,6 +375,7 @@ void SubtreeBatchUpdateScenario::run()
                 .worker_pool = worker_pool,
                 .page_loader = *page_loader,
                 .cancel_token = batt::CancelToken{},
+                .metrics = metrics,
             },
         .result_set = result_set_generator(DecayToItem<false>{}, rng, strings),
         .edit_size_totals = None,

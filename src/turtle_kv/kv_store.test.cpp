@@ -141,7 +141,7 @@ TEST(KVStoreTest, CreateAndOpen)
             auto& m = kv_store.metrics();
             LOG(INFO) << BATT_INSPECT(m.avg_edits_per_batch());
             LOG(INFO) << BATT_INSPECT(m.compact_batch_latency);
-            LOG(INFO) << BATT_INSPECT(m.push_batch_latency);
+            LOG(INFO) << BATT_INSPECT(m.apply_batch_latency);
             LOG(INFO) << BATT_INSPECT(m.finalize_checkpoint_latency);
             LOG(INFO) << BATT_INSPECT(m.append_job_latency);
           }

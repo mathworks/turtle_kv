@@ -81,7 +81,7 @@ class CheckpointGenerator
    *
    * \return The number of batches accepted if successful; error Status otherwise.
    */
-  StatusOr<usize> push_batch(std::unique_ptr<DeltaBatch>&& batch) noexcept;
+  StatusOr<usize> apply_batch(std::unique_ptr<DeltaBatch>&& batch) noexcept;
 
   /** \brief Finalize the current checkpoint rollup and return a CheckpointJob that can be handed to
    * a checkpoint committer.
@@ -102,6 +102,11 @@ class CheckpointGenerator
   }
 
   Metrics& metrics() noexcept
+  {
+    return this->metrics_;
+  }
+
+  const Metrics& metrics() const noexcept
   {
     return this->metrics_;
   }

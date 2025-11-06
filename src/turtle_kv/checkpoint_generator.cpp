@@ -63,7 +63,7 @@ void CheckpointGenerator::join() noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<usize> CheckpointGenerator::push_batch(std::unique_ptr<DeltaBatch>&& batch) noexcept
+StatusOr<usize> CheckpointGenerator::apply_batch(std::unique_ptr<DeltaBatch>&& batch) noexcept
 {
   VLOG(1) << "CheckpointGenerator::push_batch()" << BATT_INSPECT(batch->debug_info());
 
@@ -96,11 +96,13 @@ StatusOr<usize> CheckpointGenerator::push_batch(std::unique_ptr<DeltaBatch>&& ba
     *this->cancel_token_.lock() = batt::None;
   });
 
-  StatusOr<Checkpoint> new_checkpoint = this->base_checkpoint_.flush_batch(this->worker_pool_,
-                                                                           *this->job_,
-                                                                           this->tree_options_,
-                                                                           std::move(batch),
-                                                                           cancel_token);
+  StatusOr<Checkpoint> new_checkpoint =
+      this->base_checkpoint_.flush_batch(this->worker_pool_,
+                                         *this->job_,
+                                         this->tree_options_,
+                                         this->metrics_.batch_update,
+                                         std::move(batch),
+                                         cancel_token);
 
   BATT_REQUIRE_OK(new_checkpoint);
 
@@ -203,6 +205,7 @@ StatusOr<std::unique_ptr<CheckpointJob>> CheckpointGenerator::finalize_checkpoin
       BATT_REQUIRE_OK(this->base_checkpoint_.force_flush_all(this->worker_pool_,
                                                              *this->job_,
                                                              this->tree_options_,
+                                                             this->metrics_.batch_update,
                                                              cancel_token));
     }
     LOG_EVERY_N(INFO, 10) << BATT_INSPECT(this->metrics_.force_flush_all_latency);

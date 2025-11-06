@@ -154,6 +154,7 @@ bool Checkpoint::is_durable() const noexcept
 StatusOr<Checkpoint> Checkpoint::flush_batch(batt::WorkerPool& worker_pool,
                                              llfs::PageCacheJob& job,
                                              const TreeOptions& tree_options,
+                                             BatchUpdateMetrics& metrics,
                                              std::unique_ptr<DeltaBatch>&& delta_batch,
                                              const batt::CancelToken& cancel_token) noexcept
 {
@@ -163,6 +164,7 @@ StatusOr<Checkpoint> Checkpoint::flush_batch(batt::WorkerPool& worker_pool,
               .worker_pool = worker_pool,
               .page_loader = job,
               .cancel_token = cancel_token,
+              .metrics = metrics,
           },
       .result_set = delta_batch->consume_result_set(),
       .edit_size_totals = None,
@@ -191,12 +193,14 @@ StatusOr<Checkpoint> Checkpoint::flush_batch(batt::WorkerPool& worker_pool,
 Status Checkpoint::force_flush_all(batt::WorkerPool& worker_pool,
                                    llfs::PageCacheJob& job,
                                    const TreeOptions& tree_options,
+                                   BatchUpdateMetrics& metrics,
                                    const batt::CancelToken& cancel_token)
 {
   BatchUpdateContext update_context{
       .worker_pool = worker_pool,
       .page_loader = job,
       .cancel_token = cancel_token,
+      .metrics = metrics,
   };
 
   BATT_REQUIRE_OK(this->tree_->force_flush_all(tree_options,

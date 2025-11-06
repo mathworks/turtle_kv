@@ -1,5 +1,7 @@
 #pragma once
 
+#include <turtle_kv/tree/batch_update_metrics.hpp>
+
 #include <turtle_kv/core/algo/compute_running_total.hpp>
 
 #include <turtle_kv/core/merge_compactor.hpp>
@@ -23,6 +25,7 @@ struct BatchUpdateContext {
   batt::WorkerPool& worker_pool;
   llfs::PageLoader& page_loader;
   batt::CancelToken cancel_token;
+  BatchUpdateMetrics& metrics;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -39,6 +42,8 @@ struct BatchUpdateContext {
   batt::RunningTotal compute_running_total(
       const MergeCompactor::ResultSet</*decay_to_items=*/false>& result_set) const
   {
+    this->metrics.running_total_count.add(1);
+    LatencyTimer timer{this->metrics.latency_sample_rate, this->metrics.running_total_latency};
     return ::turtle_kv::compute_running_total(this->worker_pool, result_set);
   }
 };
@@ -94,6 +99,9 @@ template <typename GeneratorFn>
 inline StatusOr<MergeCompactor::ResultSet</*decay_to_items=*/false>>
 BatchUpdateContext::merge_compact_edits(const KeyView& max_key, GeneratorFn&& generator_fn)
 {
+  this->metrics.merge_compact_count.add(1);
+  LatencyTimer timer{this->metrics.latency_sample_rate, this->metrics.merge_compact_latency};
+
   MergeCompactor compactor{this->worker_pool};
 
   compactor.start_push_levels();
