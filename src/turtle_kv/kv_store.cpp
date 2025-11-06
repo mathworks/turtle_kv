@@ -1372,6 +1372,17 @@ void KVStore::collect_stats(
   emit_latency("checkpoint.batch_update.running_total_latency",
                checkpoint.batch_update.running_total_latency);
 
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+  // MergeCompactor metrics.
+  //
+  auto& merge_compactor = MergeCompactor::metrics();
+
+  fn("result_set.compact.count", merge_compactor.result_set_compact_count.get());
+  fn("result_set.compact_bytes.count", merge_compactor.result_set_compact_byte_count.get());
+#if TURTLE_KV_PROFILE_UPDATES
+  emit_latency("result_set.compact_latency", merge_compactor.compact_latency);
+#endif  // TURTLE_KV_PROFILE_UPDATES
+
 #if 0
   << "\n"                                                                        //
   << BATT_INSPECT(node.level_depth_stats) << "\n"                                //

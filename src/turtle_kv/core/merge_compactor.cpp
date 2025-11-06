@@ -1,6 +1,8 @@
 #include <turtle_kv/core/merge_compactor.hpp>
 //
 
+#include <turtle_kv/config.hpp>
+
 #include <turtle_kv/core/algo/merge_compact_edits.hpp>
 #include <turtle_kv/core/key_range.hpp>
 #include <turtle_kv/core/packed_sizeof_edit.hpp>
@@ -572,6 +574,10 @@ void MergeCompactor::ResultSet<kDecayToItems>::append(std::vector<EditView>&& bu
   // If over half of the merge output buffer is empty, then compact to save memory.
   //
   if (wasted_space > buffer.capacity() / 2) {
+#if TURTLE_KV_PROFILE_UPDATES
+    LatencyTimer timer{MergeCompactor::metrics().compact_latency};
+#endif  // TURTLE_KV_PROFILE_UPDATES
+
     const usize compacted_size = MergeCompactor::buffer_size_for_item_count(item_count);
     tmp_buffer.reserve(compacted_size);
 
@@ -610,6 +616,10 @@ void MergeCompactor::ResultSet<kDecayToItems>::append(std::vector<EditView>&& bu
 template <bool kDecayToItems>
 void MergeCompactor::ResultSet<kDecayToItems>::compact_buffers()
 {
+#if TURTLE_KV_PROFILE_UPDATES
+  LatencyTimer timer{MergeCompactor::metrics().compact_latency};
+#endif  // TURTLE_KV_PROFILE_UPDATES
+
   static_assert(sizeof(EditView) == sizeof(value_type));
   static_assert(std::is_same_v<EditView, value_type> || std::is_same_v<ItemView, value_type>);
 

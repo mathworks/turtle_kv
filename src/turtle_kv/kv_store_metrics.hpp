@@ -1,7 +1,12 @@
 #pragma once
 
+#include <turtle_kv/config.hpp>
+//
+
 #include <turtle_kv/import/int_types.hpp>
 #include <turtle_kv/import/metrics.hpp>
+
+#include <array>
 
 namespace turtle_kv {
 
