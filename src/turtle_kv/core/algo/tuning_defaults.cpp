@@ -53,9 +53,6 @@ ParallelAlgoDefaults& parallel_algo_defaults()
       .copy_decayed_items = get_slice_params("PARALLEL_COPY_DECAYED_ITEMS", 1100),
       //
       .unpack_delta_batch_edits = get_slice_params("UNPACK_DELTA_BATCH_EDITS", 2048),
-      //
-      .map_pending_bytes = get_slice_params("PARALLEL_MAP_PENDING_BYTES", 3600),
-      .reduce_pending_bytes = get_slice_params("PARALLEL_REDUCE_PENDING_BYTES", 3600),
   };
 
   (void)sync_.load(std::memory_order_acquire);
