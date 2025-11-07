@@ -1315,8 +1315,8 @@ void KVStore::collect_stats(
 
   fn("leaf.find_key_success.count", PackedLeafPage::metrics().find_key_success_count.get());
   fn("leaf.find_key_failure.count", PackedLeafPage::metrics().find_key_failure_count.get());
-  fn("leaf.find_key_latency.count", PackedLeafPage::metrics().find_key_latency.count.get());
-  fn("leaf.find_key_latency.seconds", PackedLeafPage::metrics().find_key_latency.total_seconds());
+
+  emit_latency("leaf.find_key_latency", PackedLeafPage::metrics().find_key_latency);
 
 #if TURTLE_KV_PROFILE_UPDATES
 
