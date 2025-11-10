@@ -103,38 +103,28 @@ struct NodeAlgorithms {
   /** \brief Scans the passed batch to find the total byte size in the range of each pivot; this is
    * used to update the node.
    */
-  template <typename Edits, typename SizeOfEditFn /*= usize(const EditView&)*/>
-  void update_pending_bytes(batt::WorkerPool& worker_pool,
-                            const Edits& edits,
-                            const SizeOfEditFn& size_of_edit)
+  template <typename BatchUpdateT>
+  void update_pending_bytes(BatchUpdateT& update)
   {
-    const ParallelAlgoDefaults& algo_defaults = parallel_algo_defaults();
-
-    const batt::WorkSliceParams running_total_params{
-        .min_task_size = algo_defaults.running_total_edit_size.min_task_size,
-        .max_tasks = batt::TaskCount{worker_pool.size() + /*this_thread*/ 1},
-    };
-
-    worker_pool.reset();
-
-    auto edits_begin = edits.begin();
-    auto edits_end = edits.end();
-
-    // First compute prefix sum of the edits.
+    // First get the prefix sum of edit packed sizes.
     //
-    batt::RunningTotal total_item_bytes = batt::parallel_running_total(worker_pool,
-                                                                       edits_begin,
-                                                                       edits_end,
-                                                                       size_of_edit,
-                                                                       running_total_params);
+    if (!update.edit_size_totals) {
+      update.update_edit_size_totals();
+    }
+    batt::RunningTotal& total_item_bytes = *update.edit_size_totals;
 
     // Now find the lower_bound position of each pivot key in the prefix sum and subtract the
     // difference to get bytes per pivot.
     //
-    usize pivot_edits_begin_i = std::distance(
-        edits_begin,
-        std::lower_bound(edits_begin, edits_end, this->node_.get_pivot_key(0), KeyOrder{}));
+    auto edits = update.result_set.get();
+    auto edits_begin = edits.begin();
+    auto edits_end = edits.end();
 
+    usize pivot_edits_begin_i = std::distance(edits_begin,
+                                              std::lower_bound(edits_begin,
+                                                               edits_end,  //
+                                                               this->node_.get_pivot_key(0),
+                                                               KeyOrder{}));
     const usize pivot_count = this->node_.pivot_count();
     for (usize pivot_i = 0; pivot_i < pivot_count; ++pivot_i) {
       const usize pivot_edits_end_i =
@@ -144,9 +134,9 @@ struct NodeAlgorithms {
                                          this->node_.get_pivot_key(pivot_i + 1),
                                          KeyOrder{}));
 
-      this->node_.add_pending_bytes(
-          pivot_i,
-          total_item_bytes[pivot_edits_end_i] - total_item_bytes[pivot_edits_begin_i]);
+      this->node_.add_pending_bytes(pivot_i,
+                                    total_item_bytes[pivot_edits_end_i] -  //
+                                        total_item_bytes[pivot_edits_begin_i]);
 
       pivot_edits_begin_i = pivot_edits_end_i;
     }

@@ -2,10 +2,12 @@
 --
 create view if not exists turtlekv_params as
   select run_id,
-         group_concat(param_value)
+         --
+         avg(param_value)
            filter (where param_name=='turtlekv.chi')
            as 'chi',
-         group_concat(param_value)
+         --
+         avg(param_value)
            filter (where param_name=='turtlekv.buffer_level_trim')
            as 'buffer_trim'
     from params

@@ -63,7 +63,7 @@
 
 /** \brief Enable/disable collection of detailed stats to profile update code paths.
  */
-#define TURTLE_KV_PROFILE_UPDATES 1
+#define TURTLE_KV_PROFILE_UPDATES 0
 
 namespace turtle_kv {
 

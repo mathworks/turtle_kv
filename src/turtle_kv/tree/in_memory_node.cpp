@@ -214,9 +214,7 @@ Status InMemoryNode::apply_batch_update(BatchUpdate& update,
 
   // Update per-pivot pending bytes.
   //
-  in_node(*this).update_pending_bytes(update.context.worker_pool,
-                                      update.result_set.get(),
-                                      PackedSizeOfEdit{});
+  in_node(*this).update_pending_bytes(update);
 
   // Merge the update batch into the buffer.
   //
@@ -488,7 +486,9 @@ StatusOr<BatchUpdate> InMemoryNode::collect_pivot_batch(BatchUpdateContext& upda
 //
 Status InMemoryNode::flush_to_pivot(BatchUpdateContext& update_context, i32 pivot_i)
 {
+#if TURTLE_KV_PROFILE_UPDATES
   update_context.metrics.flush_count.add(1);
+#endif  // TURTLE_KV_PROFILE_UPDATES
 
   Interval<KeyView> pivot_key_range = in_node(*this).get_pivot_key_range(pivot_i);
 
@@ -608,7 +608,9 @@ Status InMemoryNode::make_child_viable(BatchUpdateContext& update_context, i32 p
 //
 Status InMemoryNode::split_child(BatchUpdateContext& update_context, i32 pivot_i)
 {
+#if TURTLE_KV_PROFILE_UPDATES
   update_context.metrics.split_count.add(1);
+#endif
 
   Subtree& child = this->children[pivot_i];
 

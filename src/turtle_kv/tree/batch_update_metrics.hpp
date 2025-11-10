@@ -1,12 +1,16 @@
 #pragma once
 #define TURTLE_KV_TREE_BATCH_UPDATE_METRICS_HPP
 
+#include <turtle_kv/config.hpp>
+
 #include <turtle_kv/import/int_types.hpp>
 #include <turtle_kv/import/metrics.hpp>
 
 namespace turtle_kv {
 
 struct BatchUpdateMetrics {
+#if TURTLE_KV_PROFILE_UPDATES
+
   /** \brief The number of calls to merge compact.
    */
   CountMetric<u64> merge_compact_count;
@@ -37,6 +41,8 @@ struct BatchUpdateMetrics {
   /** \brief The time spend computing prefix-sums for segmentation and pending bytes estimation.
    */
   LatencyMetric running_total_latency;
+
+#endif  // TURTLE_KV_PROFILE_UPDATES
 };
 
 }  // namespace turtle_kv

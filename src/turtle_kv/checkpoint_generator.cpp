@@ -147,7 +147,9 @@ Status CheckpointGenerator::serialize_checkpoint() noexcept
 {
   BATT_CHECK_NOT_NULLPTR(this->job_);
 
+#if TURTLE_KV_PROFILE_UPDATES
   LatencyTimer timer{this->metrics_.serialize_latency};
+#endif
 
   // Serialize the checkpoint so we know its root page id.
   //

@@ -1156,8 +1156,8 @@ void KVStore::add_obsolete_state(const State* old_state)
 //
 void KVStore::epoch_thread_main()
 {
-  constexpr i64 kMinEpochUsec = 12500;
-  constexpr i64 kMaxEpochUsec = 25000;
+  constexpr i64 kMinEpochUsec = 125000;
+  constexpr i64 kMaxEpochUsec = 250000;
 
   std::default_random_engine rng{std::random_device{}()};
   std::uniform_int_distribution<i64> pick_delay_usec{kMinEpochUsec, kMaxEpochUsec};
@@ -1349,8 +1349,11 @@ void KVStore::collect_stats(
   //
   auto& checkpoint = this->checkpoint_generator_.metrics();
 
-  emit_latency("checkpoint.serialize_latency", checkpoint.serialize_latency);
   emit_latency("checkpoint.force_flush_all_latency", checkpoint.force_flush_all_latency);
+
+#if TURTLE_KV_PROFILE_UPDATES
+
+  emit_latency("checkpoint.serialize_latency", checkpoint.serialize_latency);
 
   // Checkpoint -> Batch Update Metrics
   //
@@ -1371,6 +1374,8 @@ void KVStore::collect_stats(
 
   emit_latency("checkpoint.batch_update.running_total_latency",
                checkpoint.batch_update.running_total_latency);
+
+#endif  // TURTLE_KV_PROFILE_UPDATES
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
   // MergeCompactor metrics.

@@ -42,8 +42,11 @@ struct BatchUpdateContext {
   batt::RunningTotal compute_running_total(
       const MergeCompactor::ResultSet</*decay_to_items=*/false>& result_set) const
   {
+#if TURTLE_KV_PROFILE_UPDATES
     this->metrics.running_total_count.add(1);
     LatencyTimer timer{this->metrics.latency_sample_rate, this->metrics.running_total_latency};
+#endif  // TURTLE_KV_PROFILE_UPDATES
+
     return ::turtle_kv::compute_running_total(this->worker_pool, result_set);
   }
 };
@@ -99,8 +102,10 @@ template <typename GeneratorFn>
 inline StatusOr<MergeCompactor::ResultSet</*decay_to_items=*/false>>
 BatchUpdateContext::merge_compact_edits(const KeyView& max_key, GeneratorFn&& generator_fn)
 {
+#if TURTLE_KV_PROFILE_UPDATES
   this->metrics.merge_compact_count.add(1);
   LatencyTimer timer{this->metrics.latency_sample_rate, this->metrics.merge_compact_latency};
+#endif  // TURTLE_KV_PROFILE_UPDATES
 
   MergeCompactor compactor{this->worker_pool};
 
