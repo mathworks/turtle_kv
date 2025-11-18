@@ -82,6 +82,15 @@ class ARTBase
     FastCountMetric<u64> byte_alloc_count;
     FastCountMetric<u64> byte_free_count;
 
+    void reset()
+    {
+      this->construct_count.reset();
+      this->destruct_count.reset();
+      this->insert_count.reset();
+      this->byte_alloc_count.reset();
+      this->byte_free_count.reset();
+    }
+
     //----- --- -- -  -  -   -
 
     double bytes_per_instance() const
@@ -1026,7 +1035,7 @@ class ART : public ARTBase
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  template <Synchronized kSynchronized>
+  template <Synchronized kSynchronized, bool kValuesOnly = false>
   class Scanner;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -1292,13 +1301,70 @@ struct ValueStorageBase<void, ARTBase::Synchronized::kDynamic> {
   }
 };
 
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+//
+template <typename ValueT, ARTBase::Synchronized kSynchronized, bool kValuesOnly>
+struct ItemStorageBase;
+
+template <typename ValueT, ARTBase::Synchronized kSynchronized>
+class ItemStorageBase<ValueT, kSynchronized, /*kValuesOnly=*/false>
+    : public ValueStorageBase<ValueT, kSynchronized>
+{
+ public:
+  std::array<char, ART<ValueT>::kMaxKeyLen> key_buffer_;
+  usize key_len_ = 0;
+
+  //----- --- -- -  -  -   -
+
+  void append_key(usize prefix_len, const char* suffix_data, usize suffix_len) BATT_ALWAYS_INLINE
+  {
+    __builtin_memcpy(this->key_buffer_.data() + prefix_len, suffix_data, suffix_len);
+  }
+
+  void append_key_byte(usize prefix_len, const ByteInt& suffix_byte) BATT_ALWAYS_INLINE
+  {
+    this->key_buffer_[prefix_len] = suffix_byte.to_char();
+  }
+
+  void set_key_len(usize len) BATT_ALWAYS_INLINE
+  {
+    this->key_len_ = len;
+  }
+
+  std::string_view get_key() const
+  {
+    return std::string_view{this->key_buffer_.data(), this->key_len_};
+  }
+};
+
+template <typename ValueT, ARTBase::Synchronized kSynchronized>
+class ItemStorageBase<ValueT, kSynchronized, /*kValuesOnly=*/true>
+    : public ValueStorageBase<ValueT, kSynchronized>
+{
+ public:
+  void append_key(usize, const char*, usize) BATT_ALWAYS_INLINE
+  {
+    // nothing to do.
+  }
+
+  void append_key_byte(usize, const ByteInt&) BATT_ALWAYS_INLINE
+  {
+    // nothing to do.
+  }
+
+  void set_key_len(usize) BATT_ALWAYS_INLINE
+  {
+    // nothing to do.
+  }
+};
+
 }  // namespace detail
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 //
 template <typename ValueT>
-template <ARTBase::Synchronized kSynchronized>
-class ART<ValueT>::Scanner : public detail::ValueStorageBase<ValueT, kSynchronized>
+template <ARTBase::Synchronized kSynchronized, bool kValuesOnly>
+class ART<ValueT>::Scanner : public detail::ItemStorageBase<ValueT, kSynchronized, kValuesOnly>
 {
  public:
   using LeafNode = ARTBase::LeafNode;
@@ -1318,11 +1384,16 @@ class ART<ValueT>::Scanner : public detail::ValueStorageBase<ValueT, kSynchroniz
 
   using SyncType = std::integral_constant<ARTBase::Synchronized, kSynchronized>;
 
+  using Value = std::conditional_t<std::is_same_v<ValueT, void>,
+                                   struct get_value_Not_Supported_If_ValueT_Is_Void,
+                                   ValueT>;
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   static_assert(sizeof(Node256) > sizeof(Node48));
   static_assert(sizeof(Node256) > sizeof(Node16));
   static_assert(sizeof(Node256) > sizeof(Node4));
+  static_assert(sizeof(Node256) > sizeof(LeafNode));
 
   struct Frame {
     static constexpr usize kStorageSize =
@@ -1348,13 +1419,21 @@ class ART<ValueT>::Scanner : public detail::ValueStorageBase<ValueT, kSynchroniz
   std::aligned_storage_t<sizeof(Frame) * kMaxDepth, /*alignment=*/64> stack_storage_;
   Frame* end_ = reinterpret_cast<Frame*>(&this->stack_storage_);
   usize depth_ = 0;
-  std::array<char, ART<ValueT>::kMaxKeyLen> key_buffer_;
-  Optional<std::string_view> next_key_;
+  bool have_item_ = false;
   ValueT* next_value_ = nullptr;
   Optional<bool> synchronized_;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  void reset_item() BATT_ALWAYS_INLINE
+  {
+    this->have_item_ = false;
+    if (!std::is_same_v<ValueT, void>) {
+      this->next_value_ = nullptr;
+    }
+  }
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
  public:
   explicit Scanner(ART& art,
                    std::string_view lower_bound_key,
@@ -1375,7 +1454,7 @@ class ART<ValueT>::Scanner : public detail::ValueStorageBase<ValueT, kSynchroniz
         this->enter(node, /*key_prefix_len=*/0, lower_bound_key);
       });
 
-      if (!this->next_key_) {
+      if (!this->have_item_) {
         this->advance();
       }
     }
@@ -1458,25 +1537,20 @@ class ART<ValueT>::Scanner : public detail::ValueStorageBase<ValueT, kSynchroniz
     // Append the node prefix to the buffer.
     //
     if (node_prefix_len) {
-      __builtin_memcpy(this->key_buffer_.data() + top->key_prefix_len_,
-                       node_prefix,
-                       node_prefix_len);
-
+      this->append_key(top->key_prefix_len_, node_prefix, node_prefix_len);
       top->key_prefix_len_ += node_prefix_len;
     }
 
     // If the current node is a key-terminal, emit the contents of the buffer.
     //
     if (node_view.is_terminal()) {
-      this->next_key_.emplace(this->key_buffer_.data(), top->key_prefix_len_);
+      this->have_item_ = true;
+      this->set_key_len(top->key_prefix_len_);
       if (!std::is_same_v<ValueT, void>) {
         this->next_value_ = (ValueT*)(this->value_storage_address(&node_view, this->synchronized_));
       }
     } else {
-      this->next_key_ = None;
-      if (!std::is_same_v<ValueT, void>) {
-        this->next_value_ = nullptr;
-      }
+      this->reset_item();
     }
 
     [[maybe_unused]] auto& scan_state_impl =
@@ -1488,15 +1562,7 @@ class ART<ValueT>::Scanner : public detail::ValueStorageBase<ValueT, kSynchroniz
     return this->depth_ == 0;
   }
 
-  const std::string_view& get_key() const
-  {
-    return *this->next_key_;
-  }
-
-  const std::conditional_t<std::is_same_v<ValueT, void>,
-                           struct get_value_Not_Supported_If_ValueT_Is_Void,
-                           ValueT>&
-  get_value() const
+  const Value& get_value() const
   {
     static_assert(!std::is_same_v<ValueT, void>);
     return *this->next_value_;
@@ -1504,10 +1570,7 @@ class ART<ValueT>::Scanner : public detail::ValueStorageBase<ValueT, kSynchroniz
 
   void advance()
   {
-    this->next_key_ = None;
-    if (!std::is_same_v<ValueT, void>) {
-      this->next_value_ = nullptr;
-    }
+    this->reset_item();
 
     for (;;) {
       if (this->depth_ == 0) {
@@ -1534,7 +1597,7 @@ class ART<ValueT>::Scanner : public detail::ValueStorageBase<ValueT, kSynchroniz
             const ByteInt key_byte = scan_state.get_key_byte();
             NodeBase* const child = scan_state.get_branch();
 
-            this->key_buffer_[top->key_prefix_len_] = key_byte.to_char();
+            this->append_key_byte(top->key_prefix_len_, key_byte);
 
             if (key_byte == top->min_key_byte_) {
               child->visit([&](auto* child_node) {
@@ -1549,7 +1612,7 @@ class ART<ValueT>::Scanner : public detail::ValueStorageBase<ValueT, kSynchroniz
             scan_state.advance();
           });
 
-      if (this->next_key_) {
+      if (this->have_item_) {
         return;
       }
     }

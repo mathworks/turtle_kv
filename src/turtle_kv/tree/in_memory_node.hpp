@@ -34,6 +34,24 @@ struct InMemoryNode {
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   struct Metrics {
+    /** \brief The number of nodes which have been serialized.
+     */
+    CountMetric<u64> serialized_node_count;
+
+    /** \brief The sum of the pivot counts of all nodes which have been serialized.
+     */
+    CountMetric<u64> serialized_pivot_count;
+
+    /** \brief The sum of the segment counts of all nodes which have been serialized.
+     */
+    CountMetric<u64> serialized_buffer_segment_count;
+
+    /** \brief The sum total count of all non-empty buffer levels in all serialized nodes.
+     */
+    CountMetric<u64> serialized_nonempty_level_count;
+
+    /** \brief Captures statistics about the number of levels per node.
+     */
     StatsMetric<u16> level_depth_stats;
   };
 

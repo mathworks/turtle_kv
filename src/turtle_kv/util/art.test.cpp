@@ -21,6 +21,7 @@ namespace {
 
 using namespace batt::int_types;
 
+using turtle_kv::ARTBase;
 using turtle_kv::ByteInt;
 using turtle_kv::LatencyMetric;
 using turtle_kv::LatencyTimer;
@@ -105,6 +106,8 @@ TEST(ArtTest, ByteInt)
 template <typename KeyGeneratorT>
 void run_put_contains_test()
 {
+  ARTBase::metrics().reset();
+
   const usize num_keys = 1e5;
   const usize num_scans = 10000;
   const usize max_scan_length = 100;
@@ -162,6 +165,10 @@ void run_put_contains_test()
   LatencyMetric scan_latency;
   LatencyMetric scanner_latency;
   LatencyMetric scanner_nosync_latency;
+  LatencyMetric nokeys_scan_latency;
+  LatencyMetric nokeys_item_latency;
+  LatencyMetric nosync_nokeys_scan_latency;
+  LatencyMetric nosync_nokeys_item_latency;
 
   for (usize i = 0; i < num_scans; ++i) {
     const std::string lower_bound_key = generate_key(rng);
@@ -233,6 +240,43 @@ void run_put_contains_test()
         ASSERT_EQ(expected_result, actual_result)
             << BATT_INSPECT_STR(lower_bound_key) << BATT_INSPECT(i);
       }
+      {
+        usize items_found = 0;
+        {
+          auto start_time = std::chrono::steady_clock::now();
+
+          ART::Scanner<ART::Synchronized::kTrue, /*kValuesOnly=*/true> scanner{index,
+                                                                               lower_bound_key};
+
+          while (!scanner.is_done() && items_found < scan_length) {
+            ++items_found;
+            scanner.advance();
+          }
+
+          nokeys_scan_latency.update(start_time, 1);
+          nokeys_item_latency.update(start_time, items_found);
+        }
+        EXPECT_EQ(expected_result.size(), items_found);
+      }
+
+      {
+        usize items_found = 0;
+        {
+          auto start_time = std::chrono::steady_clock::now();
+
+          ART::Scanner<ART::Synchronized::kFalse, /*kValuesOnly=*/true> scanner{index,
+                                                                                lower_bound_key};
+
+          while (!scanner.is_done() && items_found < scan_length) {
+            ++items_found;
+            scanner.advance();
+          }
+
+          nosync_nokeys_scan_latency.update(start_time, 1);
+          nosync_nokeys_item_latency.update(start_time, items_found);
+        }
+        EXPECT_EQ(expected_result.size(), items_found);
+      }
     }
   }
 
@@ -267,8 +311,12 @@ void run_put_contains_test()
   std::cerr << BATT_INSPECT(scan_latency) << std::endl
             << BATT_INSPECT(scanner_latency) << std::endl
             << BATT_INSPECT(scanner_nosync_latency) << std::endl
+            << BATT_INSPECT(nokeys_scan_latency) << std::endl
+            << BATT_INSPECT(nosync_nokeys_scan_latency) << std::endl
             << BATT_INSPECT(item_latency) << std::endl
             << BATT_INSPECT(item_nosync_latency) << std::endl
+            << BATT_INSPECT(nokeys_item_latency) << std::endl
+            << BATT_INSPECT(nosync_nokeys_item_latency) << std::endl
             << BATT_INSPECT(sort_latency) << std::endl
             << BATT_INSPECT(ART::metrics().bytes_per_insert()) << std::endl;
 }
@@ -297,6 +345,8 @@ TEST(ArtTest, PutContainsTest_Key8)
 //
 TEST(ArtTest, WideKeySet)
 {
+  ARTBase::metrics().reset();
+
   std::vector<std::string> keys;
   for (u16 first = 0; first < 256; ++first) {
     for (u16 second = 0; second < 256; ++second) {
@@ -322,6 +372,8 @@ TEST(ArtTest, WideKeySet)
 //
 TEST(ArtTest, SingleThreadTest)
 {
+  ARTBase::metrics().reset();
+
   for (const usize num_keys : {1e5, 1e6, 1e7}) {
     std::vector<std::string> keys;
     {
@@ -492,6 +544,8 @@ void insert_key(turtle_kv::ART<usize>& art, const std::string& key)
 template <typename ValueT>
 void run_benchmark_test()
 {
+  ARTBase::metrics().reset();
+
   const int n_rounds = 3;
   const int n_stages_per_round = 2;  // insert and query
 
@@ -692,6 +746,8 @@ TEST(ArtTest, MultiThreadTest_Int)
 //
 TEST(ArtTest, ValuePutGetScan)
 {
+  ARTBase::metrics().reset();
+
   const usize n_keys = 100 * 1000;
   std::default_random_engine rng{std::random_device{}()};
   RandomStringGenerator generate_key;

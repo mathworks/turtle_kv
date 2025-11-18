@@ -1205,7 +1205,17 @@ void KVStore::collect_stats(
 
   [[maybe_unused]] auto& page_cache = cache.metrics();
 
-  [[maybe_unused]] auto& node = InMemoryNode::metrics();
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+  // Tree Node related stats.
+  //
+  {
+    InMemoryNode::Metrics& node = InMemoryNode::metrics();
+
+    fn("kv_store.tree.node_count", node.serialized_node_count.get());
+    fn("kv_store.tree.pivot_count", node.serialized_pivot_count.get());
+    fn("kv_store.tree.buffer_segment_count", node.serialized_buffer_segment_count.get());
+    fn("kv_store.tree.nonempty_level_count", node.serialized_nonempty_level_count.get());
+  }
 
   [[maybe_unused]] auto& scanner = KVStoreScanner::metrics();
 

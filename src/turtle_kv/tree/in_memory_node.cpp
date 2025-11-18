@@ -1338,7 +1338,10 @@ Status InMemoryNode::start_serialize(TreeSerializeContext& context)
 //
 StatusOr<llfs::PageId> InMemoryNode::finish_serialize(TreeSerializeContext& context)
 {
-  Self::metrics().level_depth_stats.update(this->update_buffer.levels.size());
+  static Metrics& r_metrics = Self::metrics();
+  //----- --- -- -  -  -   -
+  r_metrics.serialized_node_count.add(1);
+  r_metrics.level_depth_stats.update(this->update_buffer.levels.size());
 
   for (Level& level : this->update_buffer.levels) {
     Optional<SegmentedLevel> new_segmented_level;
@@ -1350,13 +1353,17 @@ StatusOr<llfs::PageId> InMemoryNode::finish_serialize(TreeSerializeContext& cont
               return OkStatus();
             },
             [this, &context, &new_segmented_level](MergedLevel& merged_level) -> Status {
+              r_metrics.serialized_nonempty_level_count.add(1);
               StatusOr<SegmentedLevel> result = merged_level.finish_serialize(*this, context);
               if (result.ok()) {
                 new_segmented_level.emplace(std::move(*result));
+                r_metrics.serialized_buffer_segment_count.add(result->segment_count());
               }
               return result.status();
             },
             [](const SegmentedLevel& segmented_level) -> Status {
+              r_metrics.serialized_nonempty_level_count.add(1);
+              r_metrics.serialized_buffer_segment_count.add(segmented_level.segment_count());
               return OkStatus();
             }));
 
