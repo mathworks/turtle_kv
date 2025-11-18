@@ -358,9 +358,10 @@ std::vector<EditView> MemTable::compact_art_index()
 {
   std::vector<EditView> edits_out;
 
-  ART<MemTableValueEntry>::Scanner<ARTBase::Synchronized::kFalse> scanner{
-      *this->art_index_,
-      /*min_key=*/std::string_view{}};
+  ART<MemTableValueEntry>::Scanner<ARTBase::Synchronized::kFalse,  //
+                                   /*kValuesOnly=*/true>
+      scanner{*this->art_index_,
+              /*min_key=*/std::string_view{}};
 
   for (; !scanner.is_done(); scanner.advance()) {
     const MemTableValueEntry& entry = scanner.get_value();
