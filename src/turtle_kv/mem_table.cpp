@@ -14,7 +14,6 @@ namespace {
 
 constexpr usize kHashIndexOverheadPct = 285;
 constexpr usize kOrderedIndexOverheadPct = 35;
-constexpr usize kArtIndexOverheadPct = 50;
 
 }  // namespace
 
@@ -22,6 +21,7 @@ TURTLE_KV_ENV_PARAM(bool, turtlekv_memtable_hash_index, false);
 TURTLE_KV_ENV_PARAM(bool, turtlekv_memtable_ordered_index, true);
 TURTLE_KV_ENV_PARAM(bool, turtlekv_memtable_count_latest_update_only, true);
 TURTLE_KV_ENV_PARAM(u32, turtlekv_memtable_hash_bucket_div, 32);
+TURTLE_KV_ENV_PARAM(usize, turtlekv_memtable_art_overhead_pct, 20);
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
@@ -68,7 +68,7 @@ TURTLE_KV_ENV_PARAM(u32, turtlekv_memtable_hash_bucket_div, 32);
 
   } else {
     this->art_index_.emplace();
-    overhead_estimate_pct += kArtIndexOverheadPct;
+    overhead_estimate_pct += getenv_param<turtlekv_memtable_art_overhead_pct>();
   }
 
   this->metrics_.mem_table_alloc.add(1);

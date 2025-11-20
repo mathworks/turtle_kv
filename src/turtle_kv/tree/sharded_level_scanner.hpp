@@ -641,6 +641,9 @@ inline StatusOr<SliceData> ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::init
     usize items_slice_upper_bound = aligned_boundary_i;
     Interval<usize> items_slice{item_i_offset,
                                 (usize)byte_distance(page_start, head_items + aligned_boundary_i)};
+
+    BATT_CHECK_GT(items_slice.size(), 0);
+
     items_buffer = this->slice_reader_.read_slice(items_slice,
                                                   *(this->slice_storage_),
                                                   this->pin_pages_to_job_,
@@ -666,17 +669,23 @@ inline StatusOr<SliceData> ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::init
     key_nearest_aligned_boundary += kDefaultLeafShardedViewSize;
   }
 
+#if TURTLE_KV_PACK_KEYS_TOGETHER
+  constexpr isize kExtraItems = 1;
+#else
+  constexpr isize kExtraItems = 2;
+#endif
+
   // Search the key offset data that we just loaded to find the last key that aligns with the
   // computed boundary.
   //
-  const PackedKeyValue* end_tmp = std::prev(
-      std::upper_bound(items_begin,
-                       std::prev(items_end, 2),  // Since we need two keys past to load a given key
-                       key_nearest_aligned_boundary,
-                       PackedKeyOffsetCompare{item_i_offset, items_begin}));
+  const PackedKeyValue* end_tmp = std::prev(std::upper_bound(
+      items_begin,
+      std::prev(items_end, kExtraItems),  // Since we need extra keys to tell data length
+      key_nearest_aligned_boundary,
+      PackedKeyOffsetCompare{item_i_offset, items_begin}));
 
   const PackedKeyValue* end_i_pkv;
-  if (end_tmp < std::next(items_begin, 3)) {
+  if (end_tmp < std::next(items_begin, (kExtraItems + 1))) {
     // If the computed end forces us to cross the computed key data boundary, take as many keys as
     // possible before crossing over.
     //
@@ -697,14 +706,18 @@ inline StatusOr<SliceData> ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::init
 
     end_i_pkv = items_iter;
   } else {
-    end_i_pkv = std::prev(end_tmp, 2);
+    end_i_pkv = std::prev(end_tmp, kExtraItems);
   }
 
   usize current_end_offset =
       item_i_offset + (std::distance(items_begin, end_i_pkv) * sizeof(PackedKeyValue));
-  usize end_item_offset = current_end_offset + (2 * sizeof(PackedKeyValue));
+  usize end_item_offset = current_end_offset + (kExtraItems * sizeof(PackedKeyValue));
 
-  Interval<usize> key_data_slice{item_i_key_offset, end_item_offset + (end_i_pkv + 1)->key_offset};
+  Interval<usize> key_data_slice{item_i_key_offset,
+                                 end_item_offset + (end_i_pkv + (kExtraItems - 1))->key_offset};
+
+  BATT_CHECK_GT(key_data_slice.size(), 0);
+
   StatusOr<ConstBuffer> key_data_buffer =
       this->slice_reader_.read_slice(key_data_slice,
                                      *(this->slice_storage_),
@@ -788,7 +801,9 @@ inline Status ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::set_start_item(
     // In this case, we know for sure that the flushed upper bound will be our starting item.
     //
     this->item_i_ = flushed_upper_bound;
+
   } else {
+    //+++++++++++-+-+--+----- --- -- -  -  -   -
     // If we are deciding between the flushed upper bound key and another key that we have a search
     // range for, we need to use the search range to narrow down thats key's index.
     //
@@ -797,10 +812,19 @@ inline Status ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::set_start_item(
     const auto& packed_leaf_page = *static_cast<const PackedLeafPage*>(payload_start);
 
     const PackedKeyValue* head_items = packed_leaf_page.items->data();
+
+#if TURTLE_KV_PACK_KEYS_TOGETHER
+    constexpr isize kExtraItems = 1;
+#else
+    constexpr isize kExtraItems = 2;
+#endif
+
     const Interval<usize> items_slice{
         (usize)byte_distance(page_start, head_items + search_range->lower_bound),
-        (usize)byte_distance(page_start, head_items + (search_range->upper_bound + 2)),
+        (usize)byte_distance(page_start, head_items + (search_range->upper_bound + kExtraItems)),
     };
+
+    BATT_CHECK_GT(items_slice.size(), 0);
 
     StatusOr<ConstBuffer> items_buffer =
         this->slice_reader_.read_slice(items_slice,
@@ -813,10 +837,14 @@ inline Status ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::set_start_item(
 
     const auto items_begin = (const PackedKeyValue*)items_buffer->data();
     const auto items_end = items_begin + search_range->size();
+
+    //+++++++++++-+-+--+----- --- -- -  -  -   -
     Interval<usize> key_data_slice{
         (usize)(items_slice.lower_bound + items_begin->key_offset),
-        (usize)(items_slice.upper_bound + (items_end + 1)->key_offset),
+        (usize)(items_slice.upper_bound + (items_end + (kExtraItems - 1))->key_offset),
     };
+
+    BATT_CHECK_GT(key_data_slice.size(), 0);
 
     StatusOr<ConstBuffer> key_data_buffer =
         this->slice_reader_.read_slice(key_data_slice,
@@ -831,6 +859,7 @@ inline Status ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::set_start_item(
     const isize offset_target = byte_distance(items_begin, key_data_buffer->data());
     const isize offset_delta = offset_target - offset_base;
 
+    //+++++++++++-+-+--+----- --- -- -  -  -   -
     // Search for the given key within the key range we loaded.
     //
     const PackedKeyValue* found_item = std::lower_bound(items_begin,  //
@@ -840,6 +869,7 @@ inline Status ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::set_start_item(
 
     if (found_item == items_end) {
       this->item_i_ = search_range->upper_bound;
+
     } else {
       usize lower_bound_key_i = search_range->lower_bound + std::distance(items_begin, found_item);
       if (flushed_upper_bound != 0) {

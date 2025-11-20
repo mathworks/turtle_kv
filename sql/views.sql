@@ -8,6 +8,14 @@ create view if not exists turtlekv_params as
            as 'chi',
          --
          avg(param_value)
+           filter (where param_name=='turtlekv.cache_size_mb')
+           as 'cache_size_mb',
+         --
+         avg(param_value)
+           filter (where param_name=='turtlekv.cache_size_bytes')
+           as 'cache_size',
+         --
+         avg(param_value)
            filter (where param_name=='turtlekv.buffer_level_trim')
            as 'buffer_trim'
     from params
