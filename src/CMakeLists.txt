@@ -2,6 +2,15 @@ cmake_minimum_required(VERSION 3.20)
 
 cxx_library(turtle_kv)
 
+set(PLATFORM_DEPS )
+
+if (LINUX)
+  set(PLATFORM_DEPS ${PLATFORM_DEPS}
+    keyvcr::keyvcr
+    vqf::vqf
+  )
+endif()
+
 target_link_libraries(
   turtle_kv
   PUBLIC
@@ -9,8 +18,7 @@ target_link_libraries(
   batteries::batteries
   boost::boost
   llfs::llfs
-  vqf::vqf
-  gperftools::gperftools
+  ${PLATFORM_DEPS}
   )
 
 target_link_libraries(
@@ -26,5 +34,4 @@ target_link_libraries(
   backtrace
   dl
   stdc++fs
-  gperftools::gperftools
   )

@@ -1,5 +1,7 @@
 from conan import ConanFile
-import os, sys, platform
+from conan.errors import ConanInvalidConfiguration
+
+import io, os, platform, shlex, subprocess, sys
 
 
 class TurtleKvRecipe(ConanFile):
@@ -54,19 +56,23 @@ class TurtleKvRecipe(ConanFile):
         }
 
         self.requires("abseil/20250127.0", **VISIBLE, **OVERRIDE)
-        self.requires("batteries/0.60.2", **VISIBLE, **OVERRIDE)
+        self.requires("batteries/[>=0.61.0 <1]", **VISIBLE, **OVERRIDE)
         self.requires("boost/1.88.0", **VISIBLE, **OVERRIDE)
         self.requires("glog/0.7.1", **VISIBLE)
-        self.requires("gperftools/2.16", **VISIBLE)
-        self.requires("llfs/0.42.0", **VISIBLE)
+        self.requires("llfs/[>=0.43.3 <1]", **VISIBLE)
         self.requires("pcg-cpp/cci.20220409", **VISIBLE)
-        self.requires("vqf/0.2.5", **VISIBLE)
         self.requires("zlib/1.3.1", **OVERRIDE)
 
+        # boost/1.88.0 and ninja/1.13.2 depend (exactly) on libbacktrace/cci.20210118
+        #
+        self.requires("libbacktrace/[>=cci.20240730]", **OVERRIDE)
+
         if platform.system() == "Linux":
-            self.requires("libfuse/3.16.2", **VISIBLE)
-            self.requires("libunwind/1.8.1", **VISIBLE, **OVERRIDE)
-            self.requires("liburing/2.11", **VISIBLE)
+            self.requires("keyvcr/[>=0.2.1 <1]", **VISIBLE)
+            self.requires("vqf/[>=0.2.5 <1]", **VISIBLE)
+            self.requires("libfuse/[>=3.16.2 <4]", **VISIBLE)
+            self.requires("libunwind/[>=1.8.1 <2]", **VISIBLE, **OVERRIDE)
+            self.requires("liburing/[>=2.11 <3]", **VISIBLE)
 
     def build_requirements(self):
         self.tool_requires("cmake/[>=3.20.0 <4]")
@@ -104,3 +110,21 @@ class TurtleKvRecipe(ConanFile):
         return self.cor.package_id_lib_default(self)
 
     #+++++++++++-+-+--+----- --- -- -  -  -   -
+
+    def validate_build(self):
+        if self.settings.compiler == "gcc":
+            out_capture = io.StringIO()
+            cc_name = (
+                self.buildenv.vars(self).get('CC') or
+                self.buildenv.vars(self).get('CXX') or
+                os.getenv('CC') or
+                os.getenv('CXX') or
+                'gcc'
+            )
+            self.run(shlex.join([cc_name, '-dumpversion']), stdout=out_capture, shell=True)
+            actual_compiler_version = out_capture.getvalue().strip()
+            profile_compiler_version = str(self.settings.compiler.version)
+            if profile_compiler_version != actual_compiler_version:
+                raise ConanInvalidConfiguration(f"Compiler version mismatch: actual={actual_compiler_version}"
+                                                f", expected={profile_compiler_version}")
+

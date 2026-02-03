@@ -187,7 +187,9 @@ class SegmentedLevelScannerTest : public ::testing::Test
             actual,
             actual.level_,
             *this->fake_page_loader,
-            llfs::PinPageToJob::kDefault};
+            llfs::PinPageToJob::kDefault,
+            llfs::PageCacheOvercommit::not_allowed(),
+        };
 
         std::move(scanner) | seq::for_each([&](const EditSlice& edit_slice) {
           batt::case_of(   //
@@ -222,6 +224,7 @@ class SegmentedLevelScannerTest : public ::testing::Test
                 actual.level_,
                 *this->fake_page_loader,
                 llfs::PinPageToJob::kDefault,
+                llfs::PageCacheOvercommit::not_allowed(),
                 /*min_pivot=*/pivot_i};
 
             std::move(scanner2) | seq::for_each([&](const EditSlice& edit_slice) {
@@ -393,7 +396,10 @@ void SegmentedLevelScannerTest::Scenario::run_with_pivot_count(usize pivot_count
     KeyView min_key_to_flush = min_unflushed_key[pivot_i];
     KeyView max_key_to_flush = get_key(*std::prev(flush_end));
 
-    Status flush_status = in_segmented_level(fake_node, fake_node.level_, *this->fake_page_loader)
+    Status flush_status = in_segmented_level(fake_node,
+                                             fake_node.level_,
+                                             *this->fake_page_loader,
+                                             llfs::PageCacheOvercommit::not_allowed())
                               .flush_pivot_up_to_key(pivot_i, max_key_to_flush);
 
     ASSERT_TRUE(flush_status.ok()) << BATT_INSPECT(flush_status);

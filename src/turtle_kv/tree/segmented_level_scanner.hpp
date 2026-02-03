@@ -64,6 +64,7 @@ class SegmentedLevelScanner : private SegmentedLevelScannerBase
                                  Level& level,
                                  PageLoader& loader,
                                  llfs::PinPageToJob pin_pages_to_job,
+                                 llfs::PageCacheOvercommit& overcommit,
                                  Status& status,
                                  i32 min_pivot_i = 0,
                                  Optional<KeyView> min_key = None) noexcept;
@@ -72,12 +73,14 @@ class SegmentedLevelScanner : private SegmentedLevelScannerBase
                                  Level& level,
                                  PageLoader& loader,
                                  llfs::PinPageToJob pin_pages_to_job,
+                                 llfs::PageCacheOvercommit& overcommit,
                                  i32 min_pivot_i = 0,
                                  Optional<KeyView> min_key = None) noexcept
       : SegmentedLevelScanner{node,
                               level,
                               loader,
                               pin_pages_to_job,
+                              overcommit,
                               this->Super::self_contained_status_,
                               min_pivot_i,
                               min_key}
@@ -132,6 +135,7 @@ class SegmentedLevelScanner : private SegmentedLevelScannerBase
   Level* level_;
   PageLoader* loader_;
   llfs::PinPageToJob pin_pages_to_job_;
+  llfs::PageCacheOvercommit& overcommit_;
   Status& status_;
   PinnedPageT pinned_leaf_;
   Optional<KeyView> min_key_;
@@ -152,6 +156,7 @@ inline /*explicit*/ SegmentedLevelScanner<NodeT, LevelT, PageLoaderT>::Segmented
     Level& level,
     PageLoader& loader,
     llfs::PinPageToJob pin_pages_to_job,
+    llfs::PageCacheOvercommit& overcommit,
     Status& status,
     i32 min_pivot_i,
     Optional<KeyView> min_key) noexcept
@@ -159,6 +164,7 @@ inline /*explicit*/ SegmentedLevelScanner<NodeT, LevelT, PageLoaderT>::Segmented
     , level_{std::addressof(level)}
     , loader_{std::addressof(loader)}
     , pin_pages_to_job_{pin_pages_to_job}
+    , overcommit_{overcommit}
     , status_{status}
     , pinned_leaf_{}
     , min_key_{min_key}
@@ -230,7 +236,7 @@ inline auto SegmentedLevelScanner<NodeT, LevelT, PageLoaderT>::peek_next_impl(bo
     // Try to load the page for this segment.
     //
     StatusOr<PinnedPageT> loaded_page =
-        segment->load_leaf_page(*this->loader_, this->pin_pages_to_job_);
+        segment->load_leaf_page(*this->loader_, this->pin_pages_to_job_, this->overcommit_);
 
     if (!loaded_page.ok()) {
       this->status_ = loaded_page.status();

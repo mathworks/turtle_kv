@@ -88,7 +88,8 @@ class TreeSerializeContext
 
   explicit TreeSerializeContext(const TreeOptions& tree_options,
                                 llfs::PageCacheJob& page_job,
-                                batt::WorkerPool& worker_pool) noexcept;
+                                batt::WorkerPool& worker_pool,
+                                llfs::PageCacheOvercommit& overcommit) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -105,6 +106,11 @@ class TreeSerializeContext
   batt::WorkerPool& worker_pool()
   {
     return this->worker_pool_;
+  }
+
+  llfs::PageCacheOvercommit& overcommit()
+  {
+    return this->overcommit_;
   }
 
   const batt::CancelToken& cancel_token() const
@@ -133,6 +139,8 @@ class TreeSerializeContext
   llfs::PageCacheJob& page_job_;
 
   batt::WorkerPool& worker_pool_;
+
+  llfs::PageCacheOvercommit& overcommit_;
 
   batt::CancelToken cancel_token_;
 

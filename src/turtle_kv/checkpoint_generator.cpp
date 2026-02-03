@@ -63,9 +63,10 @@ void CheckpointGenerator::join() noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<usize> CheckpointGenerator::push_batch(std::unique_ptr<DeltaBatch>&& batch) noexcept
+StatusOr<usize> CheckpointGenerator::apply_batch(std::unique_ptr<DeltaBatch>&& batch,
+                                                 llfs::PageCacheOvercommit& overcommit) noexcept
 {
-  VLOG(1) << "CheckpointGenerator::push_batch()" << BATT_INSPECT(batch->debug_info());
+  VLOG(1) << "CheckpointGenerator::apply_batch()" << BATT_INSPECT(batch->debug_info());
 
   // Skip unless base_checkpoint.rollup_slot_upper_bound() <= batch->slot_range.lower_bound
   //
@@ -96,11 +97,14 @@ StatusOr<usize> CheckpointGenerator::push_batch(std::unique_ptr<DeltaBatch>&& ba
     *this->cancel_token_.lock() = batt::None;
   });
 
-  StatusOr<Checkpoint> new_checkpoint = this->base_checkpoint_.flush_batch(this->worker_pool_,
-                                                                           *this->job_,
-                                                                           this->tree_options_,
-                                                                           std::move(batch),
-                                                                           cancel_token);
+  StatusOr<Checkpoint> new_checkpoint =
+      this->base_checkpoint_.flush_batch(this->worker_pool_,
+                                         *this->job_,
+                                         this->tree_options_,
+                                         this->metrics_.batch_update,
+                                         overcommit,
+                                         std::move(batch),
+                                         cancel_token);
 
   BATT_REQUIRE_OK(new_checkpoint);
 
@@ -114,7 +118,7 @@ StatusOr<usize> CheckpointGenerator::push_batch(std::unique_ptr<DeltaBatch>&& ba
       batt::getenv_as<usize>("TURTLE_KV_SERIALIZE_EVERY_N_BATCHES").value_or(0);
 
   if (serialize_limit != 0 && (this->current_batch_count_ % serialize_limit) == 0) {
-    BATT_REQUIRE_OK(this->serialize_checkpoint());
+    BATT_REQUIRE_OK(this->serialize_checkpoint(overcommit));
 
     const llfs::PageId root_id = batt::get_or_panic(this->base_checkpoint_.maybe_root_id());
     this->job_->new_root(root_id);
@@ -141,15 +145,21 @@ void CheckpointGenerator::initialize_job()
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status CheckpointGenerator::serialize_checkpoint() noexcept
+Status CheckpointGenerator::serialize_checkpoint(llfs::PageCacheOvercommit& overcommit) noexcept
 {
   BATT_CHECK_NOT_NULLPTR(this->job_);
 
+#if TURTLE_KV_PROFILE_UPDATES
+  LatencyTimer timer{this->metrics_.serialize_latency};
+#endif
+
   // Serialize the checkpoint so we know its root page id.
   //
-  BATT_ASSIGN_OK_RESULT(
-      this->base_checkpoint_,
-      this->base_checkpoint_.serialize(this->tree_options_, *this->job_, this->worker_pool_));
+  BATT_ASSIGN_OK_RESULT(this->base_checkpoint_,
+                        this->base_checkpoint_.serialize(this->tree_options_,
+                                                         *this->job_,
+                                                         overcommit,
+                                                         this->worker_pool_));
 
   return OkStatus();
 }
@@ -175,7 +185,8 @@ StatusOr<batt::Grant> CheckpointGenerator::reserve_slot_grant_for_checkpoints(us
 //
 StatusOr<std::unique_ptr<CheckpointJob>> CheckpointGenerator::finalize_checkpoint(
     batt::Grant&& token,
-    std::shared_ptr<batt::Grant::Issuer>&& token_issuer) noexcept
+    std::shared_ptr<batt::Grant::Issuer>&& token_issuer,
+    llfs::PageCacheOvercommit& overcommit) noexcept
 {
   VLOG(1) << "CheckpointGenerator::finalize_checkpoint()";
 
@@ -186,7 +197,7 @@ StatusOr<std::unique_ptr<CheckpointJob>> CheckpointGenerator::finalize_checkpoin
 
   const usize batch_count = this->current_batch_count_;
 
-  BATT_REQUIRE_OK(this->serialize_checkpoint());
+  BATT_REQUIRE_OK(this->serialize_checkpoint(overcommit));
 
   this->current_batch_count_ = 0;
 

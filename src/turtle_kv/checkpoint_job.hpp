@@ -24,6 +24,14 @@ struct CheckpointJob {
   CheckpointJob& operator=(const CheckpointJob&) = delete;
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  const llfs::PageCacheJob& job() const
+  {
+    BATT_CHECK(this->appendable_job);
+    return this->appendable_job->get_const_job();
+  }
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
   // This object retains a shared ownership reference to the token issuer to guarantee correct
   // teardown order.  IMPORTANT: this field must be before `token` so its scope will be wider.
   //

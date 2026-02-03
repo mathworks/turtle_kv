@@ -185,13 +185,12 @@ class RandomResultSetGenerator : public MinMaxSize<usize{1} << 24>
   }
 
   template <bool kDecayToItems, typename Rng>
-  MergeCompactor::ResultSet</*kDecayToItems=*/kDecayToItems> operator()(
-      DecayToItem<kDecayToItems>,
-      Rng& rng,
-      llfs::StableStringStore& store,
-      const std::vector<KeyView>& to_delete)
+  MergeCompactor::ResultSet<kDecayToItems> operator()(DecayToItem<kDecayToItems>,
+                                                      Rng& rng,
+                                                      llfs::StableStringStore& store,
+                                                      const std::vector<KeyView>& to_delete)
   {
-    using ResultSet = MergeCompactor::ResultSet</*kDecayToItems=*/kDecayToItems>;
+    using ResultSet = MergeCompactor::ResultSet<kDecayToItems>;
     using Item = typename ResultSet::value_type;
 
     const usize n = this->Super::pick_size(rng);

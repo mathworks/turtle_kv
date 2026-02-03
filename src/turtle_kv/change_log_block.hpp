@@ -256,7 +256,7 @@ class ChangeLogBlock
 
   /** \brief The id of the MemTable that owns this block.
    */
-  u64 owner_id_;
+  u64 owner_id_;  // TODO [tastolfi 2025-12-16] rename: GBID (global block id)
 
   /** \brief The total size of the block, including this object.
    */
@@ -276,7 +276,7 @@ class ChangeLogBlock
 
   /** \brief Atomic reference counter to manage the lifetime of the buffer.
    */
-  std::atomic<i32> ref_count_;
+  std::atomic<i32> ref_count_;  // TODO [tastolfi 2025-12-16] move to ephemeral state
 
   // Pad the next field (this->next_) out to (void*) this + 32 bytes;
   //
@@ -284,7 +284,7 @@ class ChangeLogBlock
 
   /** \brief The next ChangeLogBlock in the current stack.
    */
-  ChangeLogBlock* next_;
+  ChangeLogBlock* next_;  // TODO [tastolfi 2025-12-16] move to ephemeral state
 
   /** \brief The XXH3 hash value of the data contents of this block.  Used during recovery to
    * detect and reject partial flushes.
@@ -297,6 +297,8 @@ class ChangeLogBlock
   u64 xxh3_seed_;
 
   EphemeralStateStorage ephemeral_state_storage_;
+
+  // TODO [tastolfi 2025-12-16] Add a field for the _last_ GBID of the _prior_ epoch.
 };
 
 namespace {

@@ -59,7 +59,7 @@ class RandomLeafGenerator
 
     // Generate a sorted run of random key/value pairs.
     //
-    result.result_set = this->items_generator_(decay_to_items, rng, store, {});
+    result.result_set = this->items_generator_(decay_to_items, rng, store, /*deleted=*/{});
 
     batt::WorkerPool& worker_pool = batt::WorkerPool::null_pool();
 

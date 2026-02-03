@@ -44,6 +44,11 @@ inline std::ostream& operator<<(std::ostream& out, const NeedsMerge& t)
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 //
 struct NeedsSplit {
+  u16 pivot_count = 0;
+  u16 segment_count = 0;
+  i16 height = 0;
+  u8 pad_[1];
+
   bool items_too_large : 1 = false;
   bool keys_too_large : 1 = false;
   bool too_many_pivots : 1 = false;
@@ -62,13 +67,14 @@ struct NeedsSplit {
   }
 };
 
-BATT_STATIC_ASSERT_EQ(sizeof(NeedsSplit), 1);
+BATT_STATIC_ASSERT_EQ(sizeof(NeedsSplit), 8);
 
 inline std::ostream& operator<<(std::ostream& out, const NeedsSplit& t)
 {
   return out << "NeedsSplit{.items_too_large=" << t.items_too_large
              << ", .keys_too_large=" << t.keys_too_large
-             << ", .too_many_pivots=" << t.too_many_pivots
+             << ", .too_many_pivots=" << t.too_many_pivots << ", .pivot_count=" << t.pivot_count
+             << ", .segment_count=" << t.segment_count << ", .height=" << t.height
              << ", .too_many_segments=" << t.too_many_segments
              << ", .flushed_item_counts_too_large=" << t.flushed_item_counts_too_large << ",}";
 }
@@ -105,6 +111,50 @@ inline bool compacting_levels_might_fix(const SubtreeViability& viability)
                !needs_split.items_too_large &&                //
                !needs_split.keys_too_large &&                 //
                !needs_split.too_many_pivots;
+      });
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+/** \brief If a node at height == 2 needs to be split (i.e., too large), and the reason is that the
+ * update buffer is too large
+ */
+inline bool normal_flush_might_fix(const SubtreeViability& viability)
+{
+  return batt::case_of(
+      viability,
+      [](const Viable&) {
+        return false;
+      },
+      [](const NeedsMerge&) {
+        return false;
+      },
+      [](const NeedsSplit& needs_split) {
+        return needs_split.height == 2 &&                  //
+               (needs_split.flushed_item_counts_too_large  //
+                || needs_split.too_many_segments) &&       //
+               !needs_split.items_too_large &&             //
+               !needs_split.keys_too_large &&              //
+               !needs_split.too_many_pivots;
+      });
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+inline bool normal_flush_might_fix_root(const SubtreeViability& viability)
+{
+  return batt::case_of(
+      viability,
+      [](const Viable&) {
+        return false;
+      },
+      [](const NeedsMerge&) {
+        return false;
+      },
+      [](const NeedsSplit& needs_split) {
+        return needs_split.too_many_segments &&  //
+               !needs_split.too_many_pivots &&   //
+               !needs_split.keys_too_large;
       });
 }
 

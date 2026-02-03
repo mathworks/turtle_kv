@@ -493,7 +493,7 @@ TEST(MergeCompactor, ResultSetDropKeyRange)
 class ResultSetConcatTest : public ::testing::Test
 {
  public:
-  void generate_edits(usize num_edits, bool needs_sort = true)
+  void generate_edits(usize num_edits)
   {
     std::unordered_set<KeyView> keys_set;
 
@@ -509,13 +509,7 @@ class ResultSetConcatTest : public ::testing::Test
                                     ValueView::from_str(this->store_.store(std::string(100, 'a'))));
     }
 
-    if (needs_sort) {
-      std::sort(this->all_edits_.begin(), this->all_edits_.end(), KeyOrder{});
-    } else {
-      if (std::is_sorted(this->all_edits_.begin(), this->all_edits_.end(), KeyOrder{})) {
-        std::swap(this->all_edits_.front(), this->all_edits_.back());
-      }
-    }
+    std::sort(this->all_edits_.begin(), this->all_edits_.end(), KeyOrder{});
   }
 
   template <bool kDecayToItems>
@@ -580,7 +574,7 @@ TEST_F(ResultSetConcatTest, Concat)
   //
   this->verify_result_set(concatenated_result_set, this->all_edits_);
 
-  // Now, repeat the process qith unequal sized inputs
+  // Now, repeat the process with unequal sized inputs.
   //
   first.assign(this->all_edits_.begin(), this->all_edits_.begin() + (n / 4));
   second.assign(this->all_edits_.begin() + (n / 4), this->all_edits_.end());
@@ -593,6 +587,14 @@ TEST_F(ResultSetConcatTest, Concat)
   //
   first = {};
   second.assign(this->all_edits_.begin(), this->all_edits_.begin() + (n / 4));
+
+  concatenated_result_set = this->concat(std::move(first), std::move(second), DecayToItem<false>{});
+
+  this->verify_result_set(concatenated_result_set,
+                          {this->all_edits_.begin(), this->all_edits_.begin() + (n / 4)});
+
+  first.assign(this->all_edits_.begin(), this->all_edits_.begin() + (n / 4));
+  second = {};
 
   concatenated_result_set = this->concat(std::move(first), std::move(second), DecayToItem<false>{});
 
@@ -648,10 +650,14 @@ TEST_F(ResultSetConcatTest, FragmentedConcat)
 TEST_F(ResultSetConcatTest, ConcatDeath)
 {
   usize n = 200;
-  this->generate_edits(n, /*needs_sort*/ false);
+  this->generate_edits(n);
 
   std::vector<EditView> first{this->all_edits_.begin(), this->all_edits_.begin() + (n / 2)};
   std::vector<EditView> second{this->all_edits_.begin() + (n / 2), this->all_edits_.end()};
+
+  // Undo the sorting.
+  //
+  std::swap(first.back(), second.front());
 
   // We should panic since first and second have overlapping key ranges.
   //

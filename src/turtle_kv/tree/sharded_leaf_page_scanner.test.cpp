@@ -7,9 +7,11 @@
 
 #include <turtle_kv/core/testing/generate.hpp>
 
+#include <turtle_kv/tree/leaf_page_view.hpp>
 #include <turtle_kv/tree/memory_storage.hpp>
 #include <turtle_kv/tree/packed_leaf_page.hpp>
 
+#include <llfs/page_allocate_options.hpp>
 #include <llfs/page_cache.hpp>
 
 #include <batteries/constants.hpp>
@@ -134,12 +136,15 @@ TEST_F(ShardedLeafPageScannerTest, Test)
 
     // Allocate a page so we can build a leaf for the batch.
     //
-    StatusOr<PinnedPage> pinned_page =
-        this->page_cache->allocate_page_of_size(this->tree_options.leaf_size(),
-                                                batt::WaitForResource{true},
-                                                LruPriority{1},
-                                                /*callers=*/0,
-                                                /*job_id=*/0);
+    StatusOr<PinnedPage> pinned_page = this->page_cache->allocate_page(
+        llfs::PageAllocateOptions{
+            this->tree_options.leaf_size(),
+            turtle_kv::LeafPageView::page_layout_id(),
+            batt::WaitForResource{true},
+            LruPriority{1},
+        },
+        /*callers=*/0,
+        /*job_id=*/0);
 
     ASSERT_TRUE(pinned_page.ok());
 

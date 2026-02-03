@@ -3,6 +3,7 @@
 #include <turtle_kv/change_log_writer.hpp>
 #include <turtle_kv/checkpoint.hpp>
 #include <turtle_kv/checkpoint_generator.hpp>
+#include <turtle_kv/kv_store_config.hpp>
 #include <turtle_kv/kv_store_metrics.hpp>
 #include <turtle_kv/mem_table.hpp>
 
@@ -41,27 +42,8 @@ class KVStore : public Table
  public:
   friend class KVStoreScanner;
 
-  struct Config {
-    TreeOptions tree_options = TreeOptions::with_default_values();
-    u64 initial_capacity_bytes = 0;
-    u64 max_capacity_bytes = 4 * kTB;
-    u64 change_log_size_bytes = 0;
-
-    //+++++++++++-+-+--+----- --- -- -  -  -   -
-
-    static Config with_default_values() noexcept;
-  };
-
-  struct RuntimeOptions {
-    usize initial_checkpoint_distance;
-    bool use_threaded_checkpoint_pipeline;
-    usize cache_size_bytes;
-    usize memtable_compact_threads;
-
-    //+++++++++++-+-+--+----- --- -- -  -  -   -
-
-    static RuntimeOptions with_default_values() noexcept;
-  };
+  using Config = KVStoreConfig;
+  using RuntimeOptions = KVStoreRuntimeOptions;
 
   struct ThreadContext {
     llfs::PageCache& page_cache;
@@ -130,6 +112,9 @@ class KVStore : public Table
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  KVStore(const KVStore&) = delete;
+  KVStore& operator=(const KVStore&) = delete;
+
   ~KVStore() noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -175,7 +160,10 @@ class KVStore : public Table
 
   Status force_checkpoint();
 
-  std::function<void(std::ostream&)> debug_info() noexcept;
+  std::function<void(std::ostream&)> debug_info() const noexcept;
+
+  void collect_stats(
+      std::function<void(std::string_view /*name*/, double /*value*/)> fn) const noexcept;
 
   llfs::PageCache& page_cache() noexcept
   {

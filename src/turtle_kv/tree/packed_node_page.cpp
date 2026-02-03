@@ -208,14 +208,16 @@ StatusOr<ValueView> PackedNodePage::find_key_in_level(usize level_i,
   UpdateBuffer::SegmentedLevel level =
       this->is_size_tiered() ? this->get_tier(level_i) : this->get_level(level_i);
 
-  return in_segmented_level(*this, level, *query.page_loader).find_key(key_pivot_i, query);
+  return in_segmented_level(*this, level, *query.page_loader, query.overcommit())
+      .find_key(key_pivot_i, query);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 StatusOr<llfs::PinnedPage> PackedNodePage::UpdateBuffer::Segment::load_leaf_page(
     llfs::PageLoader& page_loader,
-    llfs::PinPageToJob pin_page_to_job) const
+    llfs::PinPageToJob pin_page_to_job,
+    llfs::PageCacheOvercommit& overcommit) const
 {
   return page_loader.load_page(this->leaf_page_id.unpack(),
                                llfs::PageLoadOptions{
@@ -223,6 +225,7 @@ StatusOr<llfs::PinnedPage> PackedNodePage::UpdateBuffer::Segment::load_leaf_page
                                    pin_page_to_job,
                                    llfs::OkIfNotFound{false},
                                    llfs::LruPriority{kLeafLruPriority},
+                                   overcommit,
                                });
 }
 

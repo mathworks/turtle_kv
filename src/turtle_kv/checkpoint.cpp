@@ -1,3 +1,4 @@
+#include <llfs/page_cache_overcommit.hpp>
 #include <turtle_kv/checkpoint.hpp>
 //
 
@@ -29,7 +30,8 @@ namespace turtle_kv {
 
   Subtree tree = Subtree::from_page_id(tree_root_id);
 
-  batt::StatusOr<i32> height = tree.get_height(checkpoint_volume.cache());
+  batt::StatusOr<i32> height =
+      tree.get_height(checkpoint_volume.cache(), llfs::PageCacheOvercommit::not_allowed());
 
   BATT_REQUIRE_OK(height);
   BATT_ASSIGN_OK_RESULT(llfs::SlotReadLock slot_read_lock,
@@ -97,6 +99,7 @@ llfs::PageId Checkpoint::root_id() const
 //
 StatusOr<Checkpoint> Checkpoint::serialize(const TreeOptions& tree_options,
                                            llfs::PageCacheJob& job,
+                                           llfs::PageCacheOvercommit& overcommit,
                                            batt::WorkerPool& worker_pool) const noexcept
 {
   if (this->tree_->is_serialized()) {
@@ -104,14 +107,19 @@ StatusOr<Checkpoint> Checkpoint::serialize(const TreeOptions& tree_options,
     return {batt::make_copy(*this)};
   }
 
-  TreeSerializeContext serialize_context{tree_options, job, worker_pool};
+  TreeSerializeContext serialize_context{
+      tree_options,
+      job,
+      worker_pool,
+      overcommit,
+  };
 
   BATT_REQUIRE_OK(this->tree_->start_serialize(serialize_context));
   BATT_REQUIRE_OK(serialize_context.build_all_pages());
   BATT_ASSIGN_OK_RESULT(const llfs::PageId new_tree_root_id,
                         this->tree_->finish_serialize(serialize_context));
 
-  BATT_ASSIGN_OK_RESULT(const i32 serialized_height, this->tree_->get_height(job));
+  BATT_ASSIGN_OK_RESULT(const i32 serialized_height, this->tree_->get_height(job, overcommit));
   BATT_CHECK_EQ(serialized_height, this->tree_height_);
 
   return Checkpoint{
@@ -156,6 +164,8 @@ bool Checkpoint::is_durable() const noexcept
 StatusOr<Checkpoint> Checkpoint::flush_batch(batt::WorkerPool& worker_pool,
                                              llfs::PageCacheJob& job,
                                              const TreeOptions& tree_options,
+                                             BatchUpdateMetrics& metrics,
+                                             llfs::PageCacheOvercommit& overcommit,
                                              std::unique_ptr<DeltaBatch>&& delta_batch,
                                              const batt::CancelToken& cancel_token) noexcept
 {
@@ -165,6 +175,8 @@ StatusOr<Checkpoint> Checkpoint::flush_batch(batt::WorkerPool& worker_pool,
               .worker_pool = worker_pool,
               .page_loader = job,
               .cancel_token = cancel_token,
+              .metrics = metrics,
+              .overcommit = overcommit,
           },
       .result_set = delta_batch->consume_result_set(),
       .edit_size_totals = None,
@@ -176,7 +188,7 @@ StatusOr<Checkpoint> Checkpoint::flush_batch(batt::WorkerPool& worker_pool,
                                                   /*key_upper_bound=*/global_max_key(),
                                                   IsRoot{true}));
 
-  BATT_ASSIGN_OK_RESULT(i32 new_tree_height, this->tree_->get_height(job));
+  BATT_ASSIGN_OK_RESULT(i32 new_tree_height, this->tree_->get_height(job, overcommit));
 
   return Checkpoint{
       /*root_page_id=*/this->tree_->get_page_id(),

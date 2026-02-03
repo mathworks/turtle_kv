@@ -81,6 +81,7 @@ class Checkpoint
    */
   StatusOr<Checkpoint> serialize(const TreeOptions& tree_options,
                                  llfs::PageCacheJob& job,
+                                 llfs::PageCacheOvercommit& overcommit,
                                  batt::WorkerPool& worker_pool) const noexcept;
 
   /** \brief Returns the in-memory view of the checkpoint tree.
@@ -131,11 +132,13 @@ class Checkpoint
    */
   bool is_durable() const noexcept;
 
-  /** \brief Applys a batch update to this Checkpoint's tree to produce a new Checkpoint.
+  /** \brief Applies a batch update to this Checkpoint's tree to produce a new Checkpoint.
    */
   StatusOr<Checkpoint> flush_batch(batt::WorkerPool& worker_pool,
                                    llfs::PageCacheJob& job,
                                    const TreeOptions& tree_options,
+                                   BatchUpdateMetrics& metrics,
+                                   llfs::PageCacheOvercommit& overcommit,
                                    std::unique_ptr<DeltaBatch>&& batch,
                                    const batt::CancelToken& cancel_token) noexcept;
 

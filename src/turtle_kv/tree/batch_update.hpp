@@ -1,5 +1,7 @@
 #pragma once
 
+#include <turtle_kv/tree/batch_update_metrics.hpp>
+
 #include <turtle_kv/core/algo/compute_running_total.hpp>
 
 #include <turtle_kv/core/merge_compactor.hpp>
@@ -23,6 +25,8 @@ struct BatchUpdateContext {
   batt::WorkerPool& worker_pool;
   llfs::PageLoader& page_loader;
   batt::CancelToken cancel_token;
+  BatchUpdateMetrics& metrics;
+  llfs::PageCacheOvercommit& overcommit;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -40,6 +44,11 @@ struct BatchUpdateContext {
   batt::RunningTotal compute_running_total(
       const MergeCompactor::ResultSet<kDecayToItems>& result_set) const
   {
+#if TURTLE_KV_PROFILE_UPDATES
+    this->metrics.running_total_count.add(1);
+    LatencyTimer timer{this->metrics.latency_sample_rate, this->metrics.running_total_latency};
+#endif  // TURTLE_KV_PROFILE_UPDATES
+
     return ::turtle_kv::compute_running_total<kDecayToItems>(this->worker_pool, result_set);
   }
 };
@@ -96,6 +105,11 @@ inline StatusOr<MergeCompactor::ResultSet<kDecayToItems>> BatchUpdateContext::me
     const KeyView& max_key,
     GeneratorFn&& generator_fn)
 {
+#if TURTLE_KV_PROFILE_UPDATES
+  this->metrics.merge_compact_count.add(1);
+  LatencyTimer timer{this->metrics.latency_sample_rate, this->metrics.merge_compact_latency};
+#endif  // TURTLE_KV_PROFILE_UPDATES
+
   MergeCompactor compactor{this->worker_pool};
 
   compactor.start_push_levels();
@@ -105,7 +119,22 @@ inline StatusOr<MergeCompactor::ResultSet<kDecayToItems>> BatchUpdateContext::me
   MergeCompactor::OutputBuffer<kDecayToItems> edit_buffer;
 
   this->worker_pool.reset();
-  return compactor.read(edit_buffer, max_key);
+  StatusOr<MergeCompactor::ResultSet<kDecayToItems>> result_set =
+      compactor.read(edit_buffer, max_key);
+
+#if TURTLE_KV_PROFILE_UPDATES
+
+  if (result_set.ok()) {
+    const usize result_size = result_set->size();
+    this->metrics.merge_compact_key_count.add(result_size);
+    this->metrics.merge_compact_key_count_stats.update(result_size);
+  } else {
+    this->metrics.merge_compact_failures.add(1);
+  }
+
+#endif  // TURTLE_KV_PROFILE_UPDATES
+
+  return result_set;
 }
 
 }  // namespace turtle_kv

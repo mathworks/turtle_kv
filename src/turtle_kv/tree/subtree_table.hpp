@@ -28,7 +28,9 @@ class SubtreeTable : public Table
 
   StatusOr<ValueView> get(const KeyView& key) override
   {
-    BATT_ASSIGN_OK_RESULT(i32 height, this->subtree_.get_height(this->page_loader_));
+    BATT_ASSIGN_OK_RESULT(
+        i32 height,
+        this->subtree_.get_height(this->page_loader_, llfs::PageCacheOvercommit::not_allowed()));
 
     this->page_slice_storage_.emplace();
 

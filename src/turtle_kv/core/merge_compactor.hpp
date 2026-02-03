@@ -1,5 +1,8 @@
 #pragma once
 
+#include <turtle_kv/config.hpp>
+//
+
 #include <turtle_kv/core/edit_view.hpp>
 #include <turtle_kv/core/merge_compactor_base.hpp>
 #include <turtle_kv/core/merge_frame.hpp>
@@ -55,6 +58,10 @@ class MergeCompactor : public MergeCompactorBase
     StatsMetric<i64> result_set_waste;
     CountMetric<usize> result_set_compact_count;
     CountMetric<usize> result_set_compact_byte_count;
+
+#if TURTLE_KV_PROFILE_UPDATES
+    LatencyMetric compact_latency;
+#endif  // TURTLE_KV_PROFILE_UPDATES
 
     double average_bytes_per_compaction() const
     {

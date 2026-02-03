@@ -1,0 +1,58 @@
+{
+    "version": "0.5",
+    "requires": [
+        "abseil/20250127.0",
+        "batteries/0.63.0",
+        "boost/1.88.0",
+        "bzip2/1.0.8",
+        "cli11/2.5.0",
+        "gflags/2.2.2",
+        "glog/0.7.1",
+        "gtest/1.17.0",
+        "keyvcr/0.2.1",
+        "libbacktrace/cci.20240730",
+        "libfuse/3.16.2",
+        "libpfm4/4.13.0",
+        "libunwind/1.8.1",
+        "liburing/2.11",
+        "llfs/0.43.3",
+        "openssl/3.6.0",
+        "pcg-cpp/cci.20220409",
+        "protobuf/3.21.12",
+        "vqf/0.2.5",
+        "xxhash/0.8.3",
+        "zlib/1.3.1"
+    ],
+    "build_requires": [
+        "b2/5.3.3",
+        "cmake/3.31.10",
+        "cmake/4.2.0",
+        "meson/1.2.0",
+        "ninja/1.13.2"
+    ],
+    "python_requires": [
+        "cor_recipe_utils/0.18.2",
+        "cor_recipe_utils/0.8.7"
+    ],
+    "overrides": {
+        "libunwind/[>=1.8 <2]": [
+            "libunwind/1.8.1"
+        ],
+        "zlib/[>=1.2.11 <2]": [
+            "zlib/1.3.1"
+        ],
+        "libbacktrace/cci.20210118": [
+            "libbacktrace/cci.20240730"
+        ],
+        "zlib/[>=1.3.1 <2]": [
+            "zlib/1.3.1"
+        ],
+        "boost/[>=1.84.0 <2]": [
+            "boost/1.88.0"
+        ],
+        "batteries/[>=0.60.2 <2]": [
+            "batteries/0.63.0"
+        ]
+    },
+    "config_requires": []
+}

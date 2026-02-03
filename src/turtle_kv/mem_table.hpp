@@ -1,5 +1,6 @@
 #pragma once
 
+#include <llfs/page_cache_overcommit.hpp>
 #include <turtle_kv/change_log_writer.hpp>
 #include <turtle_kv/concurrent_hash_index.hpp>
 #include <turtle_kv/kv_store_metrics.hpp>
@@ -229,7 +230,8 @@ class MemTable : public batt::RefCounted<MemTable>
 
   void reserve_cache_space(usize byte_count)
   {
-    this->cache_allocs_.emplace_back(this->page_cache_.allocate_external(byte_count));
+    this->cache_allocs_.emplace_back(
+        this->page_cache_.allocate_external(byte_count, llfs::PageCacheOvercommit::not_allowed()));
   }
 
   std::vector<EditView> compact_hash_index();

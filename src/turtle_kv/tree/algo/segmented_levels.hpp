@@ -149,13 +149,18 @@ struct SegmentedLevelAlgorithms {
   NodeT& node_;
   LevelT& level_;
   PageLoaderT& page_loader_;
+  llfs::PageCacheOvercommit& overcommit_;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  explicit SegmentedLevelAlgorithms(NodeT& node, LevelT& level, PageLoaderT& page_loader) noexcept
+  explicit SegmentedLevelAlgorithms(NodeT& node,
+                                    LevelT& level,
+                                    PageLoaderT& page_loader,
+                                    llfs::PageCacheOvercommit& overcommit) noexcept
       : node_{node}
       , level_{level}
       , page_loader_{page_loader}
+      , overcommit_{overcommit}
   {
   }
 
@@ -186,9 +191,10 @@ struct SegmentedLevelAlgorithms {
         continue;
       }
 
-      BATT_ASSIGN_OK_RESULT(
-          PinnedPageT pinned_page,
-          segment.load_leaf_page(this->page_loader_, llfs::PinPageToJob::kDefault));
+      BATT_ASSIGN_OK_RESULT(PinnedPageT pinned_page,
+                            segment.load_leaf_page(this->page_loader_,
+                                                   llfs::PinPageToJob::kDefault,
+                                                   this->overcommit_));
 
       const PackedLeafPage& leaf_view = PackedLeafPage::view_of(pinned_page.get_page_buffer());
 
@@ -285,7 +291,9 @@ struct SegmentedLevelAlgorithms {
       // Else we can't split without knowing the item offset of the split point.
       //
       BATT_ASSIGN_OK_RESULT(PinnedPageT segment_pinned_leaf,
-                            segment.load_leaf_page(this->page_loader_, llfs::PinPageToJob::kFalse));
+                            segment.load_leaf_page(this->page_loader_,
+                                                   llfs::PinPageToJob::kFalse,
+                                                   this->overcommit_));
 
       const PackedLeafPage& leaf_page = PackedLeafPage::view_of(segment_pinned_leaf);
 
@@ -384,13 +392,17 @@ struct SegmentedLevelAlgorithms {
 /** \brief Access algorithms for segmented update buffer level.
  */
 template <typename NodeT, typename LevelT, typename PageLoaderT>
-inline SegmentedLevelAlgorithms<NodeT, LevelT, PageLoaderT>
-in_segmented_level(NodeT& node, LevelT& level, PageLoaderT& page_loader)
+inline SegmentedLevelAlgorithms<NodeT, LevelT, PageLoaderT> in_segmented_level(
+    NodeT& node,
+    LevelT& level,
+    PageLoaderT& page_loader,
+    llfs::PageCacheOvercommit& overcommit)
 {
   return SegmentedLevelAlgorithms<NodeT, LevelT, PageLoaderT>{
       node,
       level,
       page_loader,
+      overcommit,
   };
 }
 
@@ -405,6 +417,7 @@ inline SegmentedLevelAlgorithms<NodeUnavailable, LevelT, PageLoaderUnavailable> 
       NodeUnavailable{},
       level,
       PageLoaderUnavailable{},
+      llfs::PageCacheOvercommit::not_allowed(),
   };
 }
 

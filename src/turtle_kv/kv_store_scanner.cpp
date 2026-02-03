@@ -29,7 +29,9 @@ TURTLE_KV_ENV_PARAM(bool, turtlekv_use_sharded_leaf_scanner, false);
 {
   auto& m = KVStoreScanner::metrics();
   m.ctor_count.add(1);
+#if TURTLE_KV_PROFILE_QUERIES
   LatencyTimer timer{batt::Every2ToTheConst<10>{}, m.ctor_latency};
+#endif
 
   if (this->pinned_state_->mem_table_->has_ordered_index()) {
     this->mem_table_scanner_.emplace(this->pinned_state_->mem_table_->ordered_index(), min_key);
@@ -46,10 +48,10 @@ TURTLE_KV_ENV_PARAM(bool, turtlekv_use_sharded_leaf_scanner, false);
                                             i32 tree_height,
                                             const KeyView& min_key,
                                             llfs::PageSize trie_index_sharded_view_size,
-                                            Optional<PageSliceStorage> slice_storage) noexcept
+                                            PageSliceStorage* slice_storage) noexcept
     : pinned_state_{nullptr}
     , page_loader_{page_loader}
-    , slice_storage_{slice_storage ? std::addressof(*slice_storage) : nullptr}
+    , slice_storage_{slice_storage}
     , root_{root}
     , trie_index_sharded_view_size_{trie_index_sharded_view_size}
     , tree_height_{tree_height}
@@ -80,10 +82,14 @@ Status KVStoreScanner::start()
 {
   auto& m = KVStoreScanner::metrics();
   m.start_count.add(1);
+#if TURTLE_KV_PROFILE_QUERIES
   LatencyTimer timer{batt::Every2ToTheConst<10>{}, m.start_latency};
+#endif
 
   if (this->pinned_state_) {
+#if TURTLE_KV_PROFILE_QUERIES
     LatencyTimer timer{batt::Every2ToTheConst<10>{}, m.start_deltas_latency};
+#endif
 
     const usize n_deltas = this->pinned_state_->deltas_.size();
 
@@ -175,11 +181,15 @@ Status KVStoreScanner::start()
   //
   if (this->root_.is_valid()) {
     {
+#if TURTLE_KV_PROFILE_QUERIES
       LatencyTimer timer{batt::Every2ToTheConst<10>{}, m.start_enter_subtree_latency};
+#endif
       BATT_REQUIRE_OK(this->enter_subtree(this->tree_height_, this->root_, std::false_type{}));
     }
     {
+#if TURTLE_KV_PROFILE_QUERIES
       LatencyTimer timer{batt::Every2ToTheConst<10>{}, m.start_resume_latency};
+#endif
       BATT_REQUIRE_OK(this->resume());
     }
   }
@@ -188,7 +198,9 @@ Status KVStoreScanner::start()
   //
   {
     m.init_heap_size_stats.update(this->scan_levels_.size());
+#if TURTLE_KV_PROFILE_QUERIES
     LatencyTimer timer{batt::Every2ToTheConst<10>{}, m.start_build_heap_latency};
+#endif
     this->heap_.reset(as_slice(this->scan_levels_), /*minimum_capacity=*/kMaxHeapSize);
   }
 
@@ -425,7 +437,9 @@ Status KVStoreScanner::set_next_item()
 {
   auto& m = KVStoreScanner::metrics();
   m.next_count.add(1);
+#if TURTLE_KV_PROFILE_QUERIES
   LatencyTimer timer{batt::Every2ToTheConst<10>{}, m.next_latency};
+#endif
 
   for (;;) {
     if (this->heap_.empty()) {
@@ -438,25 +452,21 @@ Status KVStoreScanner::set_next_item()
       this->next_item_.emplace(scan_level->item());
 
     } else if (this->next_item_->key == scan_level->key) {
-      // If this->next_item_->key == scan_level->key, we need to search for a terminal value for
-      // the item, so combine it if necessary.
+      // Search for a terminal value for the item and combine it if necessary.
       //
       if (this->next_item_->needs_combine()) {
         this->next_item_->value = combine(this->next_item_->value, scan_level->value());
       }
 
     } else {
-      // If the item stored in this->next_item_ does not have the same key as the first key in
-      // the current scan_level, we have reached a terminal value for this->next_item_. Now,
-      // we have to decide whether we want to keep this->next_item_ and  break from the loop
-      // (returning the item to the function's caller) OR discard it, because the terminal value
-      // represents a deleted item.
+      // We have reached a terminal value for this->next_item_. Now, we have to decide whether
+      // we want to return the item to the function's caller OR discard it, because the terminal
+      // value represents a deleted item.
       //
       if (this->next_item_->value == ValueView::deleted()) {
-        // The terminal value represents a deleted item, so discard it by setting this->next_item_
-        // to None. Then, continue on to the next iteration of the loop, skipping the logic to
-        // advance the current scan_level. We do this because we now need to set the first key
-        // in the current scan_level to this->next_item_ to examine it next.
+        // Discard the deleted item and continue on to the next iteration of the loop, skipping
+        // the logic to advance the current scan_level. We do this because we now need to set the
+        // first key in the current scan_level to this->next_item_ to examine it next.
         //
         this->next_item_ = None;
         if (this->needs_resume_) {
@@ -469,12 +479,16 @@ Status KVStoreScanner::set_next_item()
     }
 
     if (scan_level->advance()) {
+#if TURTLE_KV_PROFILE_QUERIES
       LatencyTimer timer{batt::Every2ToTheConst<8>{},
                          KVStoreScanner::metrics().heap_update_latency};
+#endif
       this->heap_.update_first();
     } else {
+#if TURTLE_KV_PROFILE_QUERIES
       LatencyTimer timer{batt::Every2ToTheConst<8>{},
                          KVStoreScanner::metrics().heap_remove_latency};
+#endif
       this->heap_.remove_first();
       this->needs_resume_ = true;
     }
@@ -670,6 +684,8 @@ ValueView KVStoreScanner::ScanLevel::value() const
 
 namespace {
 
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 template <typename MemTableScanStateT>
 BATT_ALWAYS_INLINE bool scan_level_mem_table_advance_impl(KVStoreScanner::ScanLevel* scan_level,
                                                           MemTableScanStateT& state)
@@ -677,7 +693,9 @@ BATT_ALWAYS_INLINE bool scan_level_mem_table_advance_impl(KVStoreScanner::ScanLe
   auto& m = KVStoreScanner::metrics();
 
   m.art_advance_count.add(1);
+#if TURTLE_KV_PROFILE_QUERIES
   LatencyTimer timer{batt::Every2ToTheConst<10>{}, m.art_advance_latency};
+#endif
 
   state.art_scanner_->advance();
   if (state.art_scanner_->is_done()) {
@@ -696,7 +714,9 @@ bool KVStoreScanner::ScanLevel::advance()
   auto& m = KVStoreScanner::metrics();
 
   m.scan_level_advance_count.add(1);
+#if TURTLE_KV_PROFILE_QUERIES
   LatencyTimer timer{batt::Every2ToTheConst<10>{}, m.scan_level_advance_latency};
+#endif
 
   return batt::case_of(
       this->state_impl,
@@ -804,8 +824,10 @@ template <bool kInsertHeap>
         this->active_levels_ |= (u64{1} << buffer_level_i);
         ScanLevel& level = kv_scanner.scan_levels_.emplace_back(first_slice, this, buffer_level_i);
         if (kInsertHeap) {
+#if TURTLE_KV_PROFILE_QUERIES
           LatencyTimer timer{batt::Every2ToTheConst<8>{},
                              KVStoreScanner::metrics().heap_insert_latency};
+#endif
           kv_scanner.heap_.insert(&level);
         }
       }
@@ -815,6 +837,7 @@ template <bool kInsertHeap>
                             level,
                             kv_scanner.page_loader_,
                             llfs::PinPageToJob::kFalse,
+                            llfs::PageCacheOvercommit::not_allowed(),
                             this->pivot_i_,
                             kv_scanner.min_key_);
 
@@ -823,8 +846,10 @@ template <bool kInsertHeap>
         this->active_levels_ |= (u64{1} << buffer_level_i);
         ScanLevel& level = kv_scanner.scan_levels_.emplace_back(first_slice, this, buffer_level_i);
         if (kInsertHeap) {
+#if TURTLE_KV_PROFILE_QUERIES
           LatencyTimer timer{batt::Every2ToTheConst<8>{},
                              KVStoreScanner::metrics().heap_insert_latency};
+#endif
           kv_scanner.heap_.insert(&level);
         }
       }
@@ -856,15 +881,19 @@ template <bool kInsertHeap>
 
     ScanLevel& level = kv_scanner.scan_levels_.emplace_back(sharded_slice, this, 0);
     if (kInsertHeap) {
+#if TURTLE_KV_PROFILE_QUERIES
       LatencyTimer timer{batt::Every2ToTheConst<8>{},
                          KVStoreScanner::metrics().heap_insert_latency};
+#endif
       kv_scanner.heap_.insert(&level);
     }
   } else {
     ScanLevel& level = kv_scanner.scan_levels_.emplace_back(first_slice, this, 0);
     if (kInsertHeap) {
+#if TURTLE_KV_PROFILE_QUERIES
       LatencyTimer timer{batt::Every2ToTheConst<8>{},
                          KVStoreScanner::metrics().heap_insert_latency};
+#endif
       kv_scanner.heap_.insert(&level);
     }
   }
@@ -977,7 +1006,9 @@ auto KVStoreScanner::NodeScanState::pull_next_sharded(i32 buffer_level_i) -> Sha
   auto& m = KVStoreScanner::metrics();
 
   m.pull_next_sharded_count.add(1);
+#if TURTLE_KV_PROFILE_QUERIES
   LatencyTimer timer{batt::Every2ToTheConst<10>{}, m.pull_next_sharded_latency};
+#endif
 
   ShardedLevelVector& sharded_scanners = std::get<ShardedLevelVector>(this->level_scanners_);
   PackedLevelShardedScanner& level_scanner = sharded_scanners[buffer_level_i];

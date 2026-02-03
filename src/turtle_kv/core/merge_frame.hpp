@@ -14,7 +14,6 @@ class MergeFrame
 {
  public:
   friend class MergeCompactor;
-  friend class MergeScanner;
   friend class MergeLine;
 
   static constexpr usize kMaxLines = 64;

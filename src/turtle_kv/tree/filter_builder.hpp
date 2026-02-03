@@ -19,12 +19,15 @@
 #include <llfs/bloom_filter_page_view.hpp>
 #include <llfs/packed_bloom_filter_page.hpp>
 #include <llfs/packed_page_id.hpp>
+#include <llfs/page_allocate_options.hpp>
 #include <llfs/page_cache.hpp>
+#include <llfs/page_layout_id.hpp>
 #include <llfs/pinned_page.hpp>
 
 #include <vqf/vqf_filter.h>
 
 #include <batteries/async/debug_info.hpp>
+#include <batteries/async/types.hpp>
 #include <batteries/async/worker_pool.hpp>
 
 #include <atomic>
@@ -57,6 +60,7 @@ struct BloomFilterMetrics {
 
 struct FilterPageAlloc {
   llfs::PageCache& page_cache_;
+  llfs::PageCacheOvercommit overcommit_;
   llfs::PageId leaf_page_id_;
   Status status;
   llfs::PinnedPage pinned_filter_page;
@@ -67,21 +71,37 @@ struct FilterPageAlloc {
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  explicit FilterPageAlloc(llfs::PageCache& page_cache, llfs::PageId leaf_page_id) noexcept
+  explicit FilterPageAlloc(llfs::PageCache& page_cache,
+                           llfs::PageId leaf_page_id,
+                           llfs::PageLayoutId filter_page_layout_id,
+                           llfs::PageSize filter_page_size,
+						   bool overcommit_triggered) noexcept
       : page_cache_{page_cache}
       , leaf_page_id_{leaf_page_id}
   {
+    this->overcommit_.allow(true);
+    this->overcommit_.trigger(overcommit_triggered);
+
     this->status = [&]() -> Status {
       BATT_ASSIGN_OK_RESULT(
           this->pinned_filter_page,
           page_cache.allocate_paired_page_for(leaf_page_id,
                                               kPairedFilterForLeaf,
-                                              llfs::LruPriority{kNewFilterLruPriority}));
+                                              llfs::PageAllocateOptions{
+                                                  batt::make_copy(filter_page_size),
+                                                  batt::make_copy(filter_page_layout_id),
+                                                  llfs::LruPriority{kNewFilterLruPriority},
+                                                  batt::WaitForResource::kFalse,
+												  this->overcommit_,
+                                              }));
 
       this->filter_page_id = this->pinned_filter_page.page_id();
       BATT_CHECK(this->filter_page_id);
 
       BATT_ASSIGN_OK_RESULT(this->filter_buffer, this->pinned_filter_page->get_new_page_buffer());
+
+      LOG_IF_EVERY_N(INFO, this->overcommit_.is_triggered(), 100)
+          << "cache over-commit triggered for filter page";
 
       return OkStatus();
     }();
@@ -108,7 +128,9 @@ struct FilterPageAlloc {
 //
 template <typename ItemsT>
 Status build_bloom_filter_for_leaf(llfs::PageCache& page_cache,
+                                   bool overcommit_triggered,
                                    usize filter_bits_per_key,
+                                   llfs::PageSize filter_page_size,
                                    llfs::PageId leaf_page_id,
                                    const ItemsT& items)
 {
@@ -118,7 +140,13 @@ Status build_bloom_filter_for_leaf(llfs::PageCache& page_cache,
 
   auto& metrics = BloomFilterMetrics::instance();
 
-  FilterPageAlloc alloc{page_cache, leaf_page_id};
+  FilterPageAlloc alloc{
+      page_cache,
+      leaf_page_id,
+      llfs::PackedBloomFilterPage::page_layout_id(),
+      filter_page_size,
+	  overcommit_triggered,
+  };
   BATT_REQUIRE_OK(alloc.status);
 
   LatencyTimer timer{Every2ToTheConst<8>{}, metrics.build_page_latency};
@@ -220,7 +248,9 @@ inline Status build_vqf_filter(const MutableBuffer& filter_buffer,
 //
 template <typename ItemsT>
 Status build_quotient_filter_for_leaf(llfs::PageCache& page_cache,
+                                      bool overcommit_triggered,
                                       usize filter_bits_per_key,
+                                      llfs::PageSize filter_page_size,
                                       llfs::PageId leaf_page_id,
                                       const ItemsT& items)
 {
@@ -228,7 +258,13 @@ Status build_quotient_filter_for_leaf(llfs::PageCache& page_cache,
     return OkStatus();
   }
 
-  FilterPageAlloc alloc{page_cache, leaf_page_id};
+  FilterPageAlloc alloc{
+      page_cache,
+      leaf_page_id,
+      VqfFilterPageView::page_layout_id(),
+      filter_page_size,
+	  overcommit_triggered,
+  };
   BATT_REQUIRE_OK(alloc.status);
 
   llfs::PackedPageHeader* const filter_page_header = mutable_page_header(alloc.filter_buffer.get());
@@ -306,17 +342,27 @@ Status build_quotient_filter_for_leaf(llfs::PageCache& page_cache,
 //
 template <typename ItemsT>
 auto build_filter_for_leaf_in_job(llfs::PageCache& page_cache,
+                                  bool overcommit_triggered,
                                   usize filter_bits_per_key,
+                                  llfs::PageSize filter_page_size,
                                   llfs::PageId leaf_page_id,
                                   const ItemsT& items)
 {
 #if TURTLE_KV_USE_BLOOM_FILTER
-  Status filter_status =
-      build_bloom_filter_for_leaf(page_cache, filter_bits_per_key, leaf_page_id, items);
+  Status filter_status = build_bloom_filter_for_leaf(page_cache,
+                                                     overcommit_triggered,
+                                                     filter_bits_per_key,
+                                                     filter_page_size,
+                                                     leaf_page_id,
+                                                     items);
 
 #elif TURTLE_KV_USE_QUOTIENT_FILTER
-  Status filter_status =
-      build_quotient_filter_for_leaf(page_cache, filter_bits_per_key, leaf_page_id, items);
+  Status filter_status = build_quotient_filter_for_leaf(page_cache,
+                                                        overcommit_triggered,
+                                                        filter_bits_per_key,
+                                                        filter_page_size,
+                                                        leaf_page_id,
+                                                        items);
 
 #endif  //----- --- -- -  -  -   -
 

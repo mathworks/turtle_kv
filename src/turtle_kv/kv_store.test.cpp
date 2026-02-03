@@ -54,7 +54,7 @@ TEST(KVStoreTest, CreateAndOpen)
     BATT_CHECK_OK(batt::pin_thread_to_cpu(0));
 
     for (bool size_tiered : {false, true}) {
-      KVStore::Config kv_store_config;
+      KVStore::Config kv_store_config = KVStore::Config::with_default_values();
 
       kv_store_config.initial_capacity_bytes = 512 * kMiB;
       kv_store_config.change_log_size_bytes = 64 * kMiB * 100;
@@ -109,6 +109,7 @@ TEST(KVStoreTest, CreateAndOpen)
           auto p_storage_context =
               llfs::StorageContext::make_shared(batt::Runtime::instance().default_scheduler(),  //
                                                 scoped_io_ring->get_io_ring());
+
           BATT_CHECK_OK(KVStore::configure_storage_context(*p_storage_context,
                                                            tree_options,
                                                            runtime_options));
@@ -139,7 +140,7 @@ TEST(KVStoreTest, CreateAndOpen)
             auto& m = kv_store.metrics();
             LOG(INFO) << BATT_INSPECT(m.avg_edits_per_batch());
             LOG(INFO) << BATT_INSPECT(m.compact_batch_latency);
-            LOG(INFO) << BATT_INSPECT(m.push_batch_latency);
+            LOG(INFO) << BATT_INSPECT(m.apply_batch_latency);
             LOG(INFO) << BATT_INSPECT(m.finalize_checkpoint_latency);
             LOG(INFO) << BATT_INSPECT(m.append_job_latency);
           }
@@ -195,7 +196,7 @@ TEST(KVStoreTest, ScanStressTest)
 
   StdMapTable expected_table;
 
-  KVStore::Config kv_store_config;
+  KVStore::Config kv_store_config = KVStore::Config::with_default_values();
 
   kv_store_config.initial_capacity_bytes = 0 * kMiB;
   kv_store_config.change_log_size_bytes = 512 * kMiB * 10;
@@ -333,7 +334,7 @@ TEST_P(CheckpointTest, CheckpointRecovery)
   RandomStringGenerator generate_key;
   SequentialStringGenerator generate_value{100};
 
-  KVStore::Config kv_store_config;
+  auto kv_store_config = KVStore::Config::with_default_values();
 
   kv_store_config.initial_capacity_bytes = 0 * kMiB;
   kv_store_config.change_log_size_bytes = 512 * kMiB * 10;

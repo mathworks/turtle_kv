@@ -23,7 +23,6 @@ namespace turtle_kv {
 // Forward-declarations.
 //
 class MergeCompactor;
-class MergeScanner;
 class MergeFrame;
 
 /** \brief A sequence of non-intersecting EditSlice objects at a constant merge-depth.
@@ -32,7 +31,6 @@ class MergeLine
 {
  public:
   friend class MergeCompactor;
-  friend class MergeScanner;
   friend class MergeFrame;
 
   using FrontKeyHeap = boost::heap::d_ary_heap<Ref<MergeLine>,                         //

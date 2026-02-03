@@ -28,6 +28,7 @@ template <
 StatusOr<R> visit_tree_page(llfs::PageLoader& page_loader,
                             llfs::PinnedPage& pinned_page_out,
                             const llfs::PageIdSlot& page_id_slot,
+                            llfs::PageCacheOvercommit& overcommit,
                             VisitorFn&& visitor_fn)
 {
   if (!pinned_page_out || pinned_page_out.page_id() != page_id_slot.page_id) {
@@ -37,6 +38,7 @@ StatusOr<R> visit_tree_page(llfs::PageLoader& page_loader,
                                                         llfs::PinPageToJob::kDefault,
                                                         llfs::OkIfNotFound{false},
                                                         llfs::LruPriority{kNodeLruPriority},
+                                                        overcommit,
                                                     }));
   }
   const auto& page_header =
@@ -60,11 +62,16 @@ template <
     typename R = StatusOr<RemoveStatusOr<std::invoke_result_t<VisitorFn, const PackedLeafPage&>>>>
 StatusOr<R> visit_tree_page(llfs::PageLoader& page_loader,
                             const llfs::PageIdSlot& page_id_slot,
+                            llfs::PageCacheOvercommit& overcommit,
                             VisitorFn&& visitor_fn)
 {
   llfs::PinnedPage pinned_page;
 
-  return visit_tree_page(page_loader, pinned_page, page_id_slot, BATT_FORWARD(visitor_fn));
+  return visit_tree_page(page_loader,
+                         pinned_page,
+                         page_id_slot,
+                         overcommit,
+                         BATT_FORWARD(visitor_fn));
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -73,11 +80,13 @@ template <typename... CaseFns>
 decltype(auto) visit_tree_page(llfs::PageLoader& page_loader,
                                llfs::PinnedPage& pinned_page_out,
                                const llfs::PageIdSlot& page_id_slot,
+                               llfs::PageCacheOvercommit& overcommit,
                                CaseFns&&... case_fns)
 {
   return visit_tree_page(page_loader,
                          pinned_page_out,
                          page_id_slot,
+                         overcommit,
                          batt::make_case_of_visitor(BATT_FORWARD(case_fns)...));
 }
 
@@ -86,10 +95,12 @@ decltype(auto) visit_tree_page(llfs::PageLoader& page_loader,
 template <typename... CaseFns>
 decltype(auto) visit_tree_page(llfs::PageLoader& page_loader,
                                const llfs::PageIdSlot& page_id_slot,
+                               llfs::PageCacheOvercommit& overcommit,
                                CaseFns&&... case_fns)
 {
   return visit_tree_page(page_loader,
                          page_id_slot,
+                         overcommit,
                          batt::make_case_of_visitor(BATT_FORWARD(case_fns)...));
 }
 
@@ -101,6 +112,7 @@ template <
 StatusOr<R> visit_leaf_page(llfs::PageLoader& page_loader,
                             llfs::PinnedPage& pinned_page_out,
                             const llfs::PageIdSlot& page_id_slot,
+                            llfs::PageCacheOvercommit& overcommit,
                             VisitorFn&& visitor_fn)
 {
   if (!pinned_page_out || pinned_page_out.page_id() != page_id_slot.page_id) {
@@ -111,6 +123,7 @@ StatusOr<R> visit_leaf_page(llfs::PageLoader& page_loader,
                                                         llfs::PinPageToJob::kDefault,
                                                         llfs::OkIfNotFound{false},
                                                         llfs::LruPriority{kLeafLruPriority},
+                                                        overcommit,
                                                     }));
   }
   return BATT_FORWARD(visitor_fn)(PackedLeafPage::view_of(pinned_page_out));
@@ -123,11 +136,16 @@ template <
     typename R = StatusOr<RemoveStatusOr<std::invoke_result_t<VisitorFn, const PackedLeafPage&>>>>
 StatusOr<R> visit_leaf_page(llfs::PageLoader& page_loader,
                             const llfs::PageIdSlot& page_id_slot,
+                            llfs::PageCacheOvercommit& overcommit,
                             VisitorFn&& visitor_fn)
 {
   llfs::PinnedPage pinned_page;
 
-  return visit_leaf_page(page_loader, pinned_page, page_id_slot, BATT_FORWARD(visitor_fn));
+  return visit_leaf_page(page_loader,
+                         pinned_page,
+                         page_id_slot,
+                         overcommit,
+                         BATT_FORWARD(visitor_fn));
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -138,6 +156,7 @@ template <
 StatusOr<R> visit_node_page(llfs::PageLoader& page_loader,
                             llfs::PinnedPage& pinned_page_out,
                             const llfs::PageIdSlot& page_id_slot,
+                            llfs::PageCacheOvercommit& overcommit,
                             VisitorFn&& visitor_fn)
 {
   if (!pinned_page_out || pinned_page_out.page_id() != page_id_slot.page_id) {
@@ -148,6 +167,7 @@ StatusOr<R> visit_node_page(llfs::PageLoader& page_loader,
                                                         llfs::PinPageToJob::kDefault,
                                                         llfs::OkIfNotFound{false},
                                                         llfs::LruPriority{kNodeLruPriority},
+                                                        overcommit,
                                                     }));
   }
   return BATT_FORWARD(visitor_fn)(PackedNodePage::view_of(pinned_page_out));
@@ -160,11 +180,16 @@ template <
     typename R = StatusOr<RemoveStatusOr<std::invoke_result_t<VisitorFn, const PackedNodePage&>>>>
 StatusOr<R> visit_node_page(llfs::PageLoader& page_loader,
                             const llfs::PageIdSlot& page_id_slot,
+                            llfs::PageCacheOvercommit& overcommit,
                             VisitorFn&& visitor_fn)
 {
   llfs::PinnedPage pinned_page;
 
-  return visit_node_page(page_loader, pinned_page, page_id_slot, BATT_FORWARD(visitor_fn));
+  return visit_node_page(page_loader,
+                         pinned_page,
+                         page_id_slot,
+                         overcommit,
+                         BATT_FORWARD(visitor_fn));
 }
 
 }  // namespace turtle_kv

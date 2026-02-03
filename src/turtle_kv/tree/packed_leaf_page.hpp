@@ -246,7 +246,9 @@ struct PackedLeafPage {
   //
   const PackedKeyValue* find_key(const std::string_view& key) const
   {
+#if TURTLE_KV_PROFILE_QUERIES
     LatencyTimer timer{Every2ToTheConst<16>{}, PackedLeafPage::metrics().find_key_latency};
+#endif
 
     Interval<usize> search_range = this->calculate_search_range(key);
 
@@ -403,36 +405,39 @@ inline void PackedLeafLayoutPlan::check_valid(std::string_view label) const
 inline usize PackedLeafLayoutPlan::compute_trie_step_size() const
 {
   BATT_CHECK_GT(this->key_count, 0);
-  BATT_CHECK_GT(this->avg_key_len, 0);
-
-  // If there are no deleted items in this leaf, return 16.
-  //
-  if (this->drop_count == 0) {
-    return 16;
-  }
-
-  usize trie_buffer_size = this->trie_index_end - this->trie_index_begin;
-  BATT_CHECK_GT(trie_buffer_size, 0);
 
   // Determine the number of pivot keys to intialize the trie with by using the size of the trie
   // buffer and the average key length across the items in the leaf.
   //
-  usize pivot_count = trie_buffer_size / this->avg_key_len;
-  usize step_size = (this->key_count + pivot_count - 1) / pivot_count;
+  usize step_size = [&]() -> usize {
+    // If there are no deleted items in this leaf, return 16.
+    //
+    if (this->drop_count == 0) {
+      return 16;
+    }
+    const usize trie_buffer_size = this->trie_index_end - this->trie_index_begin;
+    BATT_CHECK_GT(trie_buffer_size, 0);
+
+    BATT_CHECK_GT(this->avg_key_len, 0);
+    const usize pivot_count = trie_buffer_size / this->avg_key_len;
+    return (this->key_count + pivot_count - 1) / pivot_count;
+  }();
 
   BATT_CHECK_GT(step_size, 0);
 
-  // If the calculated step size is already a power of 2, return it now.
+  // Round down to the nearest power of 2.
   //
-  if ((step_size & (step_size - 1)) == 0) {
-    return step_size;
+  step_size = (usize{1} << batt::log2_floor(step_size));
+
+  // Handle edge cases.
+  //
+  if (this->key_count <= step_size) {
+    step_size = 1;
+  } else if (this->key_count < 256) {
+    step_size = this->key_count / 16;
   }
 
-  // Otherwise, calculate the nearest power of 2 less than `step_size`.
-  //
-  i32 shift = batt::log2_floor(step_size);
-  BATT_CHECK_GE(shift, 0);
-  return usize{1} << shift;
+  return step_size;
 }
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
@@ -735,18 +740,32 @@ inline PackedLeafPage* build_leaf_page(MutableBuffer buffer,
   if (plan.trie_index_reserved_size > 0) {
     const MutableBuffer trie_buffer{(void*)advance_pointer(buffer.data(), plan.trie_index_begin),
                                     plan.trie_index_end - plan.trie_index_begin};
+
     usize step_size = plan.compute_trie_step_size();
+
     bool retried = false;
+    batt::SmallVec<char, 64> upper_bound_key;
     batt::SmallVec<std::string_view, 1024> pivot_keys;
     for (;;) {
       BATT_CHECK_GT(step_size, 0);
-      for (usize i = step_size; i < plan.key_count; i += step_size) {
-        std::string_view k0 = p_header->key_at(i - 1);
-        std::string_view k1 = p_header->key_at(i);
-        std::string_view prefix = llfs::find_common_prefix(0, k0, k1);
-        std::string_view pivot = std::string_view{k1.data(), prefix.size() + 1};
+      if (plan.key_count == 1) {
+        // Construct an artificial upper bound by just appending a character to the one key.
+        //
+        std::string_view k0 = p_header->key_at(0);
+        upper_bound_key.resize(k0.size() + 1);
+        std::memcpy(upper_bound_key.data(), k0.data(), k0.size());
+        upper_bound_key.back() = '~';
+        pivot_keys.emplace_back(std::string_view{upper_bound_key.data(), upper_bound_key.size()});
 
-        pivot_keys.emplace_back(pivot);
+      } else {
+        for (usize i = step_size; i < plan.key_count; i += step_size) {
+          std::string_view k0 = p_header->key_at(i - 1);
+          std::string_view k1 = p_header->key_at(i);
+          std::string_view prefix = llfs::find_common_prefix(0, k0, k1);
+          std::string_view pivot = std::string_view{k1.data(), prefix.size() + 1};
+
+          pivot_keys.emplace_back(pivot);
+        }
       }
 
       // If there are too few keys to build a trie index, then stop here.
@@ -794,6 +813,9 @@ inline PackedLeafPage* build_leaf_page(MutableBuffer buffer,
     BATT_CHECK_LE(p_header->trie_index_size, trie_buffer.size());
 
     metrics.packed_trie_wasted_stats.update(trie_buffer.size() - p_header->trie_index_size);
+
+    BATT_CHECK_NE(p_header->trie_index.offset, 0)
+        << BATT_INSPECT(pivot_keys.size()) << BATT_INSPECT(plan.key_count);
   }
 
   return p_header;

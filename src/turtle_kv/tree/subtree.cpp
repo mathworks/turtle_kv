@@ -121,6 +121,9 @@ Status Subtree::apply_batch_update(const TreeOptions& tree_options,
   BATT_CHECK_GT(parent_height, 0);
   BATT_CHECK(!this->locked_.load());
 
+  BATT_CHECK_LT(parent_height - 1, SubtreeMetrics::kMaxTreeHeight + 1);
+  Subtree::metrics().batch_count_per_height[parent_height - 1].add(1);
+
   Subtree& subtree = *this;
 
   StatusOr<Subtree> new_subtree = batt::case_of(  //
@@ -154,6 +157,7 @@ Status Subtree::apply_batch_update(const TreeOptions& tree_options,
                 llfs::PinPageToJob::kDefault,
                 llfs::OkIfNotFound{false},
                 llfs::LruPriority{(parent_height > 2) ? kNodeLruPriority : kLeafLruPriority},
+                update.context.overcommit,
             });
 
         BATT_REQUIRE_OK(status_or_pinned_page) << BATT_INSPECT(parent_height);
@@ -225,10 +229,7 @@ Status Subtree::apply_batch_update(const TreeOptions& tree_options,
           return OkStatus();
         },
         [&](NeedsSplit needs_split) {
-          // TODO [vsilai 12-9-2025]: revist when VLDB changes are merged in.
-          //
-          if (needs_split.too_many_segments && !needs_split.too_many_pivots &&
-              !needs_split.keys_too_large) {
+          if (normal_flush_might_fix_root(needs_split)) {
             Status flush_status = new_subtree->try_flush(update.context);
             if (flush_status.ok() && batt::is_case<Viable>(new_subtree->get_viability())) {
               return OkStatus();
@@ -266,13 +267,13 @@ Status Subtree::apply_batch_update(const TreeOptions& tree_options,
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status Subtree::split_and_grow(BatchUpdateContext& context,
+Status Subtree::split_and_grow(BatchUpdateContext& update_context,
                                const TreeOptions& tree_options,
                                const KeyView& key_upper_bound)
 {
   BATT_CHECK(!this->locked_.load());
 
-  StatusOr<Optional<Subtree>> upper_half_subtree = this->try_split(context);
+  StatusOr<Optional<Subtree>> upper_half_subtree = this->try_split(update_context);
   if (upper_half_subtree.ok() && !*upper_half_subtree) {
     return OkStatus();
   }
@@ -282,7 +283,7 @@ Status Subtree::split_and_grow(BatchUpdateContext& context,
 
   BATT_ASSIGN_OK_RESULT(  //
       std::unique_ptr<InMemoryNode> new_root,
-      InMemoryNode::from_subtrees(context.page_loader,
+      InMemoryNode::from_subtrees(update_context,
                                   tree_options,
                                   std::move(*lower_half_subtree),
                                   std::move(**upper_half_subtree),
@@ -342,7 +343,8 @@ Status Subtree::flush_and_shrink(BatchUpdateContext& context) noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<i32> Subtree::get_height(llfs::PageLoader& page_loader) const
+StatusOr<i32> Subtree::get_height(llfs::PageLoader& page_loader,
+                                  llfs::PageCacheOvercommit& overcommit) const
 {
   return batt::case_of(
       this->impl_,
@@ -353,6 +355,7 @@ StatusOr<i32> Subtree::get_height(llfs::PageLoader& page_loader) const
         return visit_tree_page(  //
             page_loader,
             page_id_slot,
+            overcommit,
 
             [](const PackedLeafPage&) -> StatusOr<i32> {
               return 1;
@@ -372,6 +375,7 @@ StatusOr<i32> Subtree::get_height(llfs::PageLoader& page_loader) const
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 StatusOr<KeyView> Subtree::get_min_key(llfs::PageLoader& page_loader,
+                                       llfs::PageCacheOvercommit& overcommit,
                                        llfs::PinnedPage& pinned_page_out) const
 {
   return batt::case_of(
@@ -381,6 +385,7 @@ StatusOr<KeyView> Subtree::get_min_key(llfs::PageLoader& page_loader,
             page_loader,
             pinned_page_out,
             page_id_slot,
+            overcommit,
 
             [](const PackedLeafPage& packed_leaf) -> StatusOr<KeyView> {
               return packed_leaf.min_key();
@@ -401,6 +406,7 @@ StatusOr<KeyView> Subtree::get_min_key(llfs::PageLoader& page_loader,
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 StatusOr<KeyView> Subtree::get_max_key(llfs::PageLoader& page_loader,
+                                       llfs::PageCacheOvercommit& overcommit,
                                        llfs::PinnedPage& pinned_page_out) const
 {
   return batt::case_of(
@@ -410,6 +416,7 @@ StatusOr<KeyView> Subtree::get_max_key(llfs::PageLoader& page_loader,
             page_loader,
             pinned_page_out,
             page_id_slot,
+            overcommit,
 
             [](const PackedLeafPage& packed_leaf) -> StatusOr<KeyView> {
               return packed_leaf.max_key();
@@ -457,6 +464,7 @@ StatusOr<ValueView> Subtree::find_key(ParentNodeHeight parent_height, KeyQuery& 
           return visit_node_page(*query.page_loader,
                                  pinned_node_page,
                                  page_id_slot,
+                                 query.overcommit(),
                                  [&](const PackedNodePage& packed_node) -> StatusOr<ValueView> {
                                    return packed_node.find_key(query);
                                  });

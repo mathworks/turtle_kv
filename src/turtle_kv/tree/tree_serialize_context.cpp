@@ -7,12 +7,15 @@ using BuildPageJobId = TreeSerializeContext::BuildPageJobId;
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-/*explicit*/ TreeSerializeContext::TreeSerializeContext(const TreeOptions& tree_options,
-                                                        llfs::PageCacheJob& page_job,
-                                                        batt::WorkerPool& worker_pool) noexcept
+/*explicit*/ TreeSerializeContext::TreeSerializeContext(
+    const TreeOptions& tree_options,
+    llfs::PageCacheJob& page_job,
+    batt::WorkerPool& worker_pool,
+    llfs::PageCacheOvercommit& overcommit) noexcept
     : tree_options_{tree_options}
     , page_job_{page_job}
     , worker_pool_{worker_pool}
+    , overcommit_{overcommit}
 {
 }
 
@@ -83,6 +86,7 @@ Status TreeSerializeContext::build_all_pages()
       StatusOr<std::shared_ptr<llfs::PageBuffer>> page_buffer =
           this->page_job_.new_page(build.page_size,
                                    batt::WaitForResource::kTrue,
+                                   this->overcommit_,
                                    build.page_layout_id,
                                    build.lru_priority,
                                    /*callers=*/0,

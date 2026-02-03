@@ -87,7 +87,9 @@ class PinningPageLoader : public llfs::PageLoader
   //
   void prefetch_hint(llfs::PageId page_id) override
   {
+#if TURTLE_KV_PROFILE_QUERIES
     LatencyTimer timer{Every2ToTheConst<16>{}, this->metrics_.prefetch_hint_latency};
+#endif
     this->base_loader_.prefetch_hint(page_id);
   }
 
@@ -103,7 +105,9 @@ class PinningPageLoader : public llfs::PageLoader
       return found_in_hash_map;
     }
 
+#if TURTLE_KV_PROFILE_QUERIES
     LatencyTimer timer{Every2ToTheConst<16>{}, this->metrics_.try_pin_from_cache_latency};
+#endif
     StatusOr<llfs::PinnedPage> pinned_page =
         this->base_loader_.try_pin_cached_page(page_id, options);
     timer.stop();
@@ -127,7 +131,9 @@ class PinningPageLoader : public llfs::PageLoader
       return found_in_hash_map;
     }
 
+#if TURTLE_KV_PROFILE_QUERIES
     LatencyTimer timer{Every2ToTheConst<16>{}, this->metrics_.get_page_from_cache_latency};
+#endif
     StatusOr<llfs::PinnedPage> pinned_page = this->base_loader_.load_page(page_id, options);
     timer.stop();
 

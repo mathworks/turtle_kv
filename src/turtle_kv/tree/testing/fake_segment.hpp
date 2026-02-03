@@ -26,10 +26,15 @@ struct FakeSegment {
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   StatusOr<FakePinnedPage> load_leaf_page(FakePageLoader& loader,
-                                          llfs::PinPageToJob pin_page_to_job) const
+                                          llfs::PinPageToJob pin_page_to_job,
+                                          llfs::PageCacheOvercommit& overcommit) const
   {
     return loader.load_page(this->page_id_,
-                            llfs::PageLoadOptions{pin_page_to_job, llfs::OkIfNotFound{false}});
+                            llfs::PageLoadOptions{
+                                pin_page_to_job,
+                                llfs::OkIfNotFound{false},
+                                overcommit,
+                            });
   }
 
   u64 get_active_pivots() const
