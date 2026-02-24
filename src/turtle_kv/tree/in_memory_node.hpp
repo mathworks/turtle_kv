@@ -85,9 +85,15 @@ struct InMemoryNode {
        */
       llfs::PageIdSlot page_id_slot;
 
-      /** \brief A bit set of pivots in whose key range this segment contains items.
+      /** \brief A bit set of pivots in whose key range this segment contains items. Used for
+       * pivots [0, 64).
        */
       u64 active_pivots = 0;
+
+      /** \brief A bit set of pivots in whose key range this segment contains items. Used for
+       * pivots 64 and greater.
+       */
+      u64 active_pivots_overflow = 0;
 
       /** \brief A filter over the flushed items in this segment.
        */
@@ -110,18 +116,34 @@ struct InMemoryNode {
         return this->active_pivots;
       }
 
+      /** \brief Returns the active pivots bit set, as well as the overflow bit set.
+       */
+      std::pair<u64, u64> get_active_pivots_with_overflow() const
+      {
+        return std::make_pair(this->active_pivots, this->active_pivots_overflow);
+      }
+
       /** \brief Marks this segment as containing (or not) active keys addressed to `pivot_i`.
        */
       void set_pivot_active(i32 pivot_i, bool active)
       {
-        this->active_pivots = set_bit(this->active_pivots, pivot_i, active);
+        if (pivot_i < 64) {
+          this->active_pivots = set_bit(this->active_pivots, pivot_i, active);
+        } else {
+          this->active_pivots_overflow =
+              set_bit(this->active_pivots_overflow, pivot_i - 64, active);
+        }
       }
 
       /** \brief Returns true iff this segment has active keys addressed to `pivot_i`.
        */
       bool is_pivot_active(i32 pivot_i) const
       {
-        return get_bit(this->active_pivots, pivot_i);
+        if (pivot_i < 64) {
+          return get_bit(this->active_pivots, pivot_i);
+        } else {
+          return get_bit(this->active_pivots_overflow, pivot_i - 64);
+        }
       }
 
       template <typename Traits>
@@ -460,12 +482,12 @@ struct InMemoryNode {
 
   usize max_pivot_count() const
   {
-    return this->is_size_tiered() ? (64 - 1) : (64 - 1);
+    return this->is_size_tiered() ? 64 : 64;
   }
 
   usize max_segment_count() const
   {
-    return this->is_size_tiered() ? (64 - 2) : (64 - 2);
+    return this->is_size_tiered() ? (64 - 1) : (64 - 1);
   }
 
   Slice<const KeyView> get_pivot_keys() const

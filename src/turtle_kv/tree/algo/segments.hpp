@@ -47,7 +47,7 @@ struct SegmentAlgorithms {
       this->segment_.check_invariants(__FILE__, __LINE__);
     });
 
-    BATT_CHECK_LT(pivot_i, 63);
+    BATT_CHECK_LT(pivot_i, 67);
 
     // Simplest case: pivot not active for this segment.
     //
@@ -116,14 +116,32 @@ struct SegmentAlgorithms {
     // they were when this function was entered, regardless of what `fn` may do to change the state
     // of the segment.
     //
-    const u64 observed_active_pivots = this->segment_.get_active_pivots();
+    const std::pair<u64, u64> observed_active_pivots =
+        this->segment_.get_active_pivots_with_overflow();
+
+    const u64 first_active_bit = first_bit(observed_active_pivots.first);
+    const u64 first_active_overflow_bit = first_bit(observed_active_pivots.second);
+    const u64 first_active_pivot =
+        (first_active_bit != 64) ? first_active_bit : (first_active_overflow_bit + 64);
 
     const i32 first_pivot_i = std::max<i32>(pivot_range.lower_bound,  //
-                                            first_bit(observed_active_pivots));
+                                            first_active_pivot);
 
-    for (i32 pivot_i = first_pivot_i; pivot_i < pivot_range.upper_bound;
-         pivot_i = next_bit(observed_active_pivots, pivot_i)) {
+    for (i32 pivot_i = first_pivot_i; pivot_i < pivot_range.upper_bound;) {
       BATT_INVOKE_LOOP_FN((fn, this->segment_, pivot_i));
+
+      if (pivot_i < 64) {
+        pivot_i = next_bit(observed_active_pivots.first, pivot_i);
+        if (pivot_i == 64) {
+          pivot_i = first_bit(observed_active_pivots.second) + 64;
+        }
+      } else {
+        const i32 overflow_i = pivot_i - 64;
+        if (overflow_i >= 64) {
+          break;
+        }
+        pivot_i = next_bit(observed_active_pivots.second, overflow_i) + 64;
+      }
     }
   }
 

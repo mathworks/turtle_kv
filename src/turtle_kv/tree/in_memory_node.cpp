@@ -777,7 +777,7 @@ Status InMemoryNode::set_pivot_completely_flushed(usize pivot_i,
 
             segment.set_pivot_active(pivot_i, false);
 
-            if (segment.get_active_pivots() == 0) {
+            if (segment.is_inactive()) {
               segmented_level.drop_segment(segment_i);
             } else {
               ++segment_i;
@@ -1118,7 +1118,26 @@ StatusOr<std::unique_ptr<InMemoryNode>> InMemoryNode::try_split_direct(BatchUpda
   BATT_CHECK_EQ(orig_pivot_count + 1, orig_pivot_keys.size());
 
   u64 tried_already = 0;
+  u64 tried_already_overflow = 0;
   usize split_pivot_i = (orig_pivot_count + 1) / 2;
+
+  const auto get_tried_bit = [&tried_already, &tried_already_overflow](usize i) -> bool {
+    if (i < 64) {
+      return get_bit(tried_already, i);
+    } else {
+      const i32 overflow_i = i - 64;
+      return get_bit(tried_already_overflow, overflow_i);
+    }
+  };
+
+  auto set_tried_bit = [&tried_already, &tried_already_overflow](usize i) {
+    if (i < 64) {
+      tried_already = set_bit(tried_already, i, true);
+    } else {
+      const i32 overflow_i = i - 64;
+      tried_already_overflow = set_bit(tried_already_overflow, overflow_i, true);
+    }
+  };
 
   auto* node_lower_half = this;
   auto node_upper_half = std::make_unique<InMemoryNode>(batt::make_copy(this->pinned_node_page_),
@@ -1132,10 +1151,10 @@ StatusOr<std::unique_ptr<InMemoryNode>> InMemoryNode::try_split_direct(BatchUpda
   for (;;) {
     // If we ever try the same split point a second time, fail.
     //
-    if (get_bit(tried_already, split_pivot_i)) {
+    if (get_tried_bit(split_pivot_i)) {
       return {batt::StatusCode::kInternal};
     }
-    tried_already = set_bit(tried_already, split_pivot_i, true);
+    set_tried_bit(split_pivot_i);
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -1265,7 +1284,7 @@ StatusOr<std::unique_ptr<InMemoryNode>> InMemoryNode::try_split_direct(BatchUpda
 
     // If the upper half is too large, then move the split point up and retry if possible.
     //
-    if (split_pivot_i + 4 < 64 && batt::is_case<NeedsSplit>(upper_viability) &&
+    if (split_pivot_i + 4 < 68 && batt::is_case<NeedsSplit>(upper_viability) &&
         !batt::is_case<NeedsSplit>(lower_viability)) {
       ++split_pivot_i;
       continue;
@@ -1627,7 +1646,7 @@ void InMemoryNode::UpdateBuffer::SegmentedLevel::drop_after_pivot(i32 pivot_i,
                                                                   llfs::PageLoader& page_loader,
                                                                   const TreeOptions& tree_options)
 {
-  this->drop_pivot_range((Interval<i32>{pivot_i, 64}),
+  this->drop_pivot_range((Interval<i32>{pivot_i, 68}),
                          (Interval<KeyView>{pivot_key, global_max_key()}),
                          page_loader,
                          tree_options);
@@ -1701,7 +1720,17 @@ void InMemoryNode::UpdateBuffer::Segment::insert_pivot(i32 pivot_i, bool is_acti
     this->check_invariants(__FILE__, __LINE__);
   });
 
-  this->active_pivots = insert_bit(this->active_pivots, pivot_i, is_active);
+  if (pivot_i < 64) {
+    // Insert the highest bit from active_pivots to the overflow bit set.
+    //
+    this->active_pivots_overflow =
+        (this->active_pivots_overflow << 1) | ((this->active_pivots >> 63) & u64{1});
+
+    this->active_pivots = insert_bit(this->active_pivots, pivot_i, is_active);
+  } else {
+    const i32 overflow_i = pivot_i - 64;
+    this->active_pivots_overflow = insert_bit(this->active_pivots_overflow, overflow_i, is_active);
+  }
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -1712,6 +1741,8 @@ void InMemoryNode::UpdateBuffer::Segment::pop_front_pivots(i32 count)
     return;
   }
 
+  BATT_CHECK_LT(count, 64);
+
   // Before we modify the bit sets, make sure we aren't losing any active pivots.
   //
   const u64 mask = (u64{1} << count) - 1;
@@ -1719,16 +1750,18 @@ void InMemoryNode::UpdateBuffer::Segment::pop_front_pivots(i32 count)
   BATT_CHECK_EQ(bit_count(mask), count);
   BATT_CHECK_EQ((this->active_pivots & mask), u64{0});
 
-  // Shift the active pivot set down by count.
+  // Shift the active pivot sets down by count.
   //
-  this->active_pivots = (this->active_pivots >> count);
+  this->active_pivots =
+      (this->active_pivots >> count) | (this->active_pivots_overflow << (64 - count));
+  this->active_pivots_overflow = (this->active_pivots_overflow >> count);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 bool InMemoryNode::UpdateBuffer::Segment::is_inactive() const
 {
-  const bool inactive = (this->active_pivots == 0);
+  const bool inactive = (this->active_pivots == 0 && this->active_pivots_overflow == 0);
   if (inactive) {
     Slice<const Interval<u32>> filter_dropped_ranges = this->filter.dropped();
     BATT_CHECK_EQ(filter_dropped_ranges.size(), 1);

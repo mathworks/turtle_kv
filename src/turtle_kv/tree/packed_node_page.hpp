@@ -49,7 +49,7 @@ struct PackedNodePage {
       kMaxPivots + 1 /*max_key*/ + 1 /*common_prefix*/ + 1 /*final_offset*/;
 
   static constexpr u8 kFlagSizeTiered = 0x80;
-  static constexpr u8 kPivotCountMask = 0x3f;
+  static constexpr u8 kPivotCountMask = 0x7f;
   static constexpr u16 kSegmentStartsFiltered = 0x8000;
 
   using Key = PackedNodePageKey;
@@ -141,6 +141,11 @@ struct PackedNodePage {
       u64 get_active_pivots() const
       {
         return this->active_pivots;
+      }
+
+      std::pair<u64, u64> get_active_pivots_with_overflow() const
+      {
+        return std::make_pair(this->active_pivots, u64{0});
       }
 
       llfs::PageId get_leaf_page_id() const

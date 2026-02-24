@@ -181,8 +181,7 @@ struct SegmentedLevelAlgorithms {
 
       // Skip this segment if the pivot is not active.
       //
-      const u64 active_pivots = segment.get_active_pivots();
-      if (!get_bit(active_pivots, pivot_i)) {
+      if (!segment.is_pivot_active(pivot_i)) {
         ++segment_i;
         continue;
       }
@@ -208,7 +207,7 @@ struct SegmentedLevelAlgorithms {
 
       // Drop the segment if it has become inactive due to the flush.
       //
-      if (segment.get_active_pivots() == 0) {
+      if (segment.is_inactive()) {
         this->level_.drop_segment(segment_i);
       } else {
         ++segment_i;
@@ -236,7 +235,7 @@ struct SegmentedLevelAlgorithms {
             << batt::c_str_literal(old_pivot_key_range.upper_bound)
             << "), key=" << batt::c_str_literal(split_key) << ")";
 
-    BATT_CHECK_LT(this->node_.pivot_count(), 64);
+    BATT_CHECK_LT(this->node_.pivot_count(), 67);
 
     const KeyView pivot_key = old_pivot_key_range.lower_bound;
     const usize segment_count = this->level_.segment_count();
