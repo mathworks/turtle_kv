@@ -68,7 +68,7 @@ PackedNodePage* build_node_page(const MutableBuffer& buffer, const InMemoryNode&
 
   const usize pivot_count = src_node.pivot_count();
 
-  BATT_CHECK_LE(pivot_count, PackedNodePage::kMaxPivots);
+  BATT_CHECK_LE(pivot_count, kMaxPivots);
   BATT_CHECK_EQ(src_node.pivot_keys_.size(), pivot_count + 1);
   BATT_CHECK_EQ(src_node.children.size(), pivot_count);
   BATT_CHECK_EQ(src_node.pending_bytes.size(), pivot_count);

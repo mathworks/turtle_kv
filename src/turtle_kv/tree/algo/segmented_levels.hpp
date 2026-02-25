@@ -235,7 +235,7 @@ struct SegmentedLevelAlgorithms {
             << batt::c_str_literal(old_pivot_key_range.upper_bound)
             << "), key=" << batt::c_str_literal(split_key) << ")";
 
-    BATT_CHECK_LT(this->node_.pivot_count(), 67);
+    BATT_CHECK_LT(this->node_.pivot_count(), InMemoryNode::kMaxTempPivots);
 
     const KeyView pivot_key = old_pivot_key_range.lower_bound;
     const usize segment_count = this->level_.segment_count();

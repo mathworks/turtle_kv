@@ -1,6 +1,7 @@
 #pragma once
 
 #include <turtle_kv/tree/key_query.hpp>
+#include <turtle_kv/tree/in_memory_node.hpp>
 #include <turtle_kv/tree/packed_leaf_page.hpp>
 #include <turtle_kv/tree/tree_options.hpp>
 
@@ -47,7 +48,7 @@ struct SegmentAlgorithms {
       this->segment_.check_invariants(__FILE__, __LINE__);
     });
 
-    BATT_CHECK_LT(pivot_i, 67);
+    BATT_CHECK_LT(pivot_i, InMemoryNode::kMaxTempPivots - 1);
 
     // Simplest case: pivot not active for this segment.
     //

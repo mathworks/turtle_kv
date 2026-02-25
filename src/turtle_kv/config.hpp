@@ -91,4 +91,6 @@ constexpr i64 kNewLeafLruPriority = kLeafLruPriority + kNewPagePriorityBoost;
 
 constexpr u32 kDefaultLeafShardedViewSize = 4096;
 
+constexpr usize kMaxPivots = 64;
+
 }  // namespace turtle_kv

@@ -1,6 +1,5 @@
 #pragma once
 
-#include <turtle_kv/tree/algo/segments.hpp>
 #include <turtle_kv/tree/batch_update.hpp>
 #include <turtle_kv/tree/in_memory_leaf.hpp>
 #include <turtle_kv/tree/max_pending_bytes.hpp>
@@ -64,6 +63,8 @@ struct InMemoryNode {
   }
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  static constexpr usize kMaxTempPivots = 128;
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
   //
@@ -482,12 +483,12 @@ struct InMemoryNode {
 
   usize max_pivot_count() const
   {
-    return this->is_size_tiered() ? 64 : 64;
+    return this->is_size_tiered() ? kMaxPivots : kMaxPivots;
   }
 
   usize max_segment_count() const
   {
-    return this->is_size_tiered() ? (64 - 1) : (64 - 1);
+    return this->is_size_tiered() ? (kMaxPivots - 1) : (kMaxPivots - 1);
   }
 
   Slice<const KeyView> get_pivot_keys() const

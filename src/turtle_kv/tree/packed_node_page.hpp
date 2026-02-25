@@ -42,7 +42,6 @@ struct Subtree;
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 
 struct PackedNodePage {
-  static constexpr usize kMaxPivots = 64;
   static constexpr usize kMaxSegments = kMaxPivots - 1;
   static constexpr usize kMaxLevels = batt::log2_ceil(kMaxPivots);
   static constexpr usize kPivotKeysSize =

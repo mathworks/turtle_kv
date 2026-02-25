@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <random>
+#include <set>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -63,68 +64,82 @@ TEST(PiecewiseFilterTest, InvalidFilterTest)
 //
 TEST(PiecewiseFilterTest, QueryTest)
 {
+  const usize num_items = 1000000;
+
   for (usize i = 0; i < 100; ++i) {
     std::default_random_engine rng{i};
-    std::uniform_int_distribution<usize> pick_num_items{10, ~usize{0} - 1};
-    const usize num_items = pick_num_items(rng);
 
     PiecewiseFilter<usize> filter;
+    EXPECT_TRUE(filter.check_invariants());
 
-    // First verify that everything should be live since nothing has been dropped yet.
+    // All items start unfiltered.
     //
-    EXPECT_EQ(filter.dropped_total(), 0);
+    std::set<usize> live_items;
+    for (usize i = 0; i < num_items; ++i) {
+      live_items.insert(i);
+    }
 
-    Interval<usize> next_live_interval = filter.find_live_range(Interval<usize>{0, num_items});
-    EXPECT_EQ(next_live_interval, (Interval<usize>{0, num_items}));
-
-    // Drop some items from the start.
+    // Drop random intervals.
     //
-    filter.drop_index_range(Interval<usize>{0, num_items / 10});
+    std::uniform_int_distribution<usize> pick_num_dropped{100, num_items / 2};
+    usize num_intervals_dropped = pick_num_dropped(rng);
+    for (usize i = 0; i < num_intervals_dropped; ++i) {
+      std::uniform_int_distribution<usize> pick_interval_start{0, num_items - 1};
+      usize start_i = pick_interval_start(rng);
 
-    EXPECT_EQ(filter.dropped_total(), num_items / 10);
+      std::uniform_int_distribution<usize> pick_interval_end{start_i, num_items};
+      usize end_i = pick_interval_end(rng);
 
-    EXPECT_FALSE(filter.live_at_index(0));
-    EXPECT_TRUE(filter.live_at_index(num_items / 10));
+      for (usize j = start_i; j < end_i; ++j) {
+        live_items.erase(j);
+      }
 
-    EXPECT_EQ(filter.live_lower_bound(0), num_items / 10);
-    EXPECT_EQ(filter.live_lower_bound(num_items / 10), num_items / 10);
-
-    EXPECT_EQ(filter.find_live_range(Interval<usize>{0, num_items}),
-              (Interval<usize>{num_items / 10, num_items}));
-
-    // Drop some more items from the middle of the item range (not overlapping with the previous
-    // interval).
-    //
-    filter.drop_index_range(Interval<usize>{num_items / 2, (num_items / 5) * 3});
-
-    usize dropped_item_count = (num_items / 10) + ((num_items / 5) * 3) - (num_items / 2);
-    EXPECT_EQ(filter.dropped_total(), dropped_item_count);
-
-    EXPECT_FALSE(filter.live_at_index(num_items / 2));
-    EXPECT_TRUE(filter.live_at_index(num_items / 5));
-    EXPECT_TRUE(filter.live_at_index((num_items / 5) * 4));
-
-    EXPECT_EQ(filter.live_lower_bound(num_items / 10), num_items / 10);
-    EXPECT_EQ(filter.live_lower_bound(num_items / 5), num_items / 5);
-    EXPECT_EQ(filter.live_lower_bound((num_items / 5) * 4), (num_items / 5) * 4);
-
-    EXPECT_EQ(filter.find_live_range(Interval<usize>{0, num_items}),
-              (Interval<usize>{num_items / 10, num_items / 2}));
-
-    EXPECT_EQ(filter.find_live_range(Interval<usize>{num_items / 10, (num_items / 5) * 2}),
-              (Interval<usize>{num_items / 10, (num_items / 5) * 2}));
-
-    // Drop a range with some overlap with the previous ranges.
-    //
-    filter.drop_index_range(Interval<usize>{num_items / 10, (num_items / 5) * 3});
-
-    EXPECT_FALSE(filter.live_at_index(num_items / 5));
-    EXPECT_TRUE(filter.live_at_index((num_items / 5) * 3));
-
-    EXPECT_EQ(filter.find_live_range(Interval<usize>{0, num_items}),
-              (Interval<usize>{(num_items / 5) * 3, num_items}));
+      filter.drop_index_range(Interval<usize>{start_i, end_i});
+    }
 
     EXPECT_TRUE(filter.check_invariants());
+
+    // Test live_at_index
+    //
+    for (usize i = 0; i < num_items; ++i) {
+      EXPECT_EQ(filter.live_at_index(i), live_items.count(i) > 0);
+    }
+
+    // Test live_lower_bound
+    //
+    for (usize i = 0; i < num_items; ++i) {
+      auto iter = live_items.lower_bound(i);
+      usize expected = (iter != live_items.end()) ? *iter : num_items;
+      EXPECT_EQ(filter.live_lower_bound(i), expected);
+    }
+
+    // Test find_live_range
+    //
+    for (usize i = 0; i < 100; ++i) {
+      std::uniform_int_distribution<usize> pick_interval_start{0, num_items - 1};
+      usize start_i = pick_interval_start(rng);
+
+      std::uniform_int_distribution<usize> pick_interval_end{start_i, num_items};
+      usize end_i = pick_interval_end(rng);
+
+      auto iter = live_items.lower_bound(start_i);
+      if (iter == live_items.end() || *iter >= end_i) {
+        EXPECT_EQ(filter.find_live_range(Interval<usize>{start_i, end_i}),
+                  (Interval<usize>{end_i, end_i}));
+      } else {
+        usize first = *iter;
+        usize last = first;
+        auto next = iter;
+
+        while (next != live_items.end() && *next < end_i && *next == last) {
+          ++last;
+          ++next;
+        }
+
+        EXPECT_EQ(filter.find_live_range(Interval<usize>{start_i, end_i}),
+                  (Interval<usize>{first, last}));
+      }
+    }
   }
 }
 

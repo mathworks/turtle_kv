@@ -3,6 +3,7 @@
 
 #include <turtle_kv/tree/algo/nodes.hpp>
 #include <turtle_kv/tree/algo/segmented_levels.hpp>
+#include <turtle_kv/tree/algo/segments.hpp>
 #include <turtle_kv/tree/filter_builder.hpp>
 #include <turtle_kv/tree/leaf_page_view.hpp>
 #include <turtle_kv/tree/node_page_view.hpp>
@@ -1284,7 +1285,7 @@ StatusOr<std::unique_ptr<InMemoryNode>> InMemoryNode::try_split_direct(BatchUpda
 
     // If the upper half is too large, then move the split point up and retry if possible.
     //
-    if (split_pivot_i + 4 < 68 && batt::is_case<NeedsSplit>(upper_viability) &&
+    if (split_pivot_i + 4 < orig_pivot_count && batt::is_case<NeedsSplit>(upper_viability) &&
         !batt::is_case<NeedsSplit>(lower_viability)) {
       ++split_pivot_i;
       continue;
@@ -1646,7 +1647,7 @@ void InMemoryNode::UpdateBuffer::SegmentedLevel::drop_after_pivot(i32 pivot_i,
                                                                   llfs::PageLoader& page_loader,
                                                                   const TreeOptions& tree_options)
 {
-  this->drop_pivot_range((Interval<i32>{pivot_i, 68}),
+  this->drop_pivot_range((Interval<i32>{pivot_i, InMemoryNode::kMaxTempPivots}),
                          (Interval<KeyView>{pivot_key, global_max_key()}),
                          page_loader,
                          tree_options);
