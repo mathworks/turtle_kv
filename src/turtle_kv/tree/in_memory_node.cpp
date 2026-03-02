@@ -1721,17 +1721,10 @@ void InMemoryNode::UpdateBuffer::Segment::insert_pivot(i32 pivot_i, bool is_acti
     this->check_invariants(__FILE__, __LINE__);
   });
 
-  if (pivot_i < 64) {
-    // Insert the highest bit from active_pivots to the overflow bit set.
-    //
-    this->active_pivots_overflow =
-        (this->active_pivots_overflow << 1) | ((this->active_pivots >> 63) & u64{1});
-
-    this->active_pivots = insert_bit(this->active_pivots, pivot_i, is_active);
-  } else {
-    const i32 overflow_i = pivot_i - 64;
-    this->active_pivots_overflow = insert_bit(this->active_pivots_overflow, overflow_i, is_active);
-  }
+  std::array<u64, 2> active_pivots_out =
+      insert_bit({this->active_pivots, this->active_pivots_overflow}, pivot_i, is_active);
+  this->active_pivots = active_pivots_out[0];
+  this->active_pivots_overflow = active_pivots_out[1];
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

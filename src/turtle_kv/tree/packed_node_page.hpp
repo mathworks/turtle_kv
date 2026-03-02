@@ -142,9 +142,9 @@ struct PackedNodePage {
         return this->active_pivots;
       }
 
-      std::pair<u64, u64> get_active_pivots_with_overflow() const
+      std::array<u64, 2> get_active_pivots_with_overflow() const
       {
-        return std::make_pair(this->active_pivots, u64{0});
+        return {this->active_pivots, u64{0}};
       }
 
       llfs::PageId get_leaf_page_id() const

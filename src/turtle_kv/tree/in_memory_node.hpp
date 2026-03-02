@@ -119,32 +119,26 @@ struct InMemoryNode {
 
       /** \brief Returns the active pivots bit set, as well as the overflow bit set.
        */
-      std::pair<u64, u64> get_active_pivots_with_overflow() const
+      std::array<u64, 2> get_active_pivots_with_overflow() const
       {
-        return std::make_pair(this->active_pivots, this->active_pivots_overflow);
+        return {this->active_pivots, this->active_pivots_overflow};
       }
 
       /** \brief Marks this segment as containing (or not) active keys addressed to `pivot_i`.
        */
       void set_pivot_active(i32 pivot_i, bool active)
       {
-        if (pivot_i < 64) {
-          this->active_pivots = set_bit(this->active_pivots, pivot_i, active);
-        } else {
-          this->active_pivots_overflow =
-              set_bit(this->active_pivots_overflow, pivot_i - 64, active);
-        }
+        std::array<u64, 2> active_pivots_out =
+            set_bit({this->active_pivots, this->active_pivots_overflow}, pivot_i, active);
+        this->active_pivots = active_pivots_out[0];
+        this->active_pivots_overflow = active_pivots_out[1];
       }
 
       /** \brief Returns true iff this segment has active keys addressed to `pivot_i`.
        */
       bool is_pivot_active(i32 pivot_i) const
       {
-        if (pivot_i < 64) {
-          return get_bit(this->active_pivots, pivot_i);
-        } else {
-          return get_bit(this->active_pivots_overflow, pivot_i - 64);
-        }
+        return get_bit({this->active_pivots, this->active_pivots_overflow}, pivot_i);
       }
 
       template <typename Traits>
