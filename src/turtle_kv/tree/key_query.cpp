@@ -144,6 +144,78 @@ StatusOr<ValueView> find_key_in_leaf(const llfs::PageIdSlot& leaf_page_id_slot,
       });
 }
 
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+StatusOr<u32> find_key_lower_bound_index(llfs::PageId leaf_page_id,
+                                         KeyQuery& query)
+{
+  const auto default_shard_size = llfs::PageSize{kDefaultLeafShardedViewSize};
+
+  PageSliceReader slice_reader{*query.page_loader, leaf_page_id, default_shard_size};
+
+  const llfs::PageSize head_shard_size = query.tree_options->trie_index_sharded_view_size();
+
+  PageSliceStorage head_storage;
+  BATT_ASSIGN_OK_RESULT(ConstBuffer head_buffer,
+                        slice_reader.read_slice(head_shard_size,
+                                                Interval<usize>{0, head_shard_size},
+                                                head_storage,
+                                                llfs::PinPageToJob::kDefault,
+                                                llfs::LruPriority{kTrieIndexLruPriority}));
+
+  const void* page_start = head_buffer.data();
+  const void* payload_start = advance_pointer(page_start, sizeof(llfs::PackedPageHeader));
+  const auto& packed_leaf_page = *static_cast<const PackedLeafPage*>(payload_start);
+
+  packed_leaf_page.check_magic();
+
+  const void* trie_begin = packed_leaf_page.trie_index.get();
+  const void* trie_end = advance_pointer(trie_begin, packed_leaf_page.trie_index_size);
+  BATT_CHECK_LE(byte_distance(page_start, trie_end), head_shard_size);
+
+  const Interval<usize> search_range = packed_leaf_page.calculate_search_range(query.key());
+  BATT_CHECK_NE(search_range.size(), 0);
+
+  const PackedKeyValue* head_items = packed_leaf_page.items->data();
+  const Interval<usize> items_slice{
+      (usize)byte_distance(page_start, head_items + search_range.lower_bound),
+      (usize)byte_distance(page_start, head_items + (search_range.upper_bound + 2)),
+  };
+
+  PageSliceStorage items_storage;
+  BATT_ASSIGN_OK_RESULT(ConstBuffer items_buffer,
+                        slice_reader.read_slice(items_slice,
+                                                items_storage,
+                                                llfs::PinPageToJob::kDefault,
+                                                llfs::LruPriority{kLeafItemsShardLruPriority}));
+
+  const auto items_begin = (const PackedKeyValue*)items_buffer.data();
+  const auto items_end = items_begin + search_range.size();
+
+  Interval<usize> key_data_slice{
+      (usize)(items_slice.lower_bound + items_begin->key_offset),
+      (usize)(items_slice.upper_bound + (items_end + 1)->key_offset),
+  };
+
+  PageSliceStorage key_data_storage;
+  BATT_ASSIGN_OK_RESULT(ConstBuffer key_data_buffer,
+                        slice_reader.read_slice(key_data_slice,
+                                                key_data_storage,
+                                                llfs::PinPageToJob::kDefault,
+                                                llfs::LruPriority{kLeafKeyDataShardLruPriority}));
+
+  const isize offset_base = items_begin->key_offset;
+  const isize offset_target = byte_distance(items_begin, key_data_buffer.data());
+  const isize offset_delta = offset_target - offset_base;
+
+  const PackedKeyValue* found_item = std::lower_bound(items_begin,  //
+                                                      items_end,
+                                                      query.key(),
+                                                      ShiftedPackedKeyOrder{offset_delta});
+
+  return search_range.lower_bound + std::distance(items_begin, found_item);
+}
+
 namespace {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

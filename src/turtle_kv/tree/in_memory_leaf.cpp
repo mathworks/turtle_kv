@@ -347,12 +347,14 @@ Status InMemoryLeaf::try_borrow(BatchUpdateContext& context, InMemoryLeaf& sibli
 Status InMemoryLeaf::apply_batch_update(BatchUpdate& update) noexcept
 {
   Optional<BoxedSeq<EditSlice>> current_edits = None;
+
   if (this->pinned_leaf_page_ && !this->result_set) {
     // In this case, we have initialized a new InMemoryLeaf from a PackedLeaf. Use the
     // items from the PackedLeaf to merge with the incoming update.
     //
     const PackedLeafPage& packed_leaf = PackedLeafPage::view_of(this->pinned_leaf_page_);
     current_edits = packed_leaf.as_edit_slice_seq();
+
   } else if (this->result_set) {
     // In this case, we have an existing InMemoryLeaf that we are applying updates to.
     // Use the existing ResultSet to merge with the incoming update.
@@ -408,11 +410,8 @@ Status InMemoryLeaf::start_serialize(TreeSerializeContext& context)
           [this, filter_bits_per_key, filter_page_size, overcommit_triggered](
               usize task_i,
               llfs::PageCache& page_cache,
-              llfs::PageBuffer& page_buffer) -> StatusOr<TreeSerializeContext::PinPageToJobFn> {
-            //----- --- -- -  -  -   -
-            // TODO [tastolfi 2025-03-27] decay items
-            //----- --- -- -  -  -   -
-
+              llfs::PageBuffer& page_buffer) -> StatusOr<TreeSerializeContext::PinPageToJobFn>  //
+          {
             if (task_i == 0) {
               return build_leaf_page_in_job(this->tree_options.trie_index_reserve_size(),
                                             page_buffer,

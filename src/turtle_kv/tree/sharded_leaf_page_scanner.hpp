@@ -154,8 +154,8 @@ class ShardedLeafPageScanner
       const Interval<usize> unaligned_key_data_page_slice{
           (usize)(items_page_slice.lower_bound + this->loaded_items_.begin()->key_offset),
           (usize)(items_page_slice.upper_bound + (this->loaded_items_.end() + 1)->key_offset),
-          //                                                                   △
-          //                1 more for the next value, so we know values size ─┘
+          //                                                                  △
+          //               1 more for the next value, so we know values size ─┘
       };
 
       // Find the end of key data for the minimum possible number of keys to keep.  The actual

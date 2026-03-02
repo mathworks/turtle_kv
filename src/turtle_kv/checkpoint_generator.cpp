@@ -68,6 +68,11 @@ StatusOr<usize> CheckpointGenerator::apply_batch(std::unique_ptr<DeltaBatch>&& b
 {
   VLOG(1) << "CheckpointGenerator::apply_batch()" << BATT_INSPECT(batch->debug_info());
 
+  if (batch->batch_id() >= this->batch_id_upper_bound_) {
+    this->batch_id_upper_bound_ = batch->batch_id().next();
+    BATT_CHECK_LT(batch->batch_id(), this->batch_id_upper_bound_);
+  }
+
   // Skip unless base_checkpoint.rollup_slot_upper_bound() <= batch->slot_range.lower_bound
   //
   if (batch->batch_id() <= this->base_checkpoint_.batch_upper_bound()) {
@@ -211,6 +216,7 @@ StatusOr<std::unique_ptr<CheckpointJob>> CheckpointGenerator::finalize_checkpoin
   checkpoint_job->token.emplace(std::move(token));
   checkpoint_job->checkpoint_log = std::addressof(this->checkpoint_volume_);
   checkpoint_job->checkpoint = this->base_checkpoint_.clone();
+  checkpoint_job->batch_id_upper_bound = this->batch_id_upper_bound_;
   checkpoint_job->batch_count = batch_count;
 
   checkpoint_job->packed_checkpoint.emplace(

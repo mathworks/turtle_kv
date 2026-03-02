@@ -55,7 +55,6 @@ class SegmentedLevelBuilder
     //
     segment.set_page_id(page_id);
     segment.clear_active_pivots();
-    segment.clear_flushed_pivots();
 
     // The goal of this inner loop is to determine the set of pivots for which each segment is
     // active (i.e., it contains keys in the range of that pivot).

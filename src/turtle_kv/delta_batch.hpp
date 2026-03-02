@@ -9,6 +9,7 @@
 #include <turtle_kv/core/merge_compactor.hpp>
 #include <turtle_kv/core/strong_types.hpp>
 
+#include <turtle_kv/import/bool_status.hpp>
 #include <turtle_kv/import/int_types.hpp>
 #include <turtle_kv/import/optional.hpp>
 
@@ -35,9 +36,21 @@ class DeltaBatch
  public:
   using ResultSet = MergeCompactor::ResultSet</*decay_to_items=*/false>;
 
+#if TURTLE_KV_BIG_MEM_TABLES
+
+  /** \brief Constructs a new DeltaBatch.
+   */
+  explicit DeltaBatch(DeltaBatchId batch_id,
+                      boost::intrusive_ptr<MemTable>&& mem_table,
+                      ResultSet&& result_set) noexcept;
+
+#else  // TURTLE_KV_BIG_MEM_TABLES
+
   /** \brief Constructs a new DeltaBatch.
    */
   explicit DeltaBatch(boost::intrusive_ptr<MemTable>&& mem_table) noexcept;
+
+#endif  // TURTLE_KV_BIG_MEM_TABLES
 
   /** \brief DeltaBatch objects are not copy-/move-constructible.
    */
@@ -47,9 +60,34 @@ class DeltaBatch
    */
   DeltaBatch& operator=(const DeltaBatch&) = delete;
 
+#if !TURTLE_KV_BIG_MEM_TABLES
+
   /** \brief Merge and compact edits from the MemTable.
    */
   void merge_compact_edits();
+
+#endif  // !TURTLE_KV_BIG_MEM_TABLES
+
+  /** \brief Sets whether a checkpoint should be taken after this batch is applied.
+   */
+  void set_checkpoint_after(BoolStatus b)
+  {
+    this->checkpoint_after_ = b;
+  }
+
+  /** \brief Convenience.
+   */
+  void set_checkpoint_after(bool b)
+  {
+    this->checkpoint_after_ = bool_status_from(b);
+  }
+
+  /** \brief Returns whethera checkpoint should be taken after this batch is applied.
+   */
+  BoolStatus checkpoint_after() const
+  {
+    return this->checkpoint_after_;
+  }
 
   /** \brief Returns the number of compacted edits in the result set.  this->merge_compact_edits()
    * must be called before this function, or we panic.
@@ -98,11 +136,19 @@ class DeltaBatch
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
+#if TURTLE_KV_BIG_MEM_TABLES
+
+  const DeltaBatchId batch_id_;
+
+#endif  // TURTLE_KV_BIG_MEM_TABLES
+
   boost::intrusive_ptr<MemTable> mem_table_;
 
   /** \brief The merged/compacted edits from the log.
    */
   Optional<ResultSet> result_set_;
+
+  BoolStatus checkpoint_after_ = BoolStatus::kUnknown;
 };
 
 }  // namespace turtle_kv

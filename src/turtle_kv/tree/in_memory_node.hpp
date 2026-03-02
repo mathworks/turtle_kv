@@ -18,6 +18,8 @@
 #include <turtle_kv/import/seq.hpp>
 #include <turtle_kv/import/small_vec.hpp>
 
+#include <turtle_kv/util/piecewise_filter.hpp>
+
 #include <llfs/page_cache_job.hpp>
 #include <llfs/page_id_slot.hpp>
 #include <llfs/pinned_page.hpp>
@@ -87,14 +89,9 @@ struct InMemoryNode {
        */
       u64 active_pivots = 0;
 
-      /** \brief A bit set indicating the non-zero elements of `flushed_item_count`.
+      /** \brief A filter over the flushed items in this segment.
        */
-      u64 flushed_pivots = 0;
-
-      /** \brief For each pivot, the number of items that have been flushed to that pivot from this
-       * segment.
-       */
-      SmallVec<u32, 64> flushed_item_upper_bound_;
+      PiecewiseFilter</*OffsetT=*/u32> filter;
 
       //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -113,14 +110,6 @@ struct InMemoryNode {
         return this->active_pivots;
       }
 
-      /** \brief Returns the bit set of pivots with a non-zero flushed item upper bound in this
-       * segment.
-       */
-      u64 get_flushed_pivots() const
-      {
-        return this->flushed_pivots;
-      }
-
       /** \brief Marks this segment as containing (or not) active keys addressed to `pivot_i`.
        */
       void set_pivot_active(i32 pivot_i, bool active)
@@ -135,29 +124,65 @@ struct InMemoryNode {
         return get_bit(this->active_pivots, pivot_i);
       }
 
+      template <typename Traits>
+      void drop_key_range(const BasicInterval<Traits>& key_range,
+                          const Slice<const PackedKeyValue>& items)
+      {
+        drop_item_range(this->filter, items, key_range, llfs::KeyRangeOrder{});
+      }
+
+      void drop_index_range(Interval<u32> i)
+      {
+        this->filter.drop_index_range(i);
+      }
+
+      bool is_index_filtered(const SegmentedLevel&, u32 index) const
+      {
+        return !this->filter.live_at_index(index);
+      }
+
+      bool is_unfiltered() const
+      {
+        return !this->filter.dropped_total();
+      }
+
+      u32 live_lower_bound(const SegmentedLevel&, u32 item_i) const
+      {
+        return this->filter.live_lower_bound(item_i);
+      }
+
+      Interval<u32> get_live_item_range(const SegmentedLevel&, Interval<u32> i) const
+      {
+        return this->filter.find_live_range(i);
+      }
+
+      usize num_cut_points() const
+      {
+        Slice<const Interval<u32>> dropped_ranges = this->filter.dropped();
+
+        // There will be no filter cut points if no items are dropped.
+        //
+        if (!this->filter.dropped_total()) {
+          BATT_CHECK(dropped_ranges.empty());
+          return 0;
+        }
+        BATT_CHECK(!dropped_ranges.empty());
+
+        // If the first element is filtered out, don't include 0 as a cut point, only include the
+        // upper bound.
+        //
+        bool first_element_filtered = dropped_ranges[0].lower_bound == 0;
+
+        return dropped_ranges.size() * 2 - (first_element_filtered ? 1 : 0);
+      }
+
       //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-      /** \brief Panic if the following invariants are not satisfied:
-       *
-       * 1. The size of this->flushed_item_upper_bound_ is equal to the number of 1 bits in
-       *    this->flushed_pivots
-       * 2. There are no pivots marked as flushed and inactive.
+      /** \brief Panic if filter invariants are not satisfied.
        */
       void check_invariants(const char* file, int line) const;
 
-      /** \brief Returns the item index within the segment leaf page of the first unflushed key
-       * addressed to `pivot_i`, or 0 if there are no flushed keys for the given pivot.
-       */
-      u32 get_flushed_item_upper_bound(const SegmentedLevel&, i32 pivot_i) const;
-
-      /** \brief Marks all keys whose index within the segment leaf page is less than `upper_bound`
-       * as flushed for `pivot_i`.
-       *
-       * Should only be called by SegmentAlgorithms or SegmentedLevelAlgorithms.
-       */
-      void set_flushed_item_upper_bound(i32 pivot_i, u32 upper_bound);
-
-      /** \brief Inserts a new pivot bit in this->active_pivots and this->flushed_pivots at position
+      /** \brief Inserts a new pivot bit in this->active_pivots at position
        * `pivot_i`.  This is called when a child subtree needs to be split.
        */
       void insert_pivot(i32 pivot_i, bool is_active);
@@ -195,13 +220,17 @@ struct InMemoryNode {
       using Self = EmptyLevel;
 
       void drop_after_pivot(i32 split_pivot_i [[maybe_unused]],
-                            const KeyView& split_pivot_key [[maybe_unused]])
+                            const KeyView& split_pivot_key [[maybe_unused]],
+                            llfs::PageLoader& page_loader [[maybe_unused]],
+                            const TreeOptions& tree_options [[maybe_unused]])
       {
         // Nothing to do!
       }
 
       void drop_before_pivot(i32 split_pivot_i [[maybe_unused]],
-                             const KeyView& split_pivot_key [[maybe_unused]])
+                             const KeyView& split_pivot_key [[maybe_unused]],
+                             llfs::PageLoader& page_loader [[maybe_unused]],
+                             const TreeOptions& tree_options [[maybe_unused]])
       {
         // Nothing to do!
       }
@@ -260,19 +289,26 @@ struct InMemoryNode {
        *
        * Used to implement node splits.
        */
-      void drop_pivot_range(const Interval<i32>& pivot_range);
+      void drop_pivot_range(const Interval<i32>& pivot_i_range,
+                            const Interval<KeyView>& pivot_key_range,
+                            llfs::PageLoader& page_loader,
+                            const TreeOptions& tree_options);
 
       /** \brief Drops all pivots before (but not including) the specified pivot.
        *
-       * The `pivot_key` parameter is ignored.
        */
-      void drop_before_pivot(i32 pivot_i, const KeyView& pivot_key [[maybe_unused]]);
+      void drop_before_pivot(i32 pivot_i,
+                             const KeyView& pivot_key,
+                             llfs::PageLoader& page_loader,
+                             const TreeOptions& tree_options);
 
       /** \brief Drops all pivots after (and including) the specified pivot.
        *
-       * The `pivot_key` parameter is ignored.
        */
-      void drop_after_pivot(i32 pivot_i, const KeyView& pivot_key [[maybe_unused]]);
+      void drop_after_pivot(i32 pivot_i,
+                            const KeyView& pivot_key,
+                            llfs::PageLoader& page_loader,
+                            const TreeOptions& tree_options);
 
       /** \brief Returns true iff the specified pivot is active for any of the Segments in this
        * level.
@@ -309,7 +345,10 @@ struct InMemoryNode {
         this->result_set.drop_key_range_half_open(key_drop_range);
       }
 
-      void drop_after_pivot(i32 pivot_i [[maybe_unused]], const KeyView& pivot_key)
+      void drop_after_pivot(i32 pivot_i [[maybe_unused]],
+                            const KeyView& pivot_key,
+                            llfs::PageLoader& page_loader [[maybe_unused]],
+                            const TreeOptions& tree_options [[maybe_unused]])
       {
         this->drop_key_range(Interval<KeyView>{
             .lower_bound = pivot_key,
@@ -317,7 +356,10 @@ struct InMemoryNode {
         });
       }
 
-      void drop_before_pivot(i32 pivot_i [[maybe_unused]], const KeyView& pivot_key)
+      void drop_before_pivot(i32 pivot_i [[maybe_unused]],
+                             const KeyView& pivot_key,
+                             llfs::PageLoader& page_loader [[maybe_unused]],
+                             const TreeOptions& tree_options [[maybe_unused]])
       {
         this->drop_key_range(Interval<KeyView>{
             .lower_bound = global_min_key(),
@@ -549,7 +591,9 @@ struct InMemoryNode {
 
   usize key_data_byte_size() const;
 
-  usize flushed_item_counts_byte_size() const;
+  usize segment_filters_byte_size() const;
+
+  usize total_segment_filter_cut_points() const;
 
   usize segment_count() const;
 

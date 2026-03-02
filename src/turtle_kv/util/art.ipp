@@ -34,7 +34,7 @@ inline Status ART<ValueT>::insert(std::string_view key, InserterT&& inserter)
   BranchView branch;
   NodeBase* parent = nullptr;
 
-  ART::metrics().insert_count.add(1);
+  this->metrics_.insert_count.add(1);
 
   for (;;) {
     if (reset) {
@@ -54,7 +54,7 @@ inline Status ART<ValueT>::insert(std::string_view key, InserterT&& inserter)
       if (branch.ptr == nullptr) {
         SeqMutex<u32>::WriteLock root_write_lock{this->super_root_.mutex_};
         if (branch.reload() == nullptr) {
-          Node4* new_node = branch.store(this->make_node4(key_data, key_len));
+          LeafNode* new_node = branch.store(this->make_leaf_node(key_data, key_len));
           Status status = inserter.insert_new(ARTBase::uninitialized_value(new_node));
           if (status.ok()) {
             new_node->set_terminal();
@@ -101,19 +101,19 @@ inline Status ART<ValueT>::insert(std::string_view key, InserterT&& inserter)
           return;
         }
 
-        Node4* new_parent = this->make_node4(node_prefix, common_len);
+        SmallestParentNode* new_parent = this->make_parent_node(node_prefix, common_len);
         auto* new_node = this->clone_node(node, /*prefix_offset=*/(common_len + 1));
 
         this->add_child(new_parent, /*key_byte=*/node_prefix[common_len], new_node);
 
         if (common_len < key_len) {
-          auto* new_child = this->add_child(new_parent,
-                                            /*key_byte=*/key_data[common_len],
-                                            key_data + (common_len + 1),
-                                            key_len - (common_len + 1));
-          status = inserter.insert_new(ARTBase::uninitialized_value(new_child));
+          LeafNode* new_child_leaf = this->add_child_leaf(new_parent,
+                                                          /*key_byte=*/key_data[common_len],
+                                                          key_data + (common_len + 1),
+                                                          key_len - (common_len + 1));
+          status = inserter.insert_new(ARTBase::uninitialized_value(new_child_leaf));
           if (status.ok()) {
-            new_child->set_terminal();
+            new_child_leaf->set_terminal();
           }
 
         } else {
@@ -175,7 +175,7 @@ inline Status ART<ValueT>::insert(std::string_view key, InserterT&& inserter)
       {
         const usize i = node->index_of_branch(key_byte);
         if (i < observed_branch_count) {
-          next.load(node->branches[i]);
+          next.load(node->get_branch_ref(i));
         }
       }
 
@@ -221,10 +221,11 @@ inline Status ART<ValueT>::insert(std::string_view key, InserterT&& inserter)
         BATT_CHECK_EQ(observed_branch_count, node->branch_count());
 
         auto* new_node = this->grow_node(node);
-        Node4* new_child = this->add_child(new_node, key_byte, new_key_data, new_key_len);
-        status = inserter.insert_new(ARTBase::mutable_value<ValueT>(new_child));
+        LeafNode* new_child_leaf =
+            this->add_child_leaf(new_node, key_byte, new_key_data, new_key_len);
+        status = inserter.insert_new(ARTBase::mutable_value<ValueT>(new_child_leaf));
         if (status.ok()) {
-          new_child->set_terminal();
+          new_child_leaf->set_terminal();
         }
 
         node->set_obsolete();
@@ -246,10 +247,11 @@ inline Status ART<ValueT>::insert(std::string_view key, InserterT&& inserter)
             reset = true;
             return;
           }
-          Node4* new_child = this->add_child(node, key_byte, new_key_data, new_key_len);
-          status = inserter.insert_new(uninitialized_value(new_child));
+          LeafNode* new_child_leaf =
+              this->add_child_leaf(node, key_byte, new_key_data, new_key_len);
+          status = inserter.insert_new(uninitialized_value(new_child_leaf));
           if (status.ok()) {
-            new_child->set_terminal();
+            new_child_leaf->set_terminal();
           }
 
         } else {
@@ -257,11 +259,11 @@ inline Status ART<ValueT>::insert(std::string_view key, InserterT&& inserter)
             reset = true;
             return;
           }
-          Node4* new_child = this->make_node4(new_key_data, new_key_len);
-          next.store(new_child);
-          status = inserter.insert_new(uninitialized_value(new_child));
+          LeafNode* new_child_leaf = this->make_leaf_node(new_key_data, new_key_len);
+          next.store(new_child_leaf);
+          status = inserter.insert_new(uninitialized_value(new_child_leaf));
           if (status.ok()) {
-            new_child->set_terminal();
+            new_child_leaf->set_terminal();
           }
         }
       }
@@ -358,7 +360,7 @@ void ART<ValueT>::find_impl(std::string_view key,
       {
         const usize i = node->index_of_branch(key_byte);
         if (i < observed_branch_count) {
-          next.load(node->branches[i]);
+          next.load(node->get_branch_ref(i));
         }
       }
 
@@ -442,7 +444,7 @@ inline auto ART<ValueT>::add_child(NodeT* node, u8 key_byte, NodeBase* child) ->
 {
   const usize i = node->add_branch();
   node->set_branch_index(key_byte, i);
-  node->branches[i] = child;
+  node->set_branch_pointer(i, child);
   return child;
 }
 
@@ -452,8 +454,8 @@ template <typename ValueT>
 inline auto ART<ValueT>::add_child(Node256* node, u8 key_byte, NodeBase* child) -> NodeBase*
 {
   const usize i = key_byte;
-  BATT_CHECK_EQ(node->branches[i], nullptr);
-  node->branches[i] = child;
+  BATT_CHECK_EQ(node->branches_[i], nullptr);
+  node->branches_[i] = child;
   return child;
 }
 
@@ -461,12 +463,12 @@ inline auto ART<ValueT>::add_child(Node256* node, u8 key_byte, NodeBase* child) 
 //
 template <typename ValueT>
 template <typename NodeT>
-inline auto ART<ValueT>::add_child(NodeT* node,
-                                   u8 key_byte,
-                                   const char* new_key_data,
-                                   usize new_key_len) -> Node4*
+inline auto ART<ValueT>::add_child_leaf(NodeT* node,
+                                        u8 key_byte,
+                                        const char* new_key_data,
+                                        usize new_key_len) -> LeafNode*
 {
-  Node4* new_child = this->make_node4(new_key_data, new_key_len);
+  LeafNode* new_child = this->make_leaf_node(new_key_data, new_key_len);
   this->add_child(node, key_byte, new_child);
   return new_child;
 }
@@ -474,12 +476,42 @@ inline auto ART<ValueT>::add_child(NodeT* node,
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename ValueT>
-inline auto ART<ValueT>::make_node4(const char* prefix, usize prefix_len) -> Node4*
+inline auto ART<ValueT>::make_leaf_node(const char* prefix, usize prefix_len) -> LeafNode*
+{
+  LeafNode* new_node =
+      new (this->alloc_storage(sizeof(LeafNode) + kValueStorageSize, prefix_len)) LeafNode{};
+
+  new_node->set_prefix(prefix, prefix_len);
+
+  return new_node;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <typename ValueT>
+inline auto ART<ValueT>::make_parent_node(const char* prefix, usize prefix_len) -> Node4*
 {
   Node4* new_node =
       new (this->alloc_storage(sizeof(Node4) + kValueStorageSize, prefix_len)) Node4{};
 
   new_node->set_prefix(prefix, prefix_len);
+
+  return new_node;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <typename ValueT>
+inline auto ART<ValueT>::grow_node(LeafNode* old_node) -> Node4*
+{
+  Node4* new_node =
+      new (this->alloc_storage(sizeof(Node4) + kValueStorageSize, old_node->prefix_len_)) Node4{};
+
+  new_node->set_prefix(old_node->prefix(), old_node->prefix_len_);
+
+  if (old_node->is_terminal()) {
+    ARTBase::construct_value_copy(old_node, new_node, batt::StaticType<ValueT>{});
+  }
 
   return new_node;
 }
@@ -496,7 +528,7 @@ inline auto ART<ValueT>::grow_node(Node4* old_node) -> Node16*
   new_node->branch_count_ = old_node->branch_count_;
 
   std::copy(old_node->key.begin(), old_node->key.end(), new_node->key.begin());
-  std::copy(old_node->branches.begin(), old_node->branches.end(), new_node->branches.begin());
+  std::copy(old_node->branches_.begin(), old_node->branches_.end(), new_node->branches_.begin());
 
   if (old_node->is_terminal()) {
     ARTBase::construct_value_copy(old_node, new_node, batt::StaticType<ValueT>{});
@@ -518,7 +550,7 @@ inline auto ART<ValueT>::grow_node(Node16* old_node) -> Node48*
 
   for (usize i = 0; i < new_node->branch_count_; ++i) {
     new_node->branch_for_key[old_node->key[i]] = i;
-    new_node->branches[i] = old_node->branches[i];
+    new_node->branches_[i] = old_node->branches_[i];
   }
 
   if (old_node->is_terminal()) {
@@ -541,7 +573,7 @@ auto ART<ValueT>::grow_node(Node48* old_node) -> Node256*
 
   for (usize key_byte = 0; key_byte < 256; ++key_byte) {
     const BranchIndex i = old_node->branch_for_key[key_byte];
-    new_node->branches[key_byte] = (i == kInvalidBranchIndex) ? nullptr : old_node->branches[i];
+    new_node->branches_[key_byte] = (i == kInvalidBranchIndex) ? nullptr : old_node->branches_[i];
   }
 
   if (old_node->is_terminal()) {
@@ -558,6 +590,24 @@ inline auto ART<ValueT>::grow_node(Node256*) -> Node256*
 {
   BATT_PANIC() << "Node256 can not grow larger!";
   BATT_UNREACHABLE();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <typename ValueT>
+inline auto ART<ValueT>::clone_node(LeafNode* orig_node, usize prefix_offset) -> LeafNode*
+{
+  LeafNode* new_node = new (this->alloc_storage(sizeof(LeafNode) + kValueStorageSize,
+                                                (orig_node->prefix_len_ - prefix_offset)))
+      LeafNode{ARTBase::NoInit{}};
+
+  new_node->assign_from(*orig_node, prefix_offset);
+
+  if (orig_node->is_terminal()) {
+    ARTBase::construct_value_copy(orig_node, new_node, batt::StaticType<ValueT>{});
+  }
+
+  return new_node;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

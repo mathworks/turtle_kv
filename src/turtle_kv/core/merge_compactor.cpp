@@ -1,6 +1,8 @@
 #include <turtle_kv/core/merge_compactor.hpp>
 //
 
+#include <turtle_kv/config.hpp>
+
 #include <turtle_kv/core/algo/merge_compact_edits.hpp>
 #include <turtle_kv/core/key_range.hpp>
 #include <turtle_kv/core/packed_sizeof_edit.hpp>
@@ -131,8 +133,13 @@ Status MergeCompactor::read_some_impl(OutputBuffer<kDecayToItems>& output,
     // Reserve buffer space.
     //
     const usize n_items_to_reserve = MergeCompactor::buffer_size_for_item_count(total_items);
-    for (auto& buffer : output.buffer_) {
-      buffer.reserve(n_items_to_reserve);
+    {
+      usize total_reserve_bytes = 0;
+      for (auto& buffer : output.buffer_) {
+        buffer.reserve(n_items_to_reserve);
+        total_reserve_bytes += buffer.capacity() * sizeof(EditView);
+      }
+      MergeCompactor::metrics().output_buffer_byte_size_stats.update(total_reserve_bytes);
     }
 
     SmallVec<Slice<const EditView>, 64> collected_edit_slices;
@@ -531,6 +538,71 @@ template <bool kDecayToItems>
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <bool kDecayToItems>
+MergeCompactor::ResultSet<kDecayToItems>::ResultSet(const ResultSet& that) noexcept
+    : buffers_{that.buffers_}
+    , chunks_{that.chunks_}
+    , packed_size_{that.packed_size_}
+    , has_page_refs_{that.has_page_refs_}
+    , footprint_{that.footprint_}
+{
+  MergeCompactor::metrics().result_set_bytes_alloc.add(this->footprint_ * sizeof(EditView));
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <bool kDecayToItems>
+auto MergeCompactor::ResultSet<kDecayToItems>::operator=(const ResultSet& that) noexcept
+    -> ResultSet&
+{
+  ResultSet tmp{that};
+  std::swap(this->buffers_, tmp.buffers_);
+  std::swap(this->chunks_, tmp.chunks_);
+  std::swap(this->packed_size_, tmp.packed_size_);
+  std::swap(this->has_page_refs_, tmp.has_page_refs_);
+  std::swap(this->footprint_, tmp.footprint_);
+  return *this;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <bool kDecayToItems>
+MergeCompactor::ResultSet<kDecayToItems>::ResultSet(ResultSet&& that) noexcept
+    : buffers_{std::move(that.buffers_)}
+    , chunks_{std::move(that.chunks_)}
+    , packed_size_{that.packed_size_}
+    , has_page_refs_{that.has_page_refs_}
+    , footprint_{that.footprint_}
+{
+  that.packed_size_ = 0;
+  that.has_page_refs_ = HasPageRefs{false};
+  that.footprint_ = 0;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <bool kDecayToItems>
+auto MergeCompactor::ResultSet<kDecayToItems>::operator=(ResultSet&& that) noexcept -> ResultSet&
+{
+  ResultSet tmp{std::move(that)};
+  std::swap(this->buffers_, tmp.buffers_);
+  std::swap(this->chunks_, tmp.chunks_);
+  std::swap(this->packed_size_, tmp.packed_size_);
+  std::swap(this->has_page_refs_, tmp.has_page_refs_);
+  std::swap(this->footprint_, tmp.footprint_);
+  return *this;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <bool kDecayToItems>
+MergeCompactor::ResultSet<kDecayToItems>::~ResultSet() noexcept
+{
+  MergeCompactor::metrics().result_set_bytes_freed.add(this->footprint_ * sizeof(EditView));
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <bool kDecayToItems>
 void MergeCompactor::ResultSet<kDecayToItems>::append(OutputBuffer<kDecayToItems>&& output)
 {
   if (output.merged_.empty()) {
@@ -580,6 +652,10 @@ void MergeCompactor::ResultSet<kDecayToItems>::append(std::vector<EditView>&& bu
   // If over half of the merge output buffer is empty, then compact to save memory.
   //
   if (wasted_space > buffer.capacity() / 2) {
+#if TURTLE_KV_PROFILE_UPDATES
+    LatencyTimer timer{MergeCompactor::metrics().compact_latency};
+#endif  // TURTLE_KV_PROFILE_UPDATES
+
     const usize compacted_size = MergeCompactor::buffer_size_for_item_count(item_count);
     tmp_buffer.reserve(compacted_size);
 
@@ -596,6 +672,8 @@ void MergeCompactor::ResultSet<kDecayToItems>::append(std::vector<EditView>&& bu
 
   const auto new_inner_end = items.end();
   const isize new_size = this->chunks_.back().offset + item_count;
+
+  MergeCompactor::metrics().result_set_bytes_alloc.add(p_buffer->capacity() * sizeof(EditView));
 
   this->footprint_ += p_buffer->capacity();
   this->buffers_.emplace_back(std::make_shared<std::vector<EditView>>(std::move(*p_buffer)));
@@ -618,6 +696,10 @@ void MergeCompactor::ResultSet<kDecayToItems>::append(std::vector<EditView>&& bu
 template <bool kDecayToItems>
 void MergeCompactor::ResultSet<kDecayToItems>::compact_buffers()
 {
+#if TURTLE_KV_PROFILE_UPDATES
+  LatencyTimer timer{MergeCompactor::metrics().compact_latency};
+#endif  // TURTLE_KV_PROFILE_UPDATES
+
   static_assert(sizeof(EditView) == sizeof(value_type));
   static_assert(std::is_same_v<EditView, value_type> || std::is_same_v<ItemView, value_type>);
 
@@ -629,6 +711,8 @@ void MergeCompactor::ResultSet<kDecayToItems>::compact_buffers()
     BATT_CHECK_LE(this->footprint_, footprint_before);
     m.result_set_compact_count.add(1);
     m.result_set_compact_byte_count.add(sizeof(EditView) * (footprint_before - this->footprint_));
+    m.result_set_bytes_freed.add(footprint_before * sizeof(EditView));
+    m.result_set_bytes_alloc.add(this->footprint_ * sizeof(EditView));
   });
 
   // Special case: no items.

@@ -7,6 +7,27 @@ namespace turtle_kv {
 
 TURTLE_KV_ENV_PARAM(bool, turtlekv_use_sharded_leaf_scanner, false);
 
+namespace {
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <ARTBase::Synchronized kSynchronized>
+KeyView art_scanner_get_key(ART<void>::Scanner<kSynchronized>& scanner)
+{
+  return scanner.get_key();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <ARTBase::Synchronized kSynchronized>
+KeyView art_scanner_get_key(ART<MemTableValueEntry>::Scanner<kSynchronized,
+                                                             /*kValuesOnly=*/true>& scanner)
+{
+  return scanner.get_value().key_view();
+}
+
+}  // namespace
+
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 /*explicit*/ KVStoreScanner::KVStoreScanner(KVStore& kv_store, const KeyView& min_key) noexcept
@@ -127,6 +148,8 @@ Status KVStoreScanner::start()
 
         MemTable& delta_mem_table = *this->pinned_state_->deltas_[delta_i];
 
+#if !TURTLE_KV_BIG_MEM_TABLES
+
         // Delta case 1: compacted edits vector
         //
         Optional<Slice<const EditView>> compacted = delta_mem_table.poll_compacted_edits();
@@ -155,11 +178,14 @@ Status KVStoreScanner::start()
           continue;
         }
 
+#endif  // !TURTLE_KV_BIG_MEM_TABLES
+
         // Delta case 3: single ART index for keys and values
         //
         if (delta_mem_table.has_art_index()) {
           auto& art_scanner =
-              *(new (p_mem) ART<MemTableValueEntry>::Scanner<ARTBase::Synchronized::kFalse>{
+              *(new (p_mem) ART<MemTableValueEntry>::Scanner<ARTBase::Synchronized::kFalse,  //
+                                                             /*kValuesOnly=*/true>{
                   delta_mem_table.art_index(),
                   this->min_key_,
               });
@@ -572,8 +598,9 @@ Status KVStoreScanner::set_next_item()
 //
 /*explicit*/ KVStoreScanner::ScanLevel::ScanLevel(
     ActiveMemTableValueTag,
-    ART<MemTableValueEntry>::Scanner<ARTBase::Synchronized::kTrue>& art_scanner) noexcept
-    : key{art_scanner.get_key()}
+    ART<MemTableValueEntry>::Scanner<ARTBase::Synchronized::kTrue, /*kValuesOnly=*/true>&
+        art_scanner) noexcept
+    : key{art_scanner_get_key(art_scanner)}
     , state_impl{MemTableValueScanState<ARTBase::Synchronized::kTrue>{
           .art_scanner_ = &art_scanner,
       }}
@@ -584,8 +611,9 @@ Status KVStoreScanner::set_next_item()
 //
 /*explicit*/ KVStoreScanner::ScanLevel::ScanLevel(
     DeltaMemTableValueTag,
-    ART<MemTableValueEntry>::Scanner<ARTBase::Synchronized::kFalse>& art_scanner) noexcept
-    : key{art_scanner.get_key()}
+    ART<MemTableValueEntry>::Scanner<ARTBase::Synchronized::kFalse, /*kValuesOnly=*/true>&
+        art_scanner) noexcept
+    : key{art_scanner_get_key(art_scanner)}
     , state_impl{MemTableValueScanState<ARTBase::Synchronized::kFalse>{
           .art_scanner_ = &art_scanner,
       }}
@@ -701,7 +729,7 @@ BATT_ALWAYS_INLINE bool scan_level_mem_table_advance_impl(KVStoreScanner::ScanLe
   if (state.art_scanner_->is_done()) {
     return false;
   }
-  scan_level->key = state.art_scanner_->get_key();
+  scan_level->key = art_scanner_get_key(*state.art_scanner_);
   return true;
 }
 

@@ -1,13 +1,13 @@
 #pragma once
 
 #include <turtle_kv/util/byte_int.hpp>
-#include <turtle_kv/util/object_thread_storage.hpp>
 #include <turtle_kv/util/seq_mutex.hpp>
 
 #include <turtle_kv/import/bit_ops.hpp>
 #include <turtle_kv/import/constants.hpp>
 #include <turtle_kv/import/int_types.hpp>
 #include <turtle_kv/import/metrics.hpp>
+#include <turtle_kv/import/object_thread_storage.hpp>
 #include <turtle_kv/import/optional.hpp>
 #include <turtle_kv/import/small_vec.hpp>
 #include <turtle_kv/import/status.hpp>
@@ -82,6 +82,17 @@ class ARTBase
     FastCountMetric<u64> byte_alloc_count;
     FastCountMetric<u64> byte_free_count;
 
+    /** \brief Resets all metrics to initial values.
+	 */
+	void reset()
+    {
+      this->construct_count.reset();
+      this->destruct_count.reset();
+      this->insert_count.reset();
+      this->byte_alloc_count.reset();
+      this->byte_free_count.reset();
+    }
+
     //----- --- -- -  -  -   -
 
     double bytes_per_instance() const
@@ -98,9 +109,33 @@ class ARTBase
     {
       return (double)this->byte_alloc_count.get() / (double)this->insert_count.get();
     }
+
+    /** \brief Returns an estimate of the number of active instances (ART objects).
+	 */
+    u64 instance_count() const
+    {
+      // Must be in this order!
+      //
+      const u64 observed_destruct_count = this->destruct_count.get();
+      const u64 observed_construct_count = this->construct_count.get();
+
+      return observed_construct_count - observed_destruct_count;
+    }
+
+    /** \brief Returns an estimate of the current number of bytes in use.
+	 */
+    u64 bytes_in_use() const
+    {
+      // Must be in this order!
+      //
+      const u64 observed_free_count = this->byte_free_count.get();
+      const u64 observed_alloc_count = this->byte_alloc_count.get();
+
+      return observed_alloc_count - observed_free_count;
+    }
   };
 
-  static Metrics& metrics()
+  static Metrics& default_metrics()
   {
     static Metrics m_;
     return m_;
@@ -116,13 +151,15 @@ class ARTBase
   struct Node16;
   struct Node48;
   struct Node256;
+  struct LeafNode;
 
   enum struct NodeType : u8 {
-    kNode4 = 0,
-    kNode16 = 1,
-    kNode48 = 2,
-    kNode256 = 3,
-    kNodeBase = 4,
+    kLeafNode = 0,
+    kNode4 = 1,
+    kNode16 = 2,
+    kNode48 = 3,
+    kNode256 = 4,
+    kNodeBase = 5,
   };
 
   //----- --- -- -  -  -   -
@@ -308,6 +345,84 @@ class ARTBase
     }
   };
 
+  struct LeafNode : NodeBase {
+    using Self = LeafNode;
+    using Super = NodeBase;
+    using NoInit = ARTBase::NoInit;
+
+    explicit LeafNode() noexcept : Super{NodeType::kLeafNode}
+    {
+    }
+
+    explicit LeafNode(NoInit no_init) noexcept : Super{NodeType::kLeafNode, no_init}
+    {
+    }
+
+    static usize add_branch()
+    {
+      BATT_PANIC() << "not supported!";
+      return 0;
+    }
+
+    static void set_branch_index(u8 key_byte [[maybe_unused]], usize index [[maybe_unused]])
+    {
+      BATT_PANIC() << "not supported!";
+    }
+
+    static void set_branch_pointer(usize index [[maybe_unused]], NodeBase* child [[maybe_unused]])
+    {
+      BATT_PANIC() << "not supported!";
+    }
+
+    static constexpr usize max_branch_count()
+    {
+      return 0;
+    }
+
+    static constexpr usize branch_count()
+    {
+      return 0;
+    }
+
+    static constexpr usize index_of_branch(u8 key_byte [[maybe_unused]])
+    {
+      return 0;
+    }
+
+    static NodeBase*& get_branch_ref(usize i [[maybe_unused]])
+    {
+      static NodeBase* null_ = nullptr;
+      return null_;
+    }
+
+    //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+    struct ScanState {
+      explicit ScanState(Self&, ByteInt /*min_key*/) noexcept
+      {
+      }
+
+      static constexpr ByteInt get_key_byte()
+      {
+        return ByteInt::from_char('\0');
+      }
+
+      static constexpr NodeBase* get_branch()
+      {
+        return nullptr;
+      }
+
+      static constexpr bool is_done()
+      {
+        return true;
+      }
+
+      static constexpr void advance()
+      {
+      }
+    };
+  };
+
   struct BranchView {
     NodeBase** p_ptr;
     NodeBase* ptr;
@@ -374,7 +489,7 @@ class ARTBase
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-    std::array<NodeBase*, kBranchCount> branches;
+    std::array<NodeBase*, kBranchCount> branches_;
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -408,6 +523,16 @@ class ARTBase
       return i;
     }
 
+    NodeBase*& get_branch_ref(usize i) BATT_ALWAYS_INLINE
+    {
+      return this->branches_[i];
+    }
+
+    void set_branch_pointer(usize i, NodeBase* child) BATT_ALWAYS_INLINE
+    {
+      this->branches_[i] = child;
+    }
+
     static constexpr usize max_branch_count()
     {
       return kBranchCount;
@@ -416,8 +541,8 @@ class ARTBase
     void assign_from(const Self& that, usize prefix_offset = 0)
     {
       this->Super::assign_from(static_cast<const Super&>(that), prefix_offset);
-      __builtin_memcpy(this->branches.data(),
-                       that.branches.data(),
+      __builtin_memcpy(this->branches_.data(),
+                       that.branches_.data(),
                        this->branch_count() * sizeof(NodeBase*));
     }
   };
@@ -499,7 +624,7 @@ class ARTBase
           if (key_byte < min_key) {
             continue;
           }
-          branch_for_byte[key_byte.to_i32()] = this->self_.branches[i];
+          branch_for_byte[key_byte.to_i32()] = this->self_.branches_[i];
           key_bitmap[(key_byte.to_i32() >> 6) & 3] |= (u64{1} << (key_byte.to_i32() & 0x3f));
         }
 
@@ -564,7 +689,7 @@ class ARTBase
       return index_of(key_byte, this->key);
     }
 
-    void set_branch_index(u8 key_byte, usize i)
+    void set_branch_index(u8 key_byte, usize i) BATT_ALWAYS_INLINE
     {
       this->key[i] = key_byte;
     }
@@ -606,7 +731,7 @@ class ARTBase
 
       NodeBase* get_branch() const
       {
-        return this->self_.branches[this->branch_i_];
+        return this->self_.branches_[this->branch_i_];
       }
 
       bool is_done() const
@@ -654,7 +779,7 @@ class ARTBase
       return this->branch_for_key[key_byte];
     }
 
-    void set_branch_index(u8 key_byte, usize i)
+    void set_branch_index(u8 key_byte, usize i) BATT_ALWAYS_INLINE
     {
       this->branch_for_key[key_byte] = i;
     }
@@ -703,7 +828,7 @@ class ARTBase
 
       NodeBase* get_branch() const
       {
-        return this->self_.branches[this->key_byte_.to_i32()];
+        return this->self_.branches_[this->key_byte_.to_i32()];
       }
 
       bool is_done() const
@@ -728,13 +853,13 @@ class ARTBase
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-    std::array<NodeBase*, 256> branches;
+    std::array<NodeBase*, 256> branches_;
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
 
     Node256() noexcept : Super{NodeType::kNode256}
     {
-      this->branches.fill(nullptr);
+      this->branches_.fill(nullptr);
     }
 
     explicit Node256(NoInit no_init) noexcept : Super{NodeType::kNode256, no_init}
@@ -771,10 +896,15 @@ class ARTBase
     {
     }
 
+    NodeBase*& get_branch_ref(usize i) BATT_ALWAYS_INLINE
+    {
+      return this->branches_[i];
+    }
+
     void assign_from(const Self& that, usize prefix_offset = 0)
     {
       this->Super::assign_from(static_cast<const Super&>(that), prefix_offset);
-      this->branches = that.branches;
+      this->branches_ = that.branches_;
     }
   };
 
@@ -832,7 +962,7 @@ class ARTBase
         return this->data_ + in_use_prior;
       }
 
-      ARTBase::metrics().byte_alloc_count.add(sizeof(ExtentStorageT));
+      this->art_->metrics_.byte_alloc_count.add(sizeof(ExtentStorageT));
 
       this->thread_extents_.emplace_back(std::make_unique<ExtentStorageT>());
       this->data_ = reinterpret_cast<u8*>(this->thread_extents_.back().get());
@@ -843,7 +973,43 @@ class ARTBase
   };
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  explicit ARTBase() noexcept : ARTBase{ARTBase::default_metrics()}
+  {
+    // No update of construct count because we delegate to general-case ctor.
+  }
+
+  explicit ARTBase(Metrics& metrics) noexcept : metrics_{metrics}
+  {
+    this->metrics_.construct_count.add(1);
+  }
+
+  ~ARTBase() noexcept
+  {
+    this->metrics_.destruct_count.add(1);
+  }
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
  protected:
+  /** \brief RAII (guard) class that updates byte_free_count metric at the right moment during
+   * destruction of the ART (see comment in data member declarations below).
+   */
+  struct ExtentMetricsUpdateGuard {
+    ARTBase& art_base_;
+
+    //----- --- -- -  -  -   -
+
+    explicit ExtentMetricsUpdateGuard(ARTBase& art_base) noexcept : art_base_{art_base}
+    {
+    }
+
+    ~ExtentMetricsUpdateGuard() noexcept
+    {
+      this->art_base_.metrics_.byte_free_count.add(this->art_base_.extents_.size() *
+                                                   sizeof(ExtentStorageT));
+    }
+  };
+
   void* alloc_storage(usize n, usize pre)
   {
     const usize pad = (pre + 7) & ~usize{7};
@@ -851,8 +1017,13 @@ class ARTBase
     return ptr + pad;
   }
 
+  Metrics& metrics_;
   absl::Mutex mutex_;
   std::vector<std::unique_ptr<ExtentStorageT>> extents_;
+  //
+  // Must be placed exactly here, so it will be destructed after the ScopedSlot but before extents_.
+  ExtentMetricsUpdateGuard guard_{*this};
+  //
   ObjectThreadStorage<MemoryContext>::ScopedSlot per_thread_memory_context_;
 };
 
@@ -931,19 +1102,21 @@ class ART : public ARTBase
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  template <Synchronized kSynchronized>
+  template <Synchronized kSynchronized, bool kValuesOnly = false>
   class Scanner;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   ART() noexcept
   {
-    ART::metrics().construct_count.add(1);
+  }
+
+  explicit ART(ARTBase::Metrics& metrics) noexcept : ARTBase{metrics}
+  {
   }
 
   ~ART() noexcept
   {
-    ART::metrics().destruct_count.add(1);
   }
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -969,15 +1142,23 @@ class ART : public ARTBase
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
+  using SmallestParentNode = Node4;
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
   template <typename NodeT, typename = std::enable_if_t<!std::is_same_v<NodeT, Node256>>>
   NodeBase* add_child(NodeT* node, u8 key_byte, NodeBase* child);
 
   NodeBase* add_child(Node256* node, u8 key_byte, NodeBase* child);
 
   template <typename NodeT>
-  Node4* add_child(NodeT* node, u8 key_byte, const char* new_key_data, usize new_key_len);
+  LeafNode* add_child_leaf(NodeT* node, u8 key_byte, const char* new_key_data, usize new_key_len);
 
-  Node4* make_node4(const char* prefix, usize prefix_len);
+  LeafNode* make_leaf_node(const char* prefix, usize prefix_len);
+
+  Node4* make_parent_node(const char* prefix, usize prefix_len);
+
+  Node4* grow_node(LeafNode* old_node);
 
   Node16* grow_node(Node4* old_node);
 
@@ -986,6 +1167,8 @@ class ART : public ARTBase
   Node256* grow_node(Node48* old_node);
 
   Node256* grow_node(Node256*);
+
+  LeafNode* clone_node(LeafNode* orig_node, usize prefix_offset);
 
   Node4* clone_node(Node4* orig_node, usize prefix_offset);
 
@@ -1016,6 +1199,10 @@ inline void ARTBase::NodeBase::visit(CaseFns&&... case_fns)
   const NodeType observed = this->node_type;
 
   switch (observed) {
+    case NodeType::kLeafNode:
+      visitor(static_cast<LeafNode*>(this));
+      break;
+
     case NodeType::kNode4:
       visitor(static_cast<Node4*>(this));
       break;
@@ -1178,21 +1365,93 @@ struct ValueStorageBase<void, ARTBase::Synchronized::kDynamic> {
   }
 };
 
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+//
+/** \brief Base class for scanner; contains storage for the item at the current scanner position.
+ */
+template <typename ValueT, ARTBase::Synchronized kSynchronized, bool kValuesOnly>
+struct ItemStorageBase;
+
+/** \brief General case (kValuesOnly == false) for scanner item storage.
+ */
+template <typename ValueT, ARTBase::Synchronized kSynchronized>
+class ItemStorageBase<ValueT, kSynchronized, /*kValuesOnly=*/false>
+    : public ValueStorageBase<ValueT, kSynchronized>
+{
+ public:
+  std::array<char, ART<ValueT>::kMaxKeyLen> key_buffer_;
+  usize key_len_ = 0;
+
+  //----- --- -- -  -  -   -
+
+  void append_key(usize prefix_len, const char* suffix_data, usize suffix_len) BATT_ALWAYS_INLINE
+  {
+    __builtin_memcpy(this->key_buffer_.data() + prefix_len, suffix_data, suffix_len);
+  }
+
+  void append_key_byte(usize prefix_len, const ByteInt& suffix_byte) BATT_ALWAYS_INLINE
+  {
+    this->key_buffer_[prefix_len] = suffix_byte.to_char();
+  }
+
+  void set_key_len(usize len) BATT_ALWAYS_INLINE
+  {
+    this->key_len_ = len;
+  }
+
+  std::string_view get_key() const
+  {
+    return std::string_view{this->key_buffer_.data(), this->key_len_};
+  }
+};
+
+/** \brief kValuesOnly == true case; no key-related data members.
+ */
+template <typename ValueT, ARTBase::Synchronized kSynchronized>
+class ItemStorageBase<ValueT, kSynchronized, /*kValuesOnly=*/true>
+    : public ValueStorageBase<ValueT, kSynchronized>
+{
+ public:
+  void append_key(usize, const char*, usize) BATT_ALWAYS_INLINE
+  {
+    // nothing to do.
+  }
+
+  void append_key_byte(usize, const ByteInt&) BATT_ALWAYS_INLINE
+  {
+    // nothing to do.
+  }
+
+  void set_key_len(usize) BATT_ALWAYS_INLINE
+  {
+    // nothing to do.
+  }
+};
+
 }  // namespace detail
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 //
+/** \brief Scanner for an ART.  
+ *  
+ *  \tparam ValueT The value type stored in the scanned ART
+ *  \tparam kSynchronized (true, false, dynmamic) The concurrency control for this scanner
+ *  \tparam kValuesOnly When true, the scanner does not build/store key (path) information as it is
+ *                      traversing items -- only values are available
+ */
 template <typename ValueT>
-template <ARTBase::Synchronized kSynchronized>
-class ART<ValueT>::Scanner : public detail::ValueStorageBase<ValueT, kSynchronized>
+template <ARTBase::Synchronized kSynchronized, bool kValuesOnly>
+class ART<ValueT>::Scanner : public detail::ItemStorageBase<ValueT, kSynchronized, kValuesOnly>
 {
  public:
+  using LeafNode = ARTBase::LeafNode;
   using Node4 = ARTBase::Node4;
   using Node16 = ARTBase::Node16;
   using Node48 = ARTBase::Node48;
   using Node256 = ARTBase::Node256;
 
   using NodeScanState = std::variant<batt::NoneType,
+                                     LeafNode::ScanState,
                                      Node4::ScanState,
                                      Node16::ScanState,
                                      Node48::ScanState,
@@ -1202,11 +1461,16 @@ class ART<ValueT>::Scanner : public detail::ValueStorageBase<ValueT, kSynchroniz
 
   using SyncType = std::integral_constant<ARTBase::Synchronized, kSynchronized>;
 
+  using Value = std::conditional_t<std::is_same_v<ValueT, void>,
+                                   struct get_value_Not_Supported_If_ValueT_Is_Void,
+                                   ValueT>;
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   static_assert(sizeof(Node256) > sizeof(Node48));
   static_assert(sizeof(Node256) > sizeof(Node16));
   static_assert(sizeof(Node256) > sizeof(Node4));
+  static_assert(sizeof(Node256) > sizeof(LeafNode));
 
   struct Frame {
     static constexpr usize kStorageSize =
@@ -1232,13 +1496,23 @@ class ART<ValueT>::Scanner : public detail::ValueStorageBase<ValueT, kSynchroniz
   std::aligned_storage_t<sizeof(Frame) * kMaxDepth, /*alignment=*/64> stack_storage_;
   Frame* end_ = reinterpret_cast<Frame*>(&this->stack_storage_);
   usize depth_ = 0;
-  std::array<char, ART<ValueT>::kMaxKeyLen> key_buffer_;
-  Optional<std::string_view> next_key_;
+  bool have_item_ = false;
   ValueT* next_value_ = nullptr;
   Optional<bool> synchronized_;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  /** Resets the "have item" state of the scanner; after calling, have item will be false.
+   */
+  void reset_item() BATT_ALWAYS_INLINE
+  {
+    this->have_item_ = false;
+    if (!std::is_same_v<ValueT, void>) {
+      this->next_value_ = nullptr;
+    }
+  }
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
  public:
   explicit Scanner(ART& art,
                    std::string_view lower_bound_key,
@@ -1259,7 +1533,7 @@ class ART<ValueT>::Scanner : public detail::ValueStorageBase<ValueT, kSynchroniz
         this->enter(node, /*key_prefix_len=*/0, lower_bound_key);
       });
 
-      if (!this->next_key_) {
+      if (!this->have_item_) {
         this->advance();
       }
     }
@@ -1342,25 +1616,20 @@ class ART<ValueT>::Scanner : public detail::ValueStorageBase<ValueT, kSynchroniz
     // Append the node prefix to the buffer.
     //
     if (node_prefix_len) {
-      __builtin_memcpy(this->key_buffer_.data() + top->key_prefix_len_,
-                       node_prefix,
-                       node_prefix_len);
-
+      this->append_key(top->key_prefix_len_, node_prefix, node_prefix_len);
       top->key_prefix_len_ += node_prefix_len;
     }
 
     // If the current node is a key-terminal, emit the contents of the buffer.
     //
     if (node_view.is_terminal()) {
-      this->next_key_.emplace(this->key_buffer_.data(), top->key_prefix_len_);
+      this->have_item_ = true;
+      this->set_key_len(top->key_prefix_len_);
       if (!std::is_same_v<ValueT, void>) {
         this->next_value_ = (ValueT*)(this->value_storage_address(&node_view, this->synchronized_));
       }
     } else {
-      this->next_key_ = None;
-      if (!std::is_same_v<ValueT, void>) {
-        this->next_value_ = nullptr;
-      }
+      this->reset_item();
     }
 
     [[maybe_unused]] auto& scan_state_impl =
@@ -1372,15 +1641,9 @@ class ART<ValueT>::Scanner : public detail::ValueStorageBase<ValueT, kSynchroniz
     return this->depth_ == 0;
   }
 
-  const std::string_view& get_key() const
-  {
-    return *this->next_key_;
-  }
+  // get_key() const member function is inherited from ItemStorageBase, if kValuesOnly is false.
 
-  const std::conditional_t<std::is_same_v<ValueT, void>,
-                           struct get_value_Not_Supported_If_ValueT_Is_Void,
-                           ValueT>&
-  get_value() const
+  const Value& get_value() const
   {
     static_assert(!std::is_same_v<ValueT, void>);
     return *this->next_value_;
@@ -1388,10 +1651,7 @@ class ART<ValueT>::Scanner : public detail::ValueStorageBase<ValueT, kSynchroniz
 
   void advance()
   {
-    this->next_key_ = None;
-    if (!std::is_same_v<ValueT, void>) {
-      this->next_value_ = nullptr;
-    }
+    this->reset_item();
 
     for (;;) {
       if (this->depth_ == 0) {
@@ -1418,7 +1678,7 @@ class ART<ValueT>::Scanner : public detail::ValueStorageBase<ValueT, kSynchroniz
             const ByteInt key_byte = scan_state.get_key_byte();
             NodeBase* const child = scan_state.get_branch();
 
-            this->key_buffer_[top->key_prefix_len_] = key_byte.to_char();
+            this->append_key_byte(top->key_prefix_len_, key_byte);
 
             if (key_byte == top->min_key_byte_) {
               child->visit([&](auto* child_node) {
@@ -1433,7 +1693,7 @@ class ART<ValueT>::Scanner : public detail::ValueStorageBase<ValueT, kSynchroniz
             scan_state.advance();
           });
 
-      if (this->next_key_) {
+      if (this->have_item_) {
         return;
       }
     }

@@ -182,11 +182,13 @@ struct NodeAlgorithms {
   /** \brief Splits the given level at the given key, placing the lower and upper halves in
    * `lower_half_level` and `upper_half_level` respectively.
    */
-  template <typename LevelCaseT, typename LevelVariantT>
+  template <typename LevelCaseT, typename LevelVariantT, typename PageLoaderT>
   void split_level(const LevelCaseT& whole_level,
                    i32 split_pivot_i,
                    LevelVariantT& lower_half_level,
-                   LevelVariantT& upper_half_level)
+                   LevelVariantT& upper_half_level,
+                   PageLoaderT& page_loader,
+                   const TreeOptions& tree_options)
   {
     BATT_CHECK_NE(std::addressof(lower_half_level), std::addressof(upper_half_level));
 
@@ -198,8 +200,8 @@ struct NodeAlgorithms {
     BATT_CHECK_NE(std::addressof(whole_level), std::addressof(lower_impl));
     BATT_CHECK_NE(std::addressof(whole_level), std::addressof(upper_impl));
 
-    lower_impl.drop_after_pivot(split_pivot_i, split_pivot_key);
-    upper_impl.drop_before_pivot(split_pivot_i, split_pivot_key);
+    lower_impl.drop_after_pivot(split_pivot_i, split_pivot_key, page_loader, tree_options);
+    upper_impl.drop_before_pivot(split_pivot_i, split_pivot_key, page_loader, tree_options);
   }
 };
 

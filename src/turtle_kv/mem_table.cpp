@@ -1,27 +1,18 @@
 #include <turtle_kv/mem_table.hpp>
 //
 
+#include <turtle_kv/on_page_cache_overcommit.hpp>
+
 #include <turtle_kv/import/env.hpp>
 
-#include <turtle_kv/util/env_param.hpp>
+#include <turtle_kv/core/packed_sizeof_edit.hpp>
+
+#include <turtle_kv/util/atomic.hpp>
 
 #include <batteries/async/task.hpp>
 #include <batteries/checked_cast.hpp>
 
 namespace turtle_kv {
-
-namespace {
-
-constexpr usize kHashIndexOverheadPct = 285;
-constexpr usize kOrderedIndexOverheadPct = 35;
-constexpr usize kArtIndexOverheadPct = 50;
-
-}  // namespace
-
-TURTLE_KV_ENV_PARAM(bool, turtlekv_memtable_hash_index, false);
-TURTLE_KV_ENV_PARAM(bool, turtlekv_memtable_ordered_index, true);
-TURTLE_KV_ENV_PARAM(bool, turtlekv_memtable_count_latest_update_only, true);
-TURTLE_KV_ENV_PARAM(u32, turtlekv_memtable_hash_bucket_div, 32);
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
@@ -37,15 +28,19 @@ TURTLE_KV_ENV_PARAM(u32, turtlekv_memtable_hash_bucket_div, 32);
 //
 /*explicit*/ MemTable::MemTable(llfs::PageCache& page_cache,
                                 KVStoreMetrics& metrics,
-                                usize max_byte_size,
+                                usize max_bytes_per_batch,
+                                usize max_batch_count,
                                 Optional<u64> id) noexcept
     : page_cache_{page_cache}
     , metrics_{metrics}
+    , art_metrics_{}
     , is_finalized_{false}
     , hash_index_{}
     , ordered_index_{}
     , art_index_{}
-    , max_byte_size_{BATT_CHECKED_CAST(i64, max_byte_size)}
+    , max_bytes_per_batch_{BATT_CHECKED_CAST(i64, max_bytes_per_batch)}
+    , max_batch_count_{BATT_CHECKED_CAST(i64, max_batch_count)}
+    , max_byte_size_{this->calculate_max_byte_size()}
     , current_byte_size_{0}
     , self_id_{id.or_else([&] {
       return MemTable::next_id();
@@ -55,34 +50,33 @@ TURTLE_KV_ENV_PARAM(u32, turtlekv_memtable_hash_bucket_div, 32);
     , block_list_mutex_{}
     , blocks_{}
 {
-  usize overhead_estimate_pct = 0;
-
   if (getenv_param<turtlekv_memtable_hash_index>()) {
-    this->hash_index_.emplace(max_byte_size / getenv_param<turtlekv_memtable_hash_bucket_div>());
-    overhead_estimate_pct += kHashIndexOverheadPct;
+    this->hash_index_.emplace(this->max_byte_size_ /
+                              getenv_param<turtlekv_memtable_hash_bucket_div>());
 
     if (getenv_param<turtlekv_memtable_ordered_index>()) {
       this->ordered_index_.emplace();
-      overhead_estimate_pct += kOrderedIndexOverheadPct;
     }
 
   } else {
-    this->art_index_.emplace();
-    overhead_estimate_pct += kArtIndexOverheadPct;
+    this->art_index_.emplace(this->art_metrics_);
   }
 
   this->metrics_.mem_table_alloc.add(1);
   this->metrics_.mem_table_count_stats.update(this->metrics_.mem_table_alloc.get() -
                                               this->metrics_.mem_table_free.get());
-
-  const usize total_overhead_estimate = (max_byte_size * overhead_estimate_pct + 99) / 100;
-  this->reserve_cache_space(total_overhead_estimate);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 MemTable::~MemTable() noexcept
 {
+  // Try to detect double-deletions.
+  //
+  BATT_CHECK_EQ(this->magic_num_.exchange(Self::kDeadMagicNum), Self::kAliveMagicNum);
+
+  this->metrics_.mem_table_log_bytes_freed.add(this->block_size_total_);
+
   for (ChangeLogWriter::BlockBuffer* buffer : this->blocks_) {
     buffer->remove_ref(1);
   }
@@ -100,6 +94,25 @@ Status MemTable::put(ChangeLogWriter::Context& context,
                      const KeyView& key,
                      const ValueView& value) noexcept
 {
+  {
+    // Update the maximum packed item size, and possibly also the maximum total byte size.  When max
+    // item size goes up, so does the maximum number of wasted bytes at the end of a batch, so the
+    // batch limit might go down.
+    //
+    const i64 item_size = PackedSizeOfEdit{}(key.size(), value.size());
+    if (item_size > atomic_clamp_min(this->max_item_size_, item_size)) {
+      atomic_clamp_max(this->max_byte_size_, this->calculate_max_byte_size());
+    }
+
+    const i64 old_mem_table_size = this->current_byte_size_.fetch_add(item_size);
+    const i64 new_mem_table_size = old_mem_table_size + item_size;
+
+    if (new_mem_table_size > this->max_byte_size_.load()) {
+      this->current_byte_size_.fetch_sub(item_size);
+      return {batt::StatusCode::kResourceExhausted};
+    }
+  }
+
   StorageImpl storage{*this, context, OkStatus()};
 
   if (this->hash_index_) {
@@ -123,9 +136,6 @@ Status MemTable::put(ChangeLogWriter::Context& context,
 
   } else {
     MemTableValueEntryInserter<StorageImpl> inserter{
-        this->current_byte_size_,
-        this->max_byte_size_,
-        this->runtime_options_.limit_size_by_latest_updates_only,
         storage,
         key,
         value,
@@ -245,6 +255,8 @@ bool MemTable::finalize() noexcept
   return prior_value == false;
 }
 
+#if !TURTLE_KV_BIG_MEM_TABLES
+
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 MergeCompactor::ResultSet</*decay_to_items=*/false> MemTable::compact() noexcept
@@ -354,9 +366,10 @@ std::vector<EditView> MemTable::compact_art_index()
 {
   std::vector<EditView> edits_out;
 
-  ART<MemTableValueEntry>::Scanner<ARTBase::Synchronized::kFalse> scanner{
-      *this->art_index_,
-      /*min_key=*/std::string_view{}};
+  ART<MemTableValueEntry>::Scanner<ARTBase::Synchronized::kFalse,  //
+                                   /*kValuesOnly=*/true>
+      scanner{*this->art_index_,
+              /*min_key=*/std::string_view{}};
 
   for (; !scanner.is_done(); scanner.advance()) {
     const MemTableValueEntry& entry = scanner.get_value();
@@ -366,19 +379,6 @@ std::vector<EditView> MemTable::compact_art_index()
   }
 
   return edits_out;
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-ConstBuffer MemTable::fetch_slot(u32 locator) const noexcept
-{
-  //
-  // MUST only be called once the MemTable is finalized.
-
-  const usize block_index = (locator >> 16);
-  const usize slot_index = (locator & 0xffff);
-
-  return this->blocks_[block_index]->get_slot(slot_index);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -424,5 +424,186 @@ Slice<const EditView> MemTable::compacted_edits_slice_impl() const
   BATT_CHECK_EQ(n_chunks, 0);
   return {};
 }
+
+#endif  // !TURTLE_KV_BIG_MEM_TABLES
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+i64 MemTable::update_external_cache_alloc()
+{
+  // The number of bytes to claim (if positive) or release (negative) as external allocation
+  // from the PageCache; the return value of this function.
+  //
+  i64 cache_alloc_delta = 0;
+
+  ++this->since_last_cache_alloc_update_;
+
+  if (!this->cache_alloc_in_progress_ &&
+      this->since_last_cache_alloc_update_ >= MemTable::kBlocksPerExternalCacheAllocUpdate) {
+    this->cache_alloc_in_progress_ = true;
+    this->since_last_cache_alloc_update_ = 0;
+
+    if (getenv_param<turtlekv_memtable_cache_alloc_log>()) {
+      BATT_CHECK_GE(this->block_size_total_, this->block_size_last_update_);
+      const i64 block_delta = this->block_size_total_ - this->block_size_last_update_;
+      cache_alloc_delta += block_delta;
+      this->block_size_last_update_ = this->block_size_total_;
+    }
+
+    if (getenv_param<turtlekv_memtable_cache_alloc_art>()) {
+      const i64 new_art_size = (i64)this->art_metrics_.bytes_in_use();
+      const i64 art_delta = new_art_size - this->art_reserved_size_;
+      cache_alloc_delta += art_delta;
+      this->art_reserved_size_ = new_art_size;
+    }
+
+    if (cache_alloc_delta == 0) {
+      this->cache_alloc_in_progress_ = false;
+    }
+  }
+
+  return cache_alloc_delta;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void MemTable::handle_external_cache_alloc(i64 cache_alloc_delta)
+{
+  if (cache_alloc_delta > 0) {
+    const i64 observed_current_size = this->current_byte_size_.load();
+
+    llfs::PageCacheOvercommit overcommit;
+    overcommit.allow(true);
+
+    llfs::PageCache::ExternalAllocation alloc =
+        this->page_cache_.allocate_external(cache_alloc_delta, overcommit);
+
+    {
+      absl::MutexLock lock{&this->block_list_mutex_};
+      BATT_CHECK(this->cache_alloc_in_progress_);
+      this->total_cache_alloc_.subsume(std::move(alloc));
+      this->cache_alloc_in_progress_ = false;
+    }
+
+    // If we trigger cache overcommit, then cut the size limit down so we don't make things too
+    // much worse.
+    //
+    if (overcommit.is_triggered()) {
+      atomic_clamp_max(this->current_byte_size_,
+                       std::max<i64>(observed_current_size, this->max_bytes_per_batch_ / 2));
+
+      on_page_cache_overcommit(
+          [this, observed_current_size](std::ostream& out) {
+            out << "Truncating MemTable size due to cache overcommit;"
+                << BATT_INSPECT(this->current_byte_size_)
+                << BATT_INSPECT(this->max_bytes_per_batch_) << BATT_INSPECT(observed_current_size);
+          },
+          this->page_cache_,
+          this->metrics_.overcommit);
+    }
+
+  } else if (cache_alloc_delta < 0) {
+    StatusOr<llfs::PageCache::ExternalAllocation> alloc_to_release;
+    {
+      absl::MutexLock lock{&this->block_list_mutex_};
+      BATT_CHECK(this->cache_alloc_in_progress_);
+      alloc_to_release = this->total_cache_alloc_.split(-cache_alloc_delta);
+      this->cache_alloc_in_progress_ = false;
+    }
+    BATT_CHECK_OK(alloc_to_release)
+        << BATT_INSPECT(cache_alloc_delta) << BATT_INSPECT(this->total_cache_alloc_.size());
+  }
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+ConstBuffer MemTable::fetch_slot(u32 locator) const noexcept
+{
+  //
+  // MUST only be called once the MemTable is finalized.
+
+  const usize block_index = (locator >> 16);
+  const usize slot_index = (locator & 0xffff);
+
+  return this->blocks_[block_index]->get_slot(slot_index);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+i64 MemTable::calculate_max_byte_size() const
+{
+  const i64 max_wasted_per_batch = this->max_item_size_.load() - 1;
+  const i64 min_full_batch_size = this->max_bytes_per_batch_ - max_wasted_per_batch;
+  return this->max_batch_count_ * min_full_batch_size;
+}
+
+#if TURTLE_KV_BIG_MEM_TABLES
+
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+// class MemTable::BatchCompactor
+//
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+/*explicit*/ MemTable::BatchCompactor::BatchCompactor(MemTable& mem_table,
+                                                      usize byte_size_limit) noexcept
+    : mem_table_{mem_table}
+    , byte_size_limit_{byte_size_limit}
+    , batch_count_{0}
+    , scanner_{[this]() -> auto& {
+                 BATT_CHECK(this->mem_table_.art_index_)
+                     << "BatchCompactor can only be used with art_index_! (no hash)";
+                 return *this->mem_table_.art_index_;
+               }(),
+               /*min_key=*/std::string_view{}}
+{
+  BATT_CHECK(this->mem_table_.is_finalized());
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+bool MemTable::BatchCompactor::has_next() const
+{
+  return !this->scanner_.is_done();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+MergeCompactor::ResultSet</*decay_to_items=*/false>
+MemTable::BatchCompactor::consume_next() noexcept
+{
+  MergeCompactor::ResultSet</*decay_to_items=*/false> compacted_edits;
+
+  compacted_edits.append([&]() -> std::vector<EditView> {
+    std::vector<EditView> edits_out;
+    //----- --- -- -  -  -   -
+    PackedSizeOfEdit packed_size_of;
+    usize total_size = 0;
+
+    for (; !this->scanner_.is_done(); this->scanner_.advance()) {
+      const MemTableValueEntry& entry = this->scanner_.get_value();
+
+      EditView edit{entry.key_view(), entry.value_view()};
+      total_size += packed_size_of(edit);
+
+      if (total_size < this->byte_size_limit_) {
+        edits_out.emplace_back(edit);
+      } else {
+        break;
+      }
+    }
+    //----- --- -- -  -  -   -
+    return edits_out;
+  }());
+
+  if (!compacted_edits.empty()) {
+    atomic_clamp_min(this->mem_table_.max_batch_index_, this->batch_count_);
+    ++this->batch_count_;
+  }
+
+  return compacted_edits;
+}
+
+#endif  // TURTLE_KV_BIG_MEM_TABLES
 
 }  // namespace turtle_kv

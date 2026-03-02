@@ -251,7 +251,8 @@ class SegmentedLevelScannerTest : public ::testing::Test
     void run()
     {
       for (usize pivot_count = 2; pivot_count <= 64; ++pivot_count) {
-        ASSERT_NO_FATAL_FAILURE(this->run_with_pivot_count(pivot_count));
+        ASSERT_NO_FATAL_FAILURE(this->run_with_pivot_count(pivot_count))
+            << BATT_INSPECT(pivot_count);
       }
     }
 
@@ -400,7 +401,7 @@ void SegmentedLevelScannerTest::Scenario::run_with_pivot_count(usize pivot_count
                                              fake_node.level_,
                                              *this->fake_page_loader,
                                              llfs::PageCacheOvercommit::not_allowed())
-                              .flush_pivot_up_to_key(pivot_i, max_key_to_flush);
+                              .drop_key_range(pivot_i, max_key_to_flush);
 
     ASSERT_TRUE(flush_status.ok()) << BATT_INSPECT(flush_status);
 
@@ -424,7 +425,6 @@ void SegmentedLevelScannerTest::Scenario::run_with_pivot_count(usize pivot_count
       if (debug_output) {
         std::cout << std::setw(3) << segment_i
                   << ": active=" << std::bitset<kMaxPivotCount>{segment.get_active_pivots()}
-                  << " flushed=" << std::bitset<kMaxPivotCount>{segment.get_flushed_pivots()}
                   << std::endl;
       }
     }

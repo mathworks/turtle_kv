@@ -16,8 +16,7 @@ struct PackedSizeOfEdit {
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  template <typename T>
-  usize operator()(const T& item) const
+  usize operator()(const usize key_size, const usize value_size) const
   {
     return
         // Key metadata
@@ -26,13 +25,19 @@ struct PackedSizeOfEdit {
 
         // Key data
         //
-        get_key(item).size() +    //
+        key_size +                //
         kPackedValueOffsetSize +  //
 
         // Value data
         //
         kPackedValueOpSize +  //
-        get_value(item).size();
+        value_size;
+  }
+
+  template <typename T>
+  usize operator()(const T& item) const
+  {
+    return this->operator()(get_key(item).size(), get_value(item).size());
   }
 };
 

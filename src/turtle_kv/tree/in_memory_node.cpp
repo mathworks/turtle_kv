@@ -109,17 +109,9 @@ using PackedSegment = PackedUpdateBuffer::Segment;
 
         segment.page_id_slot = llfs::PageIdSlot::from_page_id(packed_segment.leaf_page_id.unpack());
         segment.active_pivots = packed_segment.active_pivots;
-        segment.flushed_pivots = packed_segment.flushed_pivots;
 
-        Slice<const little_u32> packed_flushed_item_upper_bounds =
-            packed_node.get_flushed_item_upper_bounds(level_i, segment_i);
-
-        BATT_CHECK_EQ(packed_flushed_item_upper_bounds.size(),
-                      bit_count(segment.get_flushed_pivots()));
-
-        for (const little_u32& upper_bound : packed_flushed_item_upper_bounds) {
-          segment.flushed_item_upper_bound_.emplace_back(upper_bound);
-        }
+        BATT_ASSIGN_OK_RESULT(segment.filter,
+                              packed_node.create_piecewise_filter(level_i, segment_i));
 
         segment.check_invariants(__FILE__, __LINE__);
       }
@@ -653,9 +645,9 @@ Status InMemoryNode::split_child(BatchUpdateContext& update_context, i32 pivot_i
                                             sibling_page));
 
   //----- --- -- -  -  -   -
-  // Update update_buffer levels.  This comes first because we use u64-based bit sets for
-  // active_pivots and flushed_pivots, and we assert that when we insert a new pivot (via
-  // split), it does not overflow the bit set.
+  // Update update_buffer levels.  This comes first because we use u64-based bit set for
+  // active_pivots, and we assert that when we insert a new pivot (via split), it does not
+  // overflow the bit set.
   //
   Interval<KeyView> pivot_key_range = in_node(*this).get_pivot_key_range(pivot_i);
 
@@ -1312,12 +1304,11 @@ Status InMemoryNode::set_pivot_items_flushed(BatchUpdateContext& update_context,
           is_now_empty = merged_level.result_set.empty();
         },
         [&](SegmentedLevel& segmented_level) {
-          segment_load_status.Update(
-              in_segmented_level(*this,
-                                 segmented_level,
-                                 update_context.page_loader,
-                                 update_context.overcommit)
-                  .flush_pivot_up_to_key(pivot_i, flush_key_crange.upper_bound));
+          segment_load_status.Update(in_segmented_level(*this,
+                                                        segmented_level,
+                                                        update_context.page_loader,
+                                                        update_context.overcommit)
+                                         .drop_key_range(pivot_i, flush_key_crange.upper_bound));
 
           is_now_empty = segmented_level.empty();
         });
@@ -1356,7 +1347,6 @@ Status InMemoryNode::set_pivot_completely_flushed(usize pivot_i,
           for (usize segment_i = 0; segment_i < segmented_level.segment_count();) {
             Segment& segment = segmented_level.get_segment(segment_i);
 
-            segment.set_flushed_item_upper_bound(pivot_i, 0);
             segment.set_pivot_active(pivot_i, false);
 
             if (segment.get_active_pivots() == 0) {
@@ -1500,7 +1490,16 @@ usize InMemoryNode::key_data_byte_size() const
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-usize InMemoryNode::flushed_item_counts_byte_size() const
+usize InMemoryNode::segment_filters_byte_size() const
+{
+  usize count = this->total_segment_filter_cut_points();
+
+  return llfs::packed_array_size<little_u32>(count);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+usize InMemoryNode::total_segment_filter_cut_points() const
 {
   usize count = 0;
 
@@ -1516,13 +1515,13 @@ usize InMemoryNode::flushed_item_counts_byte_size() const
         [](const SegmentedLevel& segmented_level) -> usize {
           usize n = 0;
           for (const Segment& segment : segmented_level.segments) {
-            n += bit_count(segment.get_flushed_pivots());
+            n += segment.num_cut_points();
           }
           return n;
         });
   }
 
-  return count * sizeof(little_u32);
+  return count;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -1533,8 +1532,8 @@ SubtreeViability InMemoryNode::get_viability() const
 
   const usize variable_space = PackedNodePage::variable_data_space();
   const usize keys_size = this->key_data_byte_size();
-  const usize counts_size = this->flushed_item_counts_byte_size();
-  const bool variables_too_large = (keys_size + counts_size) > variable_space;
+  const usize segment_filters_size = this->segment_filters_byte_size();
+  const bool variables_too_large = (keys_size + segment_filters_size) > variable_space;
 
   needs_split.pivot_count = BATT_CHECKED_CAST(u16, this->pivot_count());
   needs_split.segment_count = BATT_CHECKED_CAST(u16, this->segment_count());
@@ -1542,7 +1541,7 @@ SubtreeViability InMemoryNode::get_viability() const
   needs_split.too_many_pivots = (needs_split.pivot_count > this->max_pivot_count());
   needs_split.too_many_segments = (needs_split.segment_count > this->max_segment_count());
   needs_split.keys_too_large = (keys_size > variable_space);
-  needs_split.flushed_item_counts_too_large = (counts_size != 0 && variables_too_large);
+  needs_split.segment_filters_too_large = (segment_filters_size != 0 && variables_too_large);
 
   if (needs_split) {
     return needs_split;
@@ -1790,7 +1789,12 @@ StatusOr<std::unique_ptr<InMemoryNode>> InMemoryNode::try_split_direct(BatchUpda
       Level& upper_half_level = node_upper_half->update_buffer.levels[level_i];
 
       batt::case_of(orig_levels[level_i], [&](const auto& level_case) {
-        in_node(*this).split_level(level_case, split_pivot_i, lower_half_level, upper_half_level);
+        in_node(*this).split_level(level_case,
+                                   split_pivot_i,
+                                   lower_half_level,
+                                   upper_half_level,
+                                   context.page_loader,
+                                   this->tree_options);
       });
     }
 
@@ -2063,7 +2067,12 @@ StatusOr<usize> MergedLevel::start_serialize(const InMemoryNode& node,
             packed_leaf_page_layout_id(),
             llfs::LruPriority{kNewLeafLruPriority},
             /*task_count=*/2,
-            [this, &node, part_extents, filter_bits_per_key, overcommit_triggered, filter_page_size](
+            [this,
+             &node,
+             part_extents,
+             filter_bits_per_key,
+             overcommit_triggered,
+             filter_page_size](
                 usize task_i,
                 llfs::PageCache& page_cache,
                 llfs::PageBuffer& page_buffer) -> TreeSerializeContext::PinPageToJobFn {
@@ -2116,7 +2125,6 @@ StatusOr<SegmentedLevel> MergedLevel::finish_serialize(const InMemoryNode& node,
 
     segment.page_id_slot.page_id = pinned_leaf_page.page_id();
     segment.active_pivots = 0;
-    segment.flushed_pivots = 0;
 
     const PackedLeafPage& leaf_page = PackedLeafPage::view_of(pinned_leaf_page);
 
@@ -2146,12 +2154,20 @@ void InMemoryNode::UpdateBuffer::SegmentedLevel::drop_segment(usize i)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-void InMemoryNode::UpdateBuffer::SegmentedLevel::drop_pivot_range(const Interval<i32>& pivot_range)
+void InMemoryNode::UpdateBuffer::SegmentedLevel::drop_pivot_range(
+    const Interval<i32>& pivot_i_range,
+    const Interval<KeyView>& pivot_key_range,
+    llfs::PageLoader& page_loader,
+    const TreeOptions& tree_options)
 {
   for (Segment& segment : this->segments) {
-    in_segment(segment).drop_pivot_range(pivot_range);
-    if (pivot_range.lower_bound == 0) {
-      segment.pop_front_pivots(pivot_range.upper_bound);
+    BATT_CHECK_OK(in_segment(segment).drop_pivot_range(pivot_i_range,
+                                                       pivot_key_range,
+                                                       page_loader,
+                                                       tree_options));
+
+    if (pivot_i_range.lower_bound == 0) {
+      segment.pop_front_pivots(pivot_i_range.upper_bound);
     }
   }
 
@@ -2166,19 +2182,27 @@ void InMemoryNode::UpdateBuffer::SegmentedLevel::drop_pivot_range(const Interval
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 void InMemoryNode::UpdateBuffer::SegmentedLevel::drop_before_pivot(i32 pivot_i,
-                                                                   const KeyView& pivot_key
-                                                                   [[maybe_unused]])
+                                                                   const KeyView& pivot_key,
+                                                                   llfs::PageLoader& page_loader,
+                                                                   const TreeOptions& tree_options)
 {
-  this->drop_pivot_range(Interval<i32>{0, pivot_i});
+  this->drop_pivot_range((Interval<i32>{0, pivot_i}),
+                         (Interval<KeyView>{global_min_key(), pivot_key}),
+                         page_loader,
+                         tree_options);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 void InMemoryNode::UpdateBuffer::SegmentedLevel::drop_after_pivot(i32 pivot_i,
-                                                                  const KeyView& pivot_key
-                                                                  [[maybe_unused]])
+                                                                  const KeyView& pivot_key,
+                                                                  llfs::PageLoader& page_loader,
+                                                                  const TreeOptions& tree_options)
 {
-  this->drop_pivot_range(Interval<i32>{pivot_i, 64});
+  this->drop_pivot_range((Interval<i32>{pivot_i, 64}),
+                         (Interval<KeyView>{pivot_key, global_max_key()}),
+                         page_loader,
+                         tree_options);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -2274,69 +2298,7 @@ void InMemoryNode::UpdateBuffer::SegmentedLevel::check_items_sorted(
 //
 void InMemoryNode::UpdateBuffer::Segment::check_invariants(const char* file, int line) const
 {
-  // Make sure the flushed pivots bit set and flushed_item_upper_bound (non-zero values) are in
-  // sync.
-  //
-  BATT_CHECK_EQ(this->flushed_item_upper_bound_.size(), bit_count(this->flushed_pivots))
-      << BATT_INSPECT(file) << BATT_INSPECT(line);
-
-  // There should be no inactive pivots with a flushed upper bound.
-  //
-  BATT_CHECK_EQ(((~this->active_pivots) & this->flushed_pivots), u64{0})
-      << BATT_INSPECT(file) << BATT_INSPECT(line);
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-u32 InMemoryNode::UpdateBuffer::Segment::get_flushed_item_upper_bound(const SegmentedLevel&,
-                                                                      i32 pivot_i) const
-{
-  if (!get_bit(this->flushed_pivots, pivot_i)) {
-    return 0;
-  }
-
-  const i32 index = bit_rank(this->flushed_pivots, pivot_i);
-  BATT_ASSERT_GE(index, 0);
-  BATT_ASSERT_LT(index, this->flushed_item_upper_bound_.size());
-
-  return this->flushed_item_upper_bound_[index];
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-void InMemoryNode::UpdateBuffer::Segment::set_flushed_item_upper_bound(i32 pivot_i, u32 upper_bound)
-{
-  this->check_invariants(__FILE__, __LINE__);
-  auto on_scope_exit = batt::finally([&] {
-    this->check_invariants(__FILE__, __LINE__);
-  });
-
-  if (!get_bit(this->flushed_pivots, pivot_i)) {
-    if (upper_bound == 0) {
-      return;
-    }
-    this->flushed_pivots = set_bit(this->flushed_pivots, pivot_i, true);
-
-    const i32 index = bit_rank(this->flushed_pivots, pivot_i);
-    BATT_ASSERT_GE(index, 0);
-
-    this->flushed_item_upper_bound_.insert(this->flushed_item_upper_bound_.begin() + index,
-                                           upper_bound);
-
-    BATT_ASSERT_LT(index, this->flushed_item_upper_bound_.size());
-
-  } else {
-    const i32 index = bit_rank(this->flushed_pivots, pivot_i);
-    BATT_ASSERT_GE(index, 0);
-    BATT_ASSERT_LT(index, this->flushed_item_upper_bound_.size());
-
-    if (upper_bound != 0) {
-      this->flushed_item_upper_bound_[index] = upper_bound;
-    } else {
-      this->flushed_item_upper_bound_.erase(this->flushed_item_upper_bound_.begin() + index);
-      this->flushed_pivots = set_bit(this->flushed_pivots, pivot_i, false);
-    }
-  }
+  BATT_CHECK(this->filter.check_invariants()) << BATT_INSPECT(file) << BATT_INSPECT(line);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -2349,7 +2311,6 @@ void InMemoryNode::UpdateBuffer::Segment::insert_pivot(i32 pivot_i, bool is_acti
   });
 
   this->active_pivots = insert_bit(this->active_pivots, pivot_i, is_active);
-  this->flushed_pivots = insert_bit(this->flushed_pivots, pivot_i, false);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -2381,20 +2342,16 @@ void InMemoryNode::UpdateBuffer::Segment::pop_front_pivots(i32 count)
     return;
   }
 
-  // Before we modify the bit sets, make sure we aren't losing any active/flushed pivots.
+  // Before we modify the bit sets, make sure we aren't losing any active pivots.
   //
   const u64 mask = (u64{1} << count) - 1;
 
   BATT_CHECK_EQ(bit_count(mask), count);
   BATT_CHECK_EQ((this->active_pivots & mask), u64{0});
-  BATT_CHECK_EQ((this->flushed_pivots & mask), u64{0});
 
-  // Shift both active and flushed pivot sets down by count.  We don't need to touch
-  // flushed_item_upper_bound_ since getting rid of low-order zero bits doesn't change any
-  // bit_rank calculations for flushed pivots.
+  // Shift the active pivot set down by count.
   //
   this->active_pivots = (this->active_pivots >> count);
-  this->flushed_pivots = (this->flushed_pivots >> count);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -2403,8 +2360,9 @@ bool InMemoryNode::UpdateBuffer::Segment::is_inactive() const
 {
   const bool inactive = (this->active_pivots == 0);
   if (inactive) {
-    BATT_CHECK_EQ(this->flushed_pivots, 0);
-    BATT_CHECK(this->flushed_item_upper_bound_.empty());
+    Slice<const Interval<u32>> filter_dropped_ranges = this->filter.dropped();
+    BATT_CHECK_EQ(filter_dropped_ranges.size(), 1);
+    BATT_CHECK_EQ(filter_dropped_ranges[0].lower_bound, 0);
   }
   return inactive;
 }
@@ -2481,16 +2439,13 @@ SmallFn<void(std::ostream&)> InMemoryNode::UpdateBuffer::Segment::dump(bool mult
 {
   return [this, multi_line](std::ostream& out) {
     auto active = std::bitset<64>{this->active_pivots};
-    auto flushed = std::bitset<64>{this->flushed_pivots};
-    auto flushed_bounds = batt::dump_range(this->flushed_item_upper_bound_);
     if (multi_line) {
       out << "Segment:" << std::endl
           << "   active=" << active << std::endl
-          << "  flushed=" << flushed << std::endl
-          << "  flushed_upper_bounds=" << flushed_bounds;
+          << "   filter=" << this->filter.dump() << std::endl
+          << std::endl;
     } else {
-      out << "Segment{.active=" << active << ", .flushed=" << flushed
-          << ", .flushed_upper_bounds=" << flushed_bounds << ",}";
+      out << "Segment{.active=" << active << ", .filter=" << this->filter.dump() << ",}";
     }
   };
 }

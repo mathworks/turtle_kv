@@ -71,7 +71,7 @@
 
 /** \brief Enable/disable creating multiple batches from a single bigger memtable.
  */
-#define TURTLE_KV_BIG_MEM_TABLES 0
+#define TURTLE_KV_BIG_MEM_TABLES 1
 
 namespace turtle_kv {
 

@@ -1,5 +1,4 @@
 #pragma once
-#include <batteries/metrics/metric_collectors.hpp>
 #define TURTLE_KV_ON_PAGE_CACHE_OVERCOMMIT_HPP
 
 #include <turtle_kv/config.hpp>
@@ -8,6 +7,8 @@
 #include <turtle_kv/import/metrics.hpp>
 
 #include <llfs/page_cache.hpp>
+
+#include <batteries/metrics/metric_collectors.hpp>
 
 #include <functional>
 #include <ostream>

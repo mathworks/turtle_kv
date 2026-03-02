@@ -1,5 +1,8 @@
 #pragma once
 
+#include <turtle_kv/config.hpp>
+//
+
 #include <turtle_kv/core/key_view.hpp>
 #include <turtle_kv/core/packed_value_offset.hpp>
 #include <turtle_kv/core/value_view.hpp>
@@ -49,6 +52,11 @@ struct PackedKeyValue {
     return *(this + 1);
   }
 
+  BATT_ALWAYS_INLINE const char* data_begin() const
+  {
+    return ((const char*)this) + this->key_offset;
+  }
+
   void set_key_data(const void* ptr)
   {
     this->key_offset = byte_distance(this, ptr);
@@ -56,7 +64,7 @@ struct PackedKeyValue {
 
   BATT_ALWAYS_INLINE const char* key_data() const
   {
-    return ((const char*)this) + this->key_offset;
+    return this->data_begin();
   }
 
   BATT_ALWAYS_INLINE usize key_size() const

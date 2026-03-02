@@ -166,25 +166,21 @@ struct SegmentedLevelAlgorithms {
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  /** \brief Marks all items in `pivot_i` with keys less than or equal to `max_key` as flushed.
+  /** \brief Filters out the key range in each segment in this level.
    */
-  Status flush_pivot_up_to_key(usize pivot_i, const KeyView& max_key)
+  Status drop_key_range(usize pivot_i, const KeyView& max_key)
   {
     static_assert(node_available());
     static_assert(page_loader_available());
 
-    VLOG(1) << "flush_pivot_up_to_key(pivot=" << pivot_i << ", " << batt::c_str_literal(max_key)
-            << ")";
-
     KeyView pivot_lower_bound_key = this->node_.get_pivot_key(pivot_i);
     KeyView pivot_upper_bound_key = this->node_.get_pivot_key(pivot_i + 1);
 
-    if (max_key < pivot_lower_bound_key) {
-      return batt::StatusCode::kInvalidArgument;
-    }
-
     for (usize segment_i = 0; segment_i < this->level_.segment_count();) {
       SegmentT& segment = this->level_.get_segment(segment_i);
+
+      // Skip this segment if the pivot is not active.
+      //
       const u64 active_pivots = segment.get_active_pivots();
       if (!get_bit(active_pivots, pivot_i)) {
         ++segment_i;
@@ -196,52 +192,21 @@ struct SegmentedLevelAlgorithms {
                                                    llfs::PinPageToJob::kDefault,
                                                    this->overcommit_));
 
-      const PackedLeafPage& leaf_view = PackedLeafPage::view_of(pinned_page.get_page_buffer());
+      const PackedLeafPage& leaf = PackedLeafPage::view_of(pinned_page.get_page_buffer());
 
-      auto pivot_first = leaf_view.lower_bound(pivot_lower_bound_key);
-      auto pivot_last = leaf_view.lower_bound(pivot_upper_bound_key);
-      auto flushed_last = leaf_view.lower_bound(max_key);
-
-      if (flushed_last != leaf_view.items_end() && get_key(*flushed_last) <= max_key) {
+      auto flushed_last = leaf.lower_bound(max_key);
+      if (flushed_last != leaf.items_end() && get_key(*flushed_last) == max_key) {
         ++flushed_last;
       }
-      BATT_CHECK((flushed_last == leaf_view.items_end()) || (get_key(*flushed_last) > max_key));
 
-      const u32 prior_flushed_upper_bound =
-          segment.get_flushed_item_upper_bound(this->level_, pivot_i);
+      CInterval<KeyView> flush_key_crange{pivot_lower_bound_key, max_key};
+      segment.drop_key_range(flush_key_crange, leaf.items_slice());
 
-      // Check to see whether we are flushing all keys in the pivot range.
-      //
-      if (flushed_last == pivot_last) {
-        segment.set_flushed_item_upper_bound(pivot_i, 0);
+      if (flushed_last == leaf.items_end() || get_key(*flushed_last) >= pivot_upper_bound_key) {
         segment.set_pivot_active(pivot_i, false);
       }
-      // If the flushed upper bound for this segment is at the start of this pivot's key range,
-      // (i.e. flushed_last == pivot_first), then this flush doesn't affect us.
-      //
-      else if (flushed_last != pivot_first) {
-        // The general case; update the flushed upper bound for this pivot in this segment.
-        //
-        BATT_CHECK_LT(flushed_last, pivot_last);
 
-        const usize new_flushed_upper_bound = std::distance(leaf_view.items_begin(), flushed_last);
-
-        // Make sure we never "unflush" any items!
-        //
-        if (new_flushed_upper_bound > prior_flushed_upper_bound) {
-          segment.set_flushed_item_upper_bound(pivot_i, new_flushed_upper_bound);
-
-          // Sanity check; make sure the new upper bound is correct.
-          //
-          BATT_CHECK_EQ(segment.get_flushed_item_upper_bound(this->level_, pivot_i),
-                        new_flushed_upper_bound);
-        }
-      }
-      // At this point, the flushed upper bound and active pivots set have been updated.
-      //----- --- -- -  -  -   -
-
-      // If this segment becomes inactive by flushing the last item in the last active pivot, then
-      // remove it from the level.
+      // Drop the segment if it has become inactive due to the flush.
       //
       if (segment.get_active_pivots() == 0) {
         this->level_.drop_segment(segment_i);

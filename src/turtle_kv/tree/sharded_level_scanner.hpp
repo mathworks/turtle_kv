@@ -130,13 +130,13 @@ class ShardedLevelScanner : private SegmentedLevelScannerBase
                                   const Segment& segment,
                                   const PackedLeafPage& leaf_page);
 
-  StatusOr<SliceData> init_slice_data(const KeyView& gap_pivot_key) noexcept;
+  StatusOr<SliceData> init_slice_data(u32 next_flushed_i) noexcept;
 
   Interval<usize> get_trie_search_range(const KeyView& key);
 
-  Status set_start_item(usize flushed_upper_bound,
-                        Optional<KeyView> lower_bound_key = None,
-                        Optional<Interval<usize>> search_range = None) noexcept;
+  Status set_start_item(const Segment& segment,
+                        const KeyView& lower_bound_key,
+                        const Interval<usize>& search_range) noexcept;
 
   Status try_full_leaf_load(const Segment& segment) noexcept;
 
@@ -166,10 +166,8 @@ class ShardedLevelScanner : private SegmentedLevelScannerBase
   usize segment_i_;
   usize item_i_;
   i32 min_pivot_i_;
-  i32 pivot_i_;
   batt::BoolStatus load_full_leaf_;
-  bool passed_min_key_;
-  bool hit_gap_pivot_key_;
+  bool hit_next_flushed_i_;
   bool needs_load_segment_ = true;
 };
 
@@ -202,10 +200,8 @@ inline /*explicit*/ ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::ShardedLeve
     , segment_i_{0}
     , item_i_{0}
     , min_pivot_i_{min_pivot_i}
-    , pivot_i_{0}
     , load_full_leaf_{batt::BoolStatus::kUnknown}
-    , passed_min_key_{false}
-    , hit_gap_pivot_key_{false}
+    , hit_next_flushed_i_{false}
 {
 }
 
@@ -280,10 +276,10 @@ inline auto ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::peek_next_impl(bool
         this->load_full_leaf_ = batt::BoolStatus::kTrue;
         BATT_CHECK(!this->needs_load_segment_);
 
-        this->advance_to_pivot_full_leaf(
-            target_pivot_i,
-            *segment,
-            PackedLeafPage::view_of(this->full_leaf_data_->leaf_page.get_page_buffer()));
+        const PackedLeafPage& leaf =
+            PackedLeafPage::view_of(this->full_leaf_data_->leaf_page.get_page_buffer());
+
+        this->advance_to_pivot_full_leaf(target_pivot_i, *segment, leaf);
 
         return this->continue_full_leaf_after_segment_check(advance, active_pivots, segment);
       }
@@ -312,6 +308,10 @@ inline auto ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::peek_next_impl(bool
       BATT_CHECK_NE(this->head_shard_slice_.size(), 0);
     }
 
+    const void* page_start = this->head_shard_slice_.data();
+    const void* payload_start = advance_pointer(page_start, sizeof(llfs::PackedPageHeader));
+    const auto& packed_leaf_page = *static_cast<const PackedLeafPage*>(payload_start);
+
     // Advance to `target_pivot_i` in this segment.
     //
     Status advance_pivot_status = this->advance_to_pivot(target_pivot_i, *segment);
@@ -319,10 +319,6 @@ inline auto ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::peek_next_impl(bool
       this->status_ = advance_pivot_status;
       return None;
     }
-
-    const void* page_start = this->head_shard_slice_.data();
-    const void* payload_start = advance_pointer(page_start, sizeof(llfs::PackedPageHeader));
-    const auto& packed_leaf_page = *static_cast<const PackedLeafPage*>(payload_start);
 
     // If advancing to the next pivot set a starting item past this leaf's key range, move on to the
     // next segment/leaf. It is likely that this->min_key_ is larger than all keys in this current
@@ -353,15 +349,16 @@ inline auto ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::continue_sharded_af
   const void* payload_start = advance_pointer(page_start, sizeof(llfs::PackedPageHeader));
   const auto& packed_leaf_page = *static_cast<const PackedLeafPage*>(payload_start);
 
-  const i32 next_inactive_pivot_i = next_bit(~active_pivots, this->pivot_i_);
-  const i32 next_flushed_pivot_i = next_bit(segment->get_flushed_pivots(), this->pivot_i_);
-  const i32 next_gap_pivot_i = std::min(next_inactive_pivot_i, next_flushed_pivot_i);
-
-  // Compute the next gap pivot key, and use that to compute the end of the slice to return, as well
-  // as other necessary data needed for a ShardedKeyValueSlice.
+  // Compute the end item, as well as other necessary data needed for a ShardedKeyValueSlice.
   //
-  const KeyView gap_pivot_key = this->node_->get_pivot_key(next_gap_pivot_i);
-  StatusOr<SliceData> slice_data = this->init_slice_data(gap_pivot_key);
+  BATT_CHECK_LT(this->item_i_, packed_leaf_page.key_count);
+  Interval<u32> live_range = segment->get_live_item_range(
+      *this->level_,
+      Interval<u32>{BATT_CHECKED_CAST(u32, this->item_i_),
+                    BATT_CHECKED_CAST(u32, packed_leaf_page.key_count)});
+  BATT_CHECK(!live_range.empty());
+
+  StatusOr<SliceData> slice_data = this->init_slice_data(live_range.upper_bound);
   if (!slice_data.ok()) {
     this->status_ = slice_data.status();
     return None;
@@ -379,45 +376,33 @@ inline auto ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::continue_sharded_af
   }
 
   if (advance) {
-    // If we have set `gap_pivot_key` to be the ending item in the `scanned_items` slice, advance
-    // accordingly.
+    // Advance accordingly depending on whether or not we have reached the next flushed item in
+    // the segment.
     //
     usize prev_item_i = this->item_i_;
-    if (this->hit_gap_pivot_key_) {
-      if (next_gap_pivot_i == next_inactive_pivot_i) {
-        const usize next_pivot_i =
-            (next_inactive_pivot_i < 64) ? next_bit(active_pivots, next_inactive_pivot_i) : 64;
-
-        if (next_pivot_i < this->node_->pivot_count()) {
-          Status advance_pivot_status = this->advance_to_pivot(next_pivot_i, *segment);
-          this->status_ = advance_pivot_status;
-          this->update_cached_items(prev_item_i);
-        } else {
-          this->advance_segment();
-        }
+    if (this->hit_next_flushed_i_) {
+      if (live_range.upper_bound >= packed_leaf_page.key_count) {
+        this->advance_segment();
       } else {
-        this->pivot_i_ = next_flushed_pivot_i;
+        u32 next_live_item = segment->live_lower_bound(*this->level_, live_range.upper_bound);
 
-        BATT_CHECK_LT(this->pivot_i_, this->node_->pivot_count())
-            << BATT_INSPECT(next_inactive_pivot_i) << BATT_INSPECT(next_gap_pivot_i);
-
-        usize flushed_upper_bound =
-            segment->get_flushed_item_upper_bound(*this->level_, next_flushed_pivot_i);
-        BATT_CHECK_LT(flushed_upper_bound, packed_leaf_page.key_count);
-
-        this->status_ = this->set_start_item(flushed_upper_bound);
-        this->update_cached_items(prev_item_i);
+        if (next_live_item >= packed_leaf_page.key_count) {
+          this->advance_segment();
+        } else {
+          this->item_i_ = next_live_item;
+          this->update_cached_items(prev_item_i);
+        }
       }
 
-      this->hit_gap_pivot_key_ = false;
+      this->hit_next_flushed_i_ = false;
     } else {
-      // If we have not hit the next gap pivot key yet, set the starting item for the next call to
+      // If we have not hit the next flushed item yet, set the starting item for the next call to
       // `peek_next_impl` to be the end of the current slice that we returning.
       //
       this->item_i_ = slice_data->end_i;
       if (this->item_i_ >= packed_leaf_page.key_count) {
         this->advance_segment();
-        this->hit_gap_pivot_key_ = false;
+        this->hit_next_flushed_i_ = false;
       } else {
         this->update_cached_items(prev_item_i);
       }
@@ -438,40 +423,32 @@ inline auto ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::continue_full_leaf_
   const PackedLeafPage& leaf_page =
       PackedLeafPage::view_of(this->full_leaf_data_->leaf_page.get_page_buffer());
 
-  const i32 next_inactive_pivot_i = next_bit(~active_pivots, this->pivot_i_);
-  const i32 next_flushed_pivot_i = next_bit(segment->get_flushed_pivots(), this->pivot_i_);
-  const i32 next_gap_pivot_i = std::min(next_inactive_pivot_i, next_flushed_pivot_i);
-
   const usize begin_i = this->item_i_;
+  u32 end_i = begin_i;
 
-  const usize end_i = [&]() -> usize {
-    const KeyView gap_pivot_key = this->node_->get_pivot_key(next_gap_pivot_i);
+  if (begin_i >= leaf_page.key_count) {
+    this->advance_segment();
+    return ShardedKeyValueSlice{leaf_page.items_begin() + begin_i,  //
+                                leaf_page.items_begin() + end_i};
+  }
 
-    // The end of the next slice is the position of the gap pivot key's lower bound.
-    //
-    return std::distance(leaf_page.items_begin(),  //
-                         leaf_page.lower_bound(gap_pivot_key));
-  }();
+  Interval<u32> live_range = segment->get_live_item_range(
+      *this->level_,
+      Interval<u32>{BATT_CHECKED_CAST(u32, begin_i), BATT_CHECKED_CAST(u32, leaf_page.key_count)});
+
+  BATT_CHECK(!live_range.empty());
+  end_i = live_range.upper_bound;
 
   if (advance) {
-    if (next_gap_pivot_i == next_inactive_pivot_i) {
-      const usize next_pivot_i =
-          (next_inactive_pivot_i < 64) ? next_bit(active_pivots, next_inactive_pivot_i) : 64;
-
-      if (next_pivot_i < this->node_->pivot_count()) {
-        this->advance_to_pivot_full_leaf(next_pivot_i, *segment, leaf_page);
-      } else {
-        this->advance_segment();
-      }
+    if (end_i >= leaf_page.key_count) {
+      this->advance_segment();
     } else {
-      this->pivot_i_ = next_flushed_pivot_i;
-
-      BATT_CHECK_LT(this->pivot_i_, this->node_->pivot_count())
-          << BATT_INSPECT(next_inactive_pivot_i) << BATT_INSPECT(next_gap_pivot_i);
-
-      this->item_i_ = segment->get_flushed_item_upper_bound(*this->level_, next_flushed_pivot_i);
-
-      BATT_CHECK_LT(this->item_i_, leaf_page.key_count);
+      u32 next_live_item = segment->live_lower_bound(*this->level_, end_i);
+      if (next_live_item >= leaf_page.key_count) {
+        this->advance_segment();
+      } else {
+        this->item_i_ = next_live_item;
+      }
     }
   }
 
@@ -492,7 +469,6 @@ inline void ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::advance_segment()
     this->head_shard_slice_ = ConstBuffer{};
     this->needs_load_segment_ = true;
     this->cached_items_.reset();
-    this->passed_min_key_ = false;
   }
 }
 
@@ -505,51 +481,14 @@ inline Status ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::advance_to_pivot(
 {
   BATT_CHECK_LT(target_pivot_i, this->node_->pivot_count());
 
-  this->pivot_i_ = target_pivot_i;
+  const KeyView pivot_lower_bound_key = this->node_->get_pivot_key(target_pivot_i);
 
-  const usize flushed_upper_bound =
-      segment.get_flushed_item_upper_bound(*this->level_, this->pivot_i_);
+  KeyView search_key = this->min_key_ ? std::max(*this->min_key_, pivot_lower_bound_key, KeyOrder{})
+                                      : pivot_lower_bound_key;
 
-  Optional<KeyView> search_key;
-  Optional<Interval<usize>> search_range;
+  Interval<usize> search_range = this->get_trie_search_range(search_key);
 
-  // If the flushed upper bound of this pivot is not 0, look at the flushed upper bound key index
-  // and this->min_key_ (if provided) to help determine the starting key index, this->item_i_. Else,
-  // look at the pivot's lower bound key.
-  //
-  //
-  if (flushed_upper_bound != 0) {
-    // If a min key is provided, only look at it if we haven't "passed" it yet. Once we use it to
-    // set this->item_i_, we won't need it again as we advance to another pivot.
-    //
-    if (this->min_key_ && !this->passed_min_key_) {
-      const Interval<usize> min_key_range = this->get_trie_search_range(*(this->min_key_));
-      // We need to consider the min_key if the flushed upper bound index falls within the search
-      // range.
-      //
-      if (flushed_upper_bound < min_key_range.upper_bound) {
-        search_key = this->min_key_;
-        search_range = min_key_range;
-      } else {
-        search_key = None;
-        search_range = None;
-      }
-    } else {
-      search_key = None;
-      search_range = None;
-    }
-  } else {
-    const KeyView pivot_lower_bound_key = this->node_->get_pivot_key(this->pivot_i_);
-
-    const KeyView lower_bound_key =
-        this->min_key_ ? std::max(*this->min_key_, pivot_lower_bound_key, KeyOrder{})
-                       : pivot_lower_bound_key;
-
-    search_key = lower_bound_key;
-    search_range = this->get_trie_search_range(lower_bound_key);
-  }
-
-  return this->set_start_item(flushed_upper_bound, search_key, search_range);
+  return this->set_start_item(segment, search_key, search_range);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -562,35 +501,28 @@ inline void ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::advance_to_pivot_fu
 {
   BATT_CHECK_LT(target_pivot_i, this->node_->pivot_count());
 
-  this->pivot_i_ = target_pivot_i;
-
-  const KeyView pivot_lower_bound_key = this->node_->get_pivot_key(this->pivot_i_);
+  const KeyView pivot_lower_bound_key = this->node_->get_pivot_key(target_pivot_i);
 
   const KeyView lower_bound_key = this->min_key_
                                       ? std::max(*this->min_key_, pivot_lower_bound_key, KeyOrder{})
                                       : pivot_lower_bound_key;
-  const usize flushed_upper_bound =
-      segment.get_flushed_item_upper_bound(*this->level_, this->pivot_i_);
 
-  if (flushed_upper_bound != 0) {
-    if (this->min_key_) {
-      this->item_i_ = std::max(flushed_upper_bound,
-                               (usize)std::distance(leaf_page.items_begin(),  //
-                                                    leaf_page.lower_bound(lower_bound_key)));
-    } else {
-      this->item_i_ = flushed_upper_bound;
-    }
-  } else {
-    this->item_i_ = std::distance(leaf_page.items_begin(),  //
-                                  leaf_page.lower_bound(lower_bound_key));
+  const usize lower_bound_i = std::distance(leaf_page.items_begin(),  //
+                                            leaf_page.lower_bound(lower_bound_key));
+
+  if (lower_bound_i >= leaf_page.key_count) {
+    this->item_i_ = leaf_page.key_count;
+    return;
   }
+
+  this->item_i_ = segment.live_lower_bound(*this->level_, BATT_CHECKED_CAST(u32, lower_bound_i));
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename NodeT, typename LevelT, typename PageLoaderT>
 inline StatusOr<SliceData> ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::init_slice_data(
-    const KeyView& gap_pivot_key) noexcept
+    u32 next_flushed_i) noexcept
 {
   const void* page_start = this->head_shard_slice_.data();
   const void* payload_start = advance_pointer(page_start, sizeof(llfs::PackedPageHeader));
@@ -641,6 +573,9 @@ inline StatusOr<SliceData> ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::init
     usize items_slice_upper_bound = aligned_boundary_i;
     Interval<usize> items_slice{item_i_offset,
                                 (usize)byte_distance(page_start, head_items + aligned_boundary_i)};
+
+    BATT_CHECK_GT(items_slice.size(), 0);
+
     items_buffer = this->slice_reader_.read_slice(items_slice,
                                                   *(this->slice_storage_),
                                                   this->pin_pages_to_job_,
@@ -718,22 +653,18 @@ inline StatusOr<SliceData> ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::init
   const isize offset_target = byte_distance(items_begin, key_data_buffer->data());
   const isize offset_delta = offset_target - offset_base;
 
-  // Now, search for the gap pivot key in our key data to ensure that we don't cross this key.
-  //
-  const PackedKeyValue* gap_end_pkv = std::lower_bound(items_begin,
-                                                       end_i_pkv,
-                                                       gap_pivot_key,
-                                                       ShiftedPackedKeyDataCompare{offset_delta});
+  usize current_end_i = this->item_i_ + std::distance(items_begin, end_i_pkv);
 
-  if (std::distance(items_begin, gap_end_pkv) < std::distance(items_begin, end_i_pkv)) {
-    end_i_pkv = gap_end_pkv;
-    this->hit_gap_pivot_key_ = true;
+  // Make sure we don't cross into a flushed region of the segment.
+  //
+  if (current_end_i > next_flushed_i) {
+    end_i_pkv = items_begin + (next_flushed_i - this->item_i_);
+    current_end_i = next_flushed_i;
+    this->hit_next_flushed_i_ = true;
   }
 
-  usize current_end_i = this->item_i_ + std::distance(items_begin, end_i_pkv);
   if (this->item_i_ < current_end_i) {
-    // If searching for the gap pivot key maintained the constraint this->item_i_ < end_i, set the
-    // page offset of the start of the value data, which will be loaded on demand.
+    // Set the page offset of the start of the value data, which will be loaded on demand.
     //
     usize front_value_lower_bound =
         key_data_slice.lower_bound +
@@ -776,78 +707,72 @@ inline Interval<usize> ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::get_trie
 //
 template <typename NodeT, typename LevelT, typename PageLoaderT>
 inline Status ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::set_start_item(
-    usize flushed_upper_bound,
-    Optional<KeyView> lower_bound_key,
-    Optional<Interval<usize>> search_range) noexcept
+    const Segment& segment,
+    const KeyView& lower_bound_key,
+    const Interval<usize>& search_range) noexcept
 {
-  if (!search_range) {
-    // In this case, we know for sure that the flushed upper bound will be our starting item.
-    //
-    this->item_i_ = flushed_upper_bound;
+  BATT_CHECK(!search_range.empty());
+
+  const void* page_start = this->head_shard_slice_.data();
+  const void* payload_start = advance_pointer(page_start, sizeof(llfs::PackedPageHeader));
+  const auto& packed_leaf_page = *static_cast<const PackedLeafPage*>(payload_start);
+
+  const PackedKeyValue* head_items = packed_leaf_page.items->data();
+  const Interval<usize> items_slice{
+      (usize)byte_distance(page_start, head_items + search_range.lower_bound),
+      (usize)byte_distance(page_start, head_items + (search_range.upper_bound + 2)),
+  };
+
+  BATT_CHECK_GT(items_slice.size(), 0);
+
+  StatusOr<ConstBuffer> items_buffer =
+      this->slice_reader_.read_slice(items_slice,
+                                     *(this->slice_storage_),
+                                     this->pin_pages_to_job_,
+                                     llfs::LruPriority{kLeafItemsShardLruPriority});
+  if (!items_buffer.ok()) {
+    return items_buffer.status();
+  }
+
+  const auto items_begin = (const PackedKeyValue*)items_buffer->data();
+  const auto items_end = items_begin + search_range.size();
+  Interval<usize> key_data_slice{
+      (usize)(items_slice.lower_bound + items_begin->key_offset),
+      (usize)(items_slice.upper_bound + (items_end + 1)->key_offset),
+  };
+
+  StatusOr<ConstBuffer> key_data_buffer =
+      this->slice_reader_.read_slice(key_data_slice,
+                                     *(this->slice_storage_),
+                                     this->pin_pages_to_job_,
+                                     llfs::LruPriority{kLeafKeyDataShardLruPriority});
+  if (!key_data_buffer.ok()) {
+    return key_data_buffer.status();
+  }
+
+  const isize offset_base = items_begin->key_offset;
+  const isize offset_target = byte_distance(items_begin, key_data_buffer->data());
+  const isize offset_delta = offset_target - offset_base;
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+  // Search for the given key within the key range we loaded.
+  //
+  const PackedKeyValue* found_item = std::lower_bound(items_begin,  //
+                                                      items_end,
+                                                      lower_bound_key,
+                                                      ShiftedPackedKeyOrder{offset_delta});
+
+  if (found_item == items_end) {
+    this->item_i_ = search_range.upper_bound;
+
   } else {
-    // If we are deciding between the flushed upper bound key and another key that we have a search
-    // range for, we need to use the search range to narrow down thats key's index.
-    //
-    const void* page_start = this->head_shard_slice_.data();
-    const void* payload_start = advance_pointer(page_start, sizeof(llfs::PackedPageHeader));
-    const auto& packed_leaf_page = *static_cast<const PackedLeafPage*>(payload_start);
+    usize lower_bound_key_i = search_range.lower_bound + std::distance(items_begin, found_item);
+    BATT_CHECK_LT(lower_bound_key_i, packed_leaf_page.key_count);
 
-    const PackedKeyValue* head_items = packed_leaf_page.items->data();
-    const Interval<usize> items_slice{
-        (usize)byte_distance(page_start, head_items + search_range->lower_bound),
-        (usize)byte_distance(page_start, head_items + (search_range->upper_bound + 2)),
-    };
+    u32 next_live_item =
+        segment.live_lower_bound(*this->level_, BATT_CHECKED_CAST(u32, lower_bound_key_i));
 
-    StatusOr<ConstBuffer> items_buffer =
-        this->slice_reader_.read_slice(items_slice,
-                                       *(this->slice_storage_),
-                                       this->pin_pages_to_job_,
-                                       llfs::LruPriority{kLeafItemsShardLruPriority});
-    if (!items_buffer.ok()) {
-      return items_buffer.status();
-    }
-
-    const auto items_begin = (const PackedKeyValue*)items_buffer->data();
-    const auto items_end = items_begin + search_range->size();
-    Interval<usize> key_data_slice{
-        (usize)(items_slice.lower_bound + items_begin->key_offset),
-        (usize)(items_slice.upper_bound + (items_end + 1)->key_offset),
-    };
-
-    StatusOr<ConstBuffer> key_data_buffer =
-        this->slice_reader_.read_slice(key_data_slice,
-                                       *(this->slice_storage_),
-                                       this->pin_pages_to_job_,
-                                       llfs::LruPriority{kLeafKeyDataShardLruPriority});
-    if (!key_data_buffer.ok()) {
-      return key_data_buffer.status();
-    }
-
-    const isize offset_base = items_begin->key_offset;
-    const isize offset_target = byte_distance(items_begin, key_data_buffer->data());
-    const isize offset_delta = offset_target - offset_base;
-
-    // Search for the given key within the key range we loaded.
-    //
-    const PackedKeyValue* found_item = std::lower_bound(items_begin,  //
-                                                        items_end,
-                                                        *lower_bound_key,
-                                                        ShiftedPackedKeyOrder{offset_delta});
-
-    if (found_item == items_end) {
-      this->item_i_ = search_range->upper_bound;
-    } else {
-      usize lower_bound_key_i = search_range->lower_bound + std::distance(items_begin, found_item);
-      if (flushed_upper_bound != 0) {
-        // If the flushed upper bound is non zero, take the max between the min key index and the
-        // flushed upper bound index.
-        //
-        this->item_i_ = std::max(flushed_upper_bound, lower_bound_key_i);
-        this->passed_min_key_ = true;
-      } else {
-        this->item_i_ = lower_bound_key_i;
-      }
-    }
+    this->item_i_ = next_live_item;
   }
 
   return OkStatus();

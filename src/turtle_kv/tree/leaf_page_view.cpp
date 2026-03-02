@@ -27,7 +27,8 @@ namespace turtle_kv {
 //
 /*static*/ batt::Status LeafPageView::register_layout(llfs::PageCache& cache)
 {
-  LOG_FIRST_N(INFO, 1) << "Registering page layout: " << LeafPageView::page_layout_id();
+  LOG_FIRST_N(INFO, 1) << "Registering page layout: " << LeafPageView::page_layout_id() << ";"
+                       << BATT_INSPECT(TURTLE_KV_PACK_KEYS_TOGETHER);
   return cache.register_page_reader(LeafPageView::page_layout_id(),
                                     __FILE__,
                                     __LINE__,

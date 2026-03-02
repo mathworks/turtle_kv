@@ -1,5 +1,6 @@
 #include <turtle_kv/kv_store_config.hpp>
 //
+#include <turtle_kv/config.hpp>
 
 #include <functional>
 #include <unordered_map>

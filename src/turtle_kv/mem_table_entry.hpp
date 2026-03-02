@@ -403,17 +403,11 @@ struct MemTableValueEntryInserter {
   /** \brief Constructs a new inserter for the given key/value pair.
    */
   template <typename K, typename V>
-  explicit MemTableValueEntryInserter(std::atomic<i64>& current_mem_table_byte_size,
-                                      i64 mem_table_size_limit,
-                                      bool replace_old_value_size,
-                                      StorageT& storage_arg,
+  explicit MemTableValueEntryInserter(StorageT& storage_arg,
                                       K&& key_arg,
                                       V&& value_arg,
                                       u32 version_arg) noexcept
-      : current_mem_table_byte_size_{current_mem_table_byte_size}
-      , mem_table_size_limit_{mem_table_size_limit}
-      , replace_old_value_size_{replace_old_value_size}
-      , storage{storage_arg}
+      : storage{storage_arg}
       , key{BATT_FORWARD(key_arg)}
       , value{BATT_FORWARD(value_arg)}
       , version{version_arg}
@@ -424,9 +418,6 @@ struct MemTableValueEntryInserter {
   //+++++++++++-+-+--+----- --- -- -  -  -   -
   // Inputs (set at construction-time)
 
-  std::atomic<i64>& current_mem_table_byte_size_;
-  const i64 mem_table_size_limit_;
-  const bool replace_old_value_size_;
   StorageT& storage;
   const std::string_view key;
   const ValueView value;
@@ -443,19 +434,6 @@ struct MemTableValueEntryInserter {
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  Status update_table_size(i64 table_size_delta)
-  {
-    const i64 old_table_size = this->current_mem_table_byte_size_.fetch_add(table_size_delta);
-    const i64 new_table_size = old_table_size + table_size_delta;
-
-    if (new_table_size > this->mem_table_size_limit_) {
-      this->current_mem_table_byte_size_.fetch_sub(table_size_delta);
-      return {batt::StatusCode::kResourceExhausted};
-    }
-
-    return OkStatus();
-  }
-
   Status insert_new(void* entry_memory)
   {
     char* key_dst;
@@ -465,8 +443,6 @@ struct MemTableValueEntryInserter {
                               + key_len           // key
                               + sizeof(big_u32)   // version-suffix
                               + value_len;        // value
-
-    BATT_REQUIRE_OK(this->update_table_size(insert_size));
 
     this->storage.store_data(insert_size, [&](u32 locator, const MutableBuffer& buffer) {
       this->stored_locator = locator;
@@ -498,15 +474,6 @@ struct MemTableValueEntryInserter {
     const usize value_len = this->value.size();
     const usize update_size = sizeof(PackedValueUpdate)  // header
                               + value_len;               // value
-
-    const i64 table_size_delta = (this->replace_old_value_size_)
-                                     ? ((i64)value_len - (i64)p_entry->value_size_)
-                                     : (i64)value_len;
-    // ^^^^
-    // TODO [tastolfi 2025-05-27] we need to make sure that we eventually do fill up a MemTable,
-    // even if we just overwrite a single key over and over again.
-
-    BATT_REQUIRE_OK(this->update_table_size(table_size_delta));
 
     this->storage.store_data(update_size, [&](u32 locator, const MutableBuffer& buffer) {
       this->stored_locator = locator;

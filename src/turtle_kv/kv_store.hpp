@@ -12,11 +12,11 @@
 
 #include <turtle_kv/core/table.hpp>
 
-#include <turtle_kv/util/object_thread_storage.hpp>
 #include <turtle_kv/util/page_slice_reader.hpp>
 #include <turtle_kv/util/pipeline_channel.hpp>
 
 #include <turtle_kv/import/int_types.hpp>
+#include <turtle_kv/import/object_thread_storage.hpp>
 
 #include <llfs/storage_context.hpp>
 #include <llfs/volume.hpp>
@@ -194,11 +194,15 @@ class KVStore : public Table
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  boost::intrusive_ptr<MemTable> create_mem_table(u64 mem_table_id);
+
   Status update_checkpoint(const State* observed_state);
 
   void info_task_main() noexcept;
 
-  std::unique_ptr<DeltaBatch> compact_memtable(boost::intrusive_ptr<MemTable>&& mem_table);
+  template <typename Fn>
+    requires std::invocable<Fn, std::unique_ptr<DeltaBatch>>
+  Status compact_memtable(boost::intrusive_ptr<MemTable>&& mem_table, Fn&& consume_fn);
 
   void memtable_compact_thread_main(usize thread_i);
 

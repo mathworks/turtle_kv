@@ -69,6 +69,13 @@ class Subtree
     return metrics_;
   }
 
+  /** \brief Fixes the viability of the passed Subtree, if necessary.
+   */
+  static Status make_root_viable(Subtree& new_subtree,
+                                 const TreeOptions& tree_options,
+                                 BatchUpdateContext& update_context,
+                                 const KeyView& key_upper_bound);
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   Subtree() = default;
