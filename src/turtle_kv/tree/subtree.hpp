@@ -165,7 +165,7 @@ class Subtree
    *
    * If a borrow needs to occur, `this` is modified in place and the modified sibling is returned.
    */
-  StatusOr<Optional<Subtree>> try_merge(BatchUpdateContext& context, Subtree&& sibling) noexcept;
+  Status try_merge(BatchUpdateContext& context, Subtree&& sibling) noexcept;
 
   /** \brief Attempt to make the root viable by flushing a batch. If nothing is available to
    *  flush, returns batt::StatusCode::kUnavailable.
@@ -210,6 +210,7 @@ class Subtree
    * place. If the Subtree is already an in-memory type, this function does nothing.
    */
   Status unpack_if_necessary(llfs::PageLoader& page_loader,
+                             llfs::PageCacheOvercommit& overcommit,
                              batt::WorkerPool& worker_pool,
                              const TreeOptions& tree_options,
                              i32 height) noexcept;

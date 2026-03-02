@@ -105,10 +105,7 @@ struct InMemoryLeaf {
 
   StatusOr<SplitPlan> make_split_plan() const;
 
-  StatusOr<std::unique_ptr<InMemoryLeaf>> try_merge(BatchUpdateContext& context,
-                                                    std::unique_ptr<InMemoryLeaf> sibling) noexcept;
-
-  Status try_borrow(BatchUpdateContext& context, InMemoryLeaf& sibling) noexcept;
+  Status try_merge(BatchUpdateContext& context, std::unique_ptr<InMemoryLeaf> sibling) noexcept;
 
   Status apply_batch_update(BatchUpdate& update) noexcept;
 

@@ -197,16 +197,15 @@ auto InMemoryLeaf::make_split_plan() const -> StatusOr<SplitPlan>
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<std::unique_ptr<InMemoryLeaf>> InMemoryLeaf::try_merge(
-    BatchUpdateContext& context,
-    std::unique_ptr<InMemoryLeaf> sibling) noexcept
+Status InMemoryLeaf::try_merge(BatchUpdateContext& context,
+                               std::unique_ptr<InMemoryLeaf> sibling) noexcept
 {
   BATT_CHECK(this->result_set);
   BATT_CHECK(sibling->result_set);
 
   if (sibling->result_set->empty()) {
     BATT_CHECK(batt::is_case<Viable>(this->get_viability()));
-    return nullptr;
+    return OkStatus();
   }
 
   if (this->result_set->empty()) {
@@ -215,22 +214,7 @@ StatusOr<std::unique_ptr<InMemoryLeaf>> InMemoryLeaf::try_merge(
     this->result_set = std::move(sibling->result_set);
     this->shared_edit_size_totals_ = sibling->shared_edit_size_totals_;
     this->edit_size_totals = std::move(sibling->edit_size_totals);
-    return nullptr;
-  }
-
-  if (this->get_items_size() + sibling->get_items_size() > this->tree_options.flush_size()) {
-    bool borrow_from_sibling = false;
-    if (batt::is_case<NeedsMerge>(this->get_viability())) {
-      borrow_from_sibling = true;
-    } else {
-      BATT_CHECK(batt::is_case<NeedsMerge>(sibling->get_viability()));
-    }
-
-    Status borrow_status = borrow_from_sibling ? this->try_borrow(context, *sibling)
-                                               : sibling->try_borrow(context, *this);
-    BATT_REQUIRE_OK(borrow_status);
-
-    return {std::move(sibling)};
+    return OkStatus();
   }
 
   BATT_CHECK_LT(this->get_max_key(), sibling->get_min_key());
@@ -239,105 +223,6 @@ StatusOr<std::unique_ptr<InMemoryLeaf>> InMemoryLeaf::try_merge(
                                                              std::move(*(sibling->result_set)));
 
   this->set_edit_size_totals(context.compute_running_total(*this->result_set));
-
-  return nullptr;
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-Status InMemoryLeaf::try_borrow(BatchUpdateContext& context, InMemoryLeaf& sibling) noexcept
-{
-  const usize orig_edit_count = sibling.result_set->size();
-  BATT_CHECK_EQ(sibling.result_set->size() + 1, sibling.edit_size_totals->size());
-
-  // Calculate the minimum number of bytes we would need to borrow from the sibling to make this
-  // leaf viable. By definition, we need to get this leaf to be at least a quarter full.
-  //
-  const usize min_bytes_to_borrow = (this->tree_options.flush_size() / 4) - this->get_items_size();
-  usize n_to_borrow = 0;
-
-  const auto borrow_edits = [&context, &n_to_borrow](
-                                const auto& src_begin,
-                                const auto& src_end,
-                                MergeCompactor::ResultSet<true>& dst_result_set) -> void {
-    std::vector<EditView> buffer;
-    buffer.reserve(n_to_borrow);
-    {
-      batt::ScopedWorkContext work_context{context.worker_pool};
-
-      const ParallelAlgoDefaults& algo_defaults = parallel_algo_defaults();
-      const batt::TaskCount max_tasks{context.worker_pool.size() + 1};
-
-      parallel_copy(work_context,
-                    src_begin,
-                    src_end,
-                    buffer.data(),
-                    /*min_task_size = */ algo_defaults.copy_edits.min_task_size,
-                    /*max_tasks = */ max_tasks);
-    }
-    const ItemView* first_edit = (const ItemView*)buffer.data();
-    dst_result_set.append(std::move(buffer), as_slice(first_edit, n_to_borrow));
-  };
-
-  if (this->get_max_key() < sibling.get_min_key()) {
-    // If the sibling is the right sibling, we borrow from the front of the sibling.
-    //
-    for (n_to_borrow = 1; n_to_borrow <= orig_edit_count; ++n_to_borrow) {
-      usize bytes = (*sibling.edit_size_totals)[n_to_borrow] - sibling.edit_size_totals->front();
-      if (bytes >= min_bytes_to_borrow) {
-        break;
-      }
-    }
-
-    // The number of edits being borrowed should always be less than the original edit count of
-    // the sibling, since borrowing everything is a full merge.
-    //
-    BATT_CHECK_LT(n_to_borrow, orig_edit_count);
-
-    auto src_begin = sibling.result_set->get().begin();
-    auto src_end = src_begin + n_to_borrow;
-
-    // Copy over edits into this leaf's result_set.
-    //
-    borrow_edits(src_begin, src_end, *this->result_set);
-
-    sibling.result_set->drop_before_n(n_to_borrow);
-    sibling.edit_size_totals->drop_front(n_to_borrow);
-  } else {
-    // If the sibling is the left sibling, we borrow from the back of the sibling.
-    //
-    for (n_to_borrow = 1; n_to_borrow <= orig_edit_count; ++n_to_borrow) {
-      usize bytes = sibling.edit_size_totals->back() -
-                    (*sibling.edit_size_totals)[orig_edit_count - n_to_borrow];
-      if (bytes >= min_bytes_to_borrow) {
-        break;
-      }
-    }
-
-    BATT_CHECK_LT(n_to_borrow, orig_edit_count);
-
-    usize new_edit_count = orig_edit_count - n_to_borrow;
-
-    auto src_begin = sibling.result_set->get().begin() + new_edit_count;
-    auto src_end = sibling.result_set->get().end();
-
-    // Copy over the edits to be borrowed into an intermediary ResultSet and concat it with
-    // this leaf's current result_set.
-    //
-    MergeCompactor::ResultSet<true> items_to_prepend;
-
-    borrow_edits(src_begin, src_end, items_to_prepend);
-
-    this->result_set = MergeCompactor::ResultSet<true>::concat(std::move(items_to_prepend),
-                                                               std::move(*this->result_set));
-
-    sibling.result_set->drop_after_n(new_edit_count);
-    sibling.edit_size_totals->drop_back(n_to_borrow);
-  }
-
-  this->set_edit_size_totals(context.compute_running_total(*this->result_set));
-
-  BATT_CHECK(batt::is_case<Viable>(sibling.get_viability()));
 
   return OkStatus();
 }

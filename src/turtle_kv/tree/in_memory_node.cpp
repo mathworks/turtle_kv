@@ -737,38 +737,17 @@ Status InMemoryNode::merge_child(BatchUpdateContext& update_context, i32 pivot_i
   // rightmost child in the node.
   //
   i32 sibling_i = pivot_i;
-  i32 right_sibling = pivot_i + 1;
-  i32 left_sibling = pivot_i - 1;
 
-  bool need_update_buffer_compaction = false;
-  u64 active_segmented_levels = this->update_buffer.compute_active_pivots();
   if (pivot_i == 0) {
-    sibling_i = right_sibling;
-  } else if ((usize)pivot_i == this->pivot_count() - 1) {
-    sibling_i = left_sibling;
+    sibling_i = pivot_i + 1;
+  } else if (pivot_i == this->pivot_count() - 1) {
+    sibling_i = pivot_i - 1;
   } else {
-    // If we don't have one of the edge cases, try and pick the sibling where the leftmost of
-    // {child, sibling} is inactive in all segmented levels. This way, the final merged pivot
-    // won't have on/off flushed ranges in segments. If this is not possible, pick the right
-    // sibling.
-    //
-    if (!get_bit(active_segmented_levels, pivot_i)) {
-      sibling_i = right_sibling;
-    } else {
-      if (!get_bit(active_segmented_levels, left_sibling)) {
-        sibling_i = left_sibling;
-      } else {
-        sibling_i = right_sibling;
-      }
-    }
-  }
-
-  BATT_CHECK_NE(pivot_i, sibling_i);
-  if (get_bit(active_segmented_levels, std::min(pivot_i, sibling_i))) {
-    need_update_buffer_compaction = true;
+    sibling_i = pivot_i + 1;
   }
 
   BATT_REQUIRE_OK(this->children[sibling_i].unpack_if_necessary(update_context.page_loader,
+                                                                update_context.overcommit,
                                                                 update_context.worker_pool,
                                                                 this->tree_options,
                                                                 this->height - 1));
@@ -781,76 +760,19 @@ Status InMemoryNode::merge_child(BatchUpdateContext& update_context, i32 pivot_i
 
   // Call Subtree::try_merge.
   //
-  StatusOr<Optional<Subtree>> status_or_merged =
-      this->children[left_pivot_i].try_merge(update_context,
-                                             std::move(this->children[right_pivot_i]));
-  if (!status_or_merged.ok()) {
-    LOG(ERROR) << BATT_INSPECT(status_or_merged.status());
-  }
-  BATT_REQUIRE_OK(status_or_merged);
-
-  if (*status_or_merged) {
-    // If try_merge returned a Subtree, a borrow occurred.
-    //
-    this->child_pages[left_pivot_i] = llfs::PinnedPage{};
-    this->child_pages[right_pivot_i] = llfs::PinnedPage{};
-
-    // A borrow would have returned the updated right sibling (left sibling was updated in place),
-    // so overwrite what is currently in this->children.
-    //
-    this->children[right_pivot_i] = std::move(**status_or_merged);
-
-    if ((usize)right_pivot_i == old_pivot_count - 1) {
-      BATT_ASSIGN_OK_RESULT(
-          this->max_key_,
-          this->children.back().get_max_key(update_context.page_loader, this->child_pages.back()));
-    }
-
-    // Compute and store the new pivot key.
-    //
-    StatusOr<KeyView> right_child_min_key =
-        this->children[right_pivot_i].get_min_key(update_context.page_loader,
-                                                  this->child_pages[right_pivot_i]);
-    BATT_REQUIRE_OK(right_child_min_key);
-    StatusOr<KeyView> left_child_max_key =
-        this->children[left_pivot_i].get_max_key(update_context.page_loader,
-                                                 this->child_pages[left_pivot_i]);
-    BATT_REQUIRE_OK(left_child_max_key);
-
-    const KeyView prefix = llfs::find_common_prefix(0, *left_child_max_key, *right_child_min_key);
-    const KeyView new_pivot_key = right_child_min_key->substr(0, prefix.size() + 1);
-    this->pivot_keys_[right_pivot_i] = new_pivot_key;
-
-    // Compact the update buffer levels and recompute pending byte counts.
-    //
-    BATT_REQUIRE_OK(this->compact_update_buffer_levels(update_context));
-
-    BATT_CHECK_EQ(this->update_buffer.levels.size(), 1);
-    BATT_CHECK(batt::is_case<MergedLevel>(this->update_buffer.levels[0]));
-    MergedLevel& merged_edits = std::get<MergedLevel>(this->update_buffer.levels[0]);
-
-    std::fill(this->pending_bytes.begin(), this->pending_bytes.end(), 0);
-    in_node(*this).update_pending_bytes(update_context.worker_pool,
-                                        merged_edits.result_set.get(),
-                                        PackedSizeOfEdit{});
-
-    return OkStatus();
-  }
+  BATT_REQUIRE_OK(this->children[left_pivot_i].try_merge(update_context,
+                                                         std::move(this->children[right_pivot_i])));
 
   this->child_pages[left_pivot_i] = llfs::PinnedPage{};
   this->child_pages.erase(this->child_pages.begin() + right_pivot_i);
 
   // Update the update_buffer levels.
   //
-  if (need_update_buffer_compaction) {
-    BATT_REQUIRE_OK(this->compact_update_buffer_levels(update_context));
-  } else {
-    for (Level& level : this->update_buffer.levels) {
-      if (batt::is_case<SegmentedLevel>(level)) {
-        SegmentedLevel& segmented_level = std::get<SegmentedLevel>(level);
-        in_segmented_level(*this, segmented_level, update_context.page_loader)
-            .merge_pivots(left_pivot_i, right_pivot_i);
-      }
+  for (Level& level : this->update_buffer.levels) {
+    if (batt::is_case<SegmentedLevel>(level)) {
+      SegmentedLevel& segmented_level = std::get<SegmentedLevel>(level);
+      in_segmented_level(*this, segmented_level, update_context.page_loader)
+          .merge_pivots(left_pivot_i, right_pivot_i);
     }
   }
 
@@ -894,29 +816,9 @@ Status InMemoryNode::merge_child(BatchUpdateContext& update_context, i32 pivot_i
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<std::unique_ptr<InMemoryNode>> InMemoryNode::try_merge(
-    BatchUpdateContext& context,
-    std::unique_ptr<InMemoryNode> sibling) noexcept
+Status InMemoryNode::try_merge(BatchUpdateContext& context,
+                               std::unique_ptr<InMemoryNode> sibling) noexcept
 {
-  //----- --- -- -  -  -   -
-  // If merging both full nodes will cause the merged node's pivot count to exceed the max
-  // possible pivot count, try a borrow.
-  //
-  if (this->pivot_count() + sibling->pivot_count() > this->max_pivot_count()) {
-    bool borrow_from_sibling = false;
-    if (batt::is_case<NeedsMerge>(this->get_viability())) {
-      borrow_from_sibling = true;
-    } else {
-      BATT_CHECK(batt::is_case<NeedsMerge>(sibling->get_viability()));
-    }
-
-    Status borrow_status = borrow_from_sibling ? this->try_borrow(context, *sibling)
-                                               : sibling->try_borrow(context, *this);
-    BATT_REQUIRE_OK(borrow_status);
-
-    return {std::move(sibling)};
-  }
-
   BATT_CHECK_LT(this->get_max_key(), sibling->get_min_key());
 
   //----- --- -- -  -  -   -
@@ -994,7 +896,6 @@ StatusOr<std::unique_ptr<InMemoryNode>> InMemoryNode::try_merge(
                   for (usize segment_i = 0; segment_i < right_segmented_level.segment_count();
                        ++segment_i) {
                     Segment& segment = right_segmented_level.get_segment(segment_i);
-                    segment.flushed_pivots <<= left_node_pivot_count;
                     segment.active_pivots <<= left_node_pivot_count;
                   }
 
@@ -1002,6 +903,14 @@ StatusOr<std::unique_ptr<InMemoryNode>> InMemoryNode::try_merge(
                       left_segmented_level.segments.end(),
                       std::make_move_iterator(right_segmented_level.segments.begin()),
                       std::make_move_iterator(right_segmented_level.segments.end()));
+
+                  left_segmented_level.segments.erase(
+                      std::unique(left_segmented_level.segments.begin(),
+                                  left_segmented_level.segments.end(),
+                                  [](const Segment& l, const Segment& r) {
+                                    return l.page_id_slot.page_id == r.page_id_slot.page_id;
+                                  }),
+                      left_segmented_level.segments.end());
 
                   return OkStatus();
                 }));
@@ -1027,7 +936,6 @@ StatusOr<std::unique_ptr<InMemoryNode>> InMemoryNode::try_merge(
           for (usize segment_i = 0; segment_i < right_segmented_level.segment_count();
                ++segment_i) {
             Segment& segment = right_segmented_level.get_segment(segment_i);
-            segment.flushed_pivots <<= left_node_pivot_count;
             segment.active_pivots <<= left_node_pivot_count;
           }
 
@@ -1064,215 +972,6 @@ StatusOr<std::unique_ptr<InMemoryNode>> InMemoryNode::try_merge(
   this->pivot_keys_.insert(this->pivot_keys_.end(),
                            sibling->pivot_keys_.begin(),
                            sibling->pivot_keys_.end());
-
-  return nullptr;
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-Status InMemoryNode::try_borrow(BatchUpdateContext& context, InMemoryNode& sibling) noexcept
-{
-  BATT_CHECK(batt::is_case<Viable>(sibling.get_viability()));
-
-  bool right_sibling = this->get_max_key() < sibling.get_min_key();
-
-  BATT_CHECK_LT(this->pivot_count(), 4);
-  u32 num_pivots_to_borrow = 4 - this->pivot_count();
-
-  //----- --- -- -  -  -   -
-  // Borrow node metadata. Modify all metadata right now except this->children, since modifying it
-  // will change the pivot count.
-  //
-  if (right_sibling) {
-    this->pending_bytes.insert(this->pending_bytes.end(),
-                               sibling.pending_bytes.begin(),
-                               sibling.pending_bytes.begin() + num_pivots_to_borrow);
-    sibling.pending_bytes.erase(sibling.pending_bytes.begin(),
-                                sibling.pending_bytes.begin() + num_pivots_to_borrow);
-
-    // Update this->pending_bytes_is_exact by placing the borrowed pending bytes bits from the
-    // right sibling directly after the pending bytes bits for this node.
-    //
-    u64 borrowed_bits = sibling.pending_bytes_is_exact & ((u64{1} << num_pivots_to_borrow) - 1);
-    u64 mask = ((u64{1} << num_pivots_to_borrow) - 1) << this->pivot_count();
-    this->pending_bytes_is_exact =
-        (this->pending_bytes_is_exact & ~mask) | (borrowed_bits << this->pivot_count());
-    sibling.pending_bytes_is_exact >>= num_pivots_to_borrow;
-
-    // Get rid of the key upper bound in this node and insert the borrowed pivot keys, including
-    // one past num_pivots_to_borrow, to set the new key upper bound.
-    //
-    this->pivot_keys_.pop_back();
-    this->pivot_keys_.insert(this->pivot_keys_.end(),
-                             sibling.pivot_keys_.begin(),
-                             sibling.pivot_keys_.begin() + num_pivots_to_borrow + 1);
-    sibling.pivot_keys_.erase(sibling.pivot_keys_.begin(),
-                              sibling.pivot_keys_.begin() + num_pivots_to_borrow);
-
-    this->child_pages.insert(
-        this->child_pages.end(),
-        std::make_move_iterator(sibling.child_pages.begin()),
-        std::make_move_iterator(sibling.child_pages.begin() + num_pivots_to_borrow));
-    sibling.child_pages.erase(sibling.child_pages.begin(),
-                              sibling.child_pages.begin() + num_pivots_to_borrow);
-  } else {
-    this->pending_bytes.insert(this->pending_bytes.begin(),
-                               sibling.pending_bytes.end() - num_pivots_to_borrow,
-                               sibling.pending_bytes.end());
-    sibling.pending_bytes.erase(sibling.pending_bytes.end() - num_pivots_to_borrow,
-                                sibling.pending_bytes.end());
-
-    // Shift this->pending_bytes_is_exact up by num_pivots_to_borrow, and place the borrowed
-    // pending bytes bits at the lowest order bits.
-    //
-    u64 borrowed_bits =
-        (sibling.pending_bytes_is_exact >> (sibling.pivot_count() - num_pivots_to_borrow)) &
-        ((u64{1} << num_pivots_to_borrow) - 1);
-    this->pending_bytes_is_exact <<= num_pivots_to_borrow;
-    this->pending_bytes_is_exact |= borrowed_bits;
-    u64 mask = ((u64{1} << num_pivots_to_borrow) - 1)
-               << (sibling.pivot_count() - num_pivots_to_borrow);
-    sibling.pending_bytes_is_exact &= ~mask;
-
-    sibling.pivot_keys_.pop_back();
-    this->pivot_keys_.insert(this->pivot_keys_.begin(),
-                             sibling.pivot_keys_.end() - num_pivots_to_borrow,
-                             sibling.pivot_keys_.end());
-    sibling.pivot_keys_.erase(sibling.pivot_keys_.end() - num_pivots_to_borrow + 1,
-                              sibling.pivot_keys_.end());
-
-    this->child_pages.insert(
-        this->child_pages.begin(),
-        std::make_move_iterator(sibling.child_pages.end() - num_pivots_to_borrow),
-        std::make_move_iterator(sibling.child_pages.end()));
-    sibling.child_pages.erase(sibling.child_pages.end() - num_pivots_to_borrow,
-                              sibling.child_pages.end());
-  }
-
-  //----- --- -- -  -  -   -
-  // Modify the update buffers of both `this` and `sibling`.
-  // Calculate the pivot range to borrow from the sibling, and then extract updates from the
-  // sibling's update buffer that contain this range.
-  //
-  i32 borrowed_min_pivot_i = -1;
-  KeyView borrowed_max_pivot_key;
-  if (right_sibling) {
-    borrowed_min_pivot_i = 0;
-    borrowed_max_pivot_key = sibling.get_pivot_key(num_pivots_to_borrow);
-  } else {
-    borrowed_min_pivot_i = sibling.pivot_count() - num_pivots_to_borrow;
-    borrowed_max_pivot_key = sibling.get_pivot_key(sibling.pivot_count());
-  }
-  Interval<KeyView> borrowed_pivot_range{sibling.get_pivot_key(borrowed_min_pivot_i),
-                                         borrowed_max_pivot_key};
-
-  BatchUpdate borrowed_pivot_batch{
-      .context = context,
-      .result_set = {},
-      .edit_size_totals = None,
-  };
-
-  Status segment_load_status;
-  HasPageRefs has_page_refs{false};
-
-  BATT_ASSIGN_OK_RESULT(                                      //
-      borrowed_pivot_batch.result_set,                        //
-      context.merge_compact_edits</*decay_to_items=*/false>(  //
-          /*max_key=*/borrowed_max_pivot_key,                 //
-          [&](MergeCompactor& compactor) -> Status {
-            sibling.push_levels_to_merge(compactor,
-                                         context.page_loader,
-                                         segment_load_status,
-                                         has_page_refs,
-                                         as_slice(sibling.update_buffer.levels),
-                                         /*min_pivot_i=*/borrowed_min_pivot_i,
-                                         /*only_pivot=*/false);
-            return OkStatus();
-          }));
-
-  BATT_REQUIRE_OK(segment_load_status);
-
-  borrowed_pivot_batch.result_set.drop_key_range_half_open(Interval<KeyView>{
-      borrowed_max_pivot_key,
-      sibling.key_upper_bound(),
-  });
-
-  borrowed_pivot_batch.edit_size_totals = None;
-
-  // Adjust the update buffer levels metadata in the sibling now that the borrowed updates have
-  // been extracted.
-  //
-  usize remove_pivot_i = right_sibling ? 0 : sibling.pivot_count() - num_pivots_to_borrow;
-  for (Level& level : sibling.update_buffer.levels) {
-    batt::case_of(  //
-        level,      //
-        [](EmptyLevel&) {
-          // nothing to do
-        },
-        [&](MergedLevel& merged_level) {
-          merged_level.result_set.drop_key_range_half_open(borrowed_pivot_range);
-        },
-        [&](SegmentedLevel& segmented_level) {
-          for (usize segment_i = 0; segment_i < segmented_level.segment_count(); ++segment_i) {
-            Segment& segment = segmented_level.get_segment(segment_i);
-            // Iterate backwards, since calling `remove_bit` will shift the bitset.
-            // TODO [vsilai 12-6-2025]: consider writing a `remove_bits` function to modify the bit
-            // sets more efficiently? This would only be for active_pivots.
-            //
-            for (usize j = remove_pivot_i + num_pivots_to_borrow - 1; j >= remove_pivot_i; --j) {
-              segment.remove_pivot(j);
-            }
-          }
-        });
-  }
-
-  // Insert the borrowed updates into the update buffer.
-  //
-  BATT_REQUIRE_OK(this->update_buffer_insert(borrowed_pivot_batch));
-
-  usize insert_pivot_i = right_sibling ? this->pivot_count() : 0;
-  for (Level& level : this->update_buffer.levels) {
-    batt::case_of(  //
-        level,      //
-        [](EmptyLevel&) {
-          // nothing to do
-        },
-        [&](MergedLevel& merged_level) {
-          // nothing to do
-        },
-        [&](SegmentedLevel& segmented_level) {
-          for (usize segment_i = 0; segment_i < segmented_level.segment_count(); ++segment_i) {
-            Segment& segment = segmented_level.get_segment(segment_i);
-            for (usize j = insert_pivot_i; j < insert_pivot_i + num_pivots_to_borrow; ++j) {
-              segment.insert_pivot(j, /*is_active*/ false);
-            }
-          }
-        });
-  }
-
-  //----- --- -- -  -  -   -
-  // Finally, update the children Subtree vector for both nodes.
-  //
-  if (right_sibling) {
-    this->children.insert(this->children.end(),
-                          std::make_move_iterator(sibling.children.begin()),
-                          std::make_move_iterator(sibling.children.begin() + num_pivots_to_borrow));
-    sibling.children.erase(sibling.children.begin(),
-                           sibling.children.begin() + num_pivots_to_borrow);
-
-    BATT_ASSIGN_OK_RESULT(
-        this->max_key_,
-        this->children.back().get_max_key(context.page_loader, this->child_pages.back()));
-  } else {
-    this->children.insert(this->children.begin(),
-                          std::make_move_iterator(sibling.children.end() - num_pivots_to_borrow),
-                          std::make_move_iterator(sibling.children.end()));
-    sibling.children.erase(sibling.children.end() - num_pivots_to_borrow, sibling.children.end());
-
-    BATT_ASSIGN_OK_RESULT(
-        sibling.max_key_,
-        sibling.children.back().get_max_key(context.page_loader, sibling.child_pages.back()));
-  }
 
   return OkStatus();
 }
@@ -2322,16 +2021,7 @@ void InMemoryNode::UpdateBuffer::Segment::remove_pivot(i32 pivot_i)
     this->check_invariants(__FILE__, __LINE__);
   });
 
-  if (get_bit(this->flushed_pivots, pivot_i)) {
-    const i32 index = bit_rank(this->flushed_pivots, pivot_i);
-    BATT_ASSERT_GE(index, 0);
-    BATT_ASSERT_LT(index, this->flushed_item_upper_bound_.size());
-
-    this->flushed_item_upper_bound_.erase(this->flushed_item_upper_bound_.begin() + index);
-  }
-
   this->active_pivots = remove_bit(this->active_pivots, pivot_i);
-  this->flushed_pivots = remove_bit(this->flushed_pivots, pivot_i);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

@@ -263,17 +263,17 @@ Status Subtree::apply_batch_update(const TreeOptions& tree_options,
       },
       [&](const NeedsMerge& needs_merge) {
         // Only perform a flush and shrink if the root has a single pivot.
-          //
-          if (!needs_merge.single_pivot) {
-            return OkStatus();
-          }
+        //
+        if (!needs_merge.single_pivot) {
+          return OkStatus();
+        }
 
-          Status status = new_subtree->flush_and_shrink(update.context);
+        Status status = new_subtree->flush_and_shrink(update.context);
 
-          if (!status.ok()) {
-            LOG(INFO) << "flush_and_shrink failed;" << BATT_INSPECT(needs_merge);
-          }
-          return status;
+        if (!status.ok()) {
+          LOG(INFO) << "flush_and_shrink failed;" << BATT_INSPECT(needs_merge);
+        }
+        return status;
       }));
 
   return OkStatus();
@@ -584,8 +584,7 @@ StatusOr<Optional<Subtree>> Subtree::try_split(BatchUpdateContext& context)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<Optional<Subtree>> Subtree::try_merge(BatchUpdateContext& context,
-                                               Subtree&& sibling) noexcept
+Status Subtree::try_merge(BatchUpdateContext& context, Subtree&& sibling) noexcept
 {
   BATT_CHECK(!this->locked_.load());
 
@@ -605,14 +604,9 @@ StatusOr<Optional<Subtree>> Subtree::try_merge(BatchUpdateContext& context,
         auto& sibling_ptr = std::get<PtrT>(sibling.impl_);
         BATT_CHECK(sibling_ptr);
 
-        BATT_ASSIGN_OK_RESULT(PtrT merged_subtree,
-                              in_memory->try_merge(context, std::move(sibling_ptr)));
+        BATT_REQUIRE_OK(in_memory->try_merge(context, std::move(sibling_ptr)));
 
-        if (merged_subtree == nullptr) {
-          return Optional<Subtree>{None};
-        }
-
-        return {Subtree{std::move(merged_subtree)}};
+        return OkStatus();
       });
 }
 
@@ -766,6 +760,7 @@ void Subtree::lock()
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 Status Subtree::unpack_if_necessary(llfs::PageLoader& page_loader,
+                                    llfs::PageCacheOvercommit& overcommit,
                                     batt::WorkerPool& worker_pool,
                                     const TreeOptions& tree_options,
                                     i32 height) noexcept
@@ -786,6 +781,7 @@ Status Subtree::unpack_if_necessary(llfs::PageLoader& page_loader,
             llfs::PinPageToJob::kDefault,
             llfs::OkIfNotFound{false},
             llfs::LruPriority{(height > 2) ? kNodeLruPriority : kLeafLruPriority},
+            overcommit,
         });
 
     BATT_REQUIRE_OK(status_or_pinned_page) << BATT_INSPECT(height);

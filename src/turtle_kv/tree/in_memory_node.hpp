@@ -623,14 +623,7 @@ struct InMemoryNode {
    * Returns nullptr if `sibling` is completely consumed; otherwise, returns the modified sibling
    * since a borrow occurred.
    */
-  StatusOr<std::unique_ptr<InMemoryNode>> try_merge(BatchUpdateContext& context,
-                                                    std::unique_ptr<InMemoryNode> sibling) noexcept;
-
-  /** \brief Attempts to make `this` (which needs a merge) viable by borrowing data
-   * from one of its siblings. Note that for this function, `sibling` does not have to be the right
-   * sibling. Both `this` and `sibling` are modified in place.
-   */
-  Status try_borrow(BatchUpdateContext& context, InMemoryNode& sibling) noexcept;
+  Status try_merge(BatchUpdateContext& context, std::unique_ptr<InMemoryNode> sibling) noexcept;
 
   /** \brief Splits the specified child, inserting a new pivot immediately after `pivot_i`.
    */
