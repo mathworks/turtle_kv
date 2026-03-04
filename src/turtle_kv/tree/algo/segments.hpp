@@ -111,13 +111,9 @@ struct SegmentAlgorithms {
   template <typename LevelT>
   [[nodiscard]] void merge_pivots(i32 left_pivot, i32 right_pivot, const LevelT& level)
   {
-    BATT_CHECK(!this->segment_.is_pivot_active(left_pivot));
-
-    u32 new_flushed_upper_bound = this->segment_.get_flushed_item_upper_bound(level, right_pivot);
-    bool new_is_active = this->segment_.is_pivot_active(right_pivot);
-
-    this->segment_.set_pivot_active(left_pivot, new_is_active);
-    this->segment_.set_flushed_item_upper_bound(left_pivot, new_flushed_upper_bound);
+    bool left_is_active = this->segment_.is_pivot_active(left_pivot);
+    bool right_is_active = this->segment_.is_pivot_active(right_pivot);
+    this->segment_.set_pivot_active(left_pivot, left_is_active | right_is_active);
 
     this->segment_.remove_pivot(right_pivot);
   }
