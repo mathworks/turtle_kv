@@ -1722,7 +1722,9 @@ void InMemoryNode::UpdateBuffer::Segment::insert_pivot(i32 pivot_i, bool is_acti
   });
 
   std::array<u64, 2> active_pivots_out =
-      insert_bit({this->active_pivots, this->active_pivots_overflow}, pivot_i, is_active);
+      insert_bit(std::array<u64, 2>{this->active_pivots, this->active_pivots_overflow},
+                 pivot_i,
+                 is_active);
   this->active_pivots = active_pivots_out[0];
   this->active_pivots_overflow = active_pivots_out[1];
 }

@@ -129,7 +129,9 @@ struct InMemoryNode {
       void set_pivot_active(i32 pivot_i, bool active)
       {
         std::array<u64, 2> active_pivots_out =
-            set_bit({this->active_pivots, this->active_pivots_overflow}, pivot_i, active);
+            set_bit(std::array<u64, 2>{this->active_pivots, this->active_pivots_overflow},
+                    pivot_i,
+                    active);
         this->active_pivots = active_pivots_out[0];
         this->active_pivots_overflow = active_pivots_out[1];
       }
@@ -138,7 +140,8 @@ struct InMemoryNode {
        */
       bool is_pivot_active(i32 pivot_i) const
       {
-        return get_bit({this->active_pivots, this->active_pivots_overflow}, pivot_i);
+        return get_bit(std::array<u64, 2>{this->active_pivots, this->active_pivots_overflow},
+                       pivot_i);
       }
 
       template <typename Traits>
