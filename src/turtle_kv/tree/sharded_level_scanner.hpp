@@ -67,6 +67,7 @@ class ShardedLevelScanner : private SegmentedLevelScannerBase
   using PageLoader = PageLoaderT;
   using PinnedPageT = typename PageLoader::PinnedPageT;
   using Segment = typename Level::Segment;
+  using ActivePivotsSetT = decltype(std::declval<const Segment&>().get_active_pivots());
 
   using Item = ShardedKeyValueSlice;
 
@@ -143,11 +144,11 @@ class ShardedLevelScanner : private SegmentedLevelScannerBase
   void update_cached_items(usize prev_item_i);
 
   Optional<Item> continue_full_leaf_after_segment_check(bool advance,
-                                                        u64 active_pivots,
+                                                        ActivePivotsSetT active_pivots,
                                                         const Segment* segment) noexcept;
 
   Optional<Item> continue_sharded_after_segment_check(bool advance,
-                                                      u64 active_pivots,
+                                                      ActivePivotsSetT active_pivots,
                                                       const Segment* segment) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -241,9 +242,9 @@ inline auto ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::peek_next_impl(bool
 
   const Segment* segment = std::addressof(this->level_->get_segment(this->segment_i_));
 
-  u64 active_pivots = segment->get_active_pivots();
+  ActivePivotsSetT active_pivots = segment->get_active_pivots();
   {
-    BATT_CHECK_NE(active_pivots, 0) << "This segment should have been dropped!";
+    BATT_CHECK(!active_pivots.is_inactive()) << "This segment should have been dropped!";
   }
 
   // Check for need to load new segment.
@@ -253,7 +254,7 @@ inline auto ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::peek_next_impl(bool
 
     // Skip ahead to the next segment that is active at or past the minimum pivot.
     //
-    while (last_bit(active_pivots) < this->min_pivot_i_) {
+    while (active_pivots.last() < this->min_pivot_i_) {
       ++this->segment_i_;
       if (this->segment_i_ == this->level_->segment_count()) {
         return None;
@@ -262,9 +263,8 @@ inline auto ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::peek_next_impl(bool
       active_pivots = segment->get_active_pivots();
     }
 
-    i32 target_pivot_i = std::max(first_bit(active_pivots), this->min_pivot_i_);
-    while (target_pivot_i < (i32)this->node_->pivot_count() &&
-           !get_bit(active_pivots, target_pivot_i)) {
+    i32 target_pivot_i = std::max(active_pivots.first(), this->min_pivot_i_);
+    while (target_pivot_i < (i32)this->node_->pivot_count() && !active_pivots.get(target_pivot_i)) {
       ++target_pivot_i;
     }
 
@@ -342,7 +342,7 @@ inline auto ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::peek_next_impl(bool
 template <typename NodeT, typename LevelT, typename PageLoaderT>
 inline auto ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::continue_sharded_after_segment_check(
     bool advance,
-    u64 active_pivots,
+    ActivePivotsSetT active_pivots,
     const Segment* segment) noexcept -> Optional<Item>
 {
   const void* page_start = this->head_shard_slice_.data();
@@ -417,7 +417,7 @@ inline auto ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::continue_sharded_af
 template <typename NodeT, typename LevelT, typename PageLoaderT>
 inline auto ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::continue_full_leaf_after_segment_check(
     bool advance,
-    u64 active_pivots,
+    ActivePivotsSetT active_pivots,
     const Segment* segment) noexcept -> Optional<Item>
 {
   const PackedLeafPage& leaf_page =

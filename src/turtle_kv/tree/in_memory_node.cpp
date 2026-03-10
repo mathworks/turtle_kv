@@ -1553,7 +1553,7 @@ StatusOr<SegmentedLevel> MergedLevel::finish_serialize(const InMemoryNode& node,
                           context.get_build_page_result(this->segment_future_ids_[segment_i]));
 
     segment.page_id_slot.page_id = pinned_leaf_page.page_id();
-    segment.active_pivots = 0;
+    segment.active_pivots = {};
 
     const PackedLeafPage& leaf_page = PackedLeafPage::view_of(pinned_leaf_page);
 
@@ -1702,43 +1702,25 @@ void InMemoryNode::UpdateBuffer::Segment::insert_pivot(i32 pivot_i, bool is_acti
     this->check_invariants(__FILE__, __LINE__);
   });
 
-  std::array<u64, 2> active_pivots_out =
-      insert_bit(std::array<u64, 2>{this->active_pivots, this->active_pivots_overflow},
-                 pivot_i,
-                 is_active);
-  this->active_pivots = active_pivots_out[0];
-  this->active_pivots_overflow = active_pivots_out[1];
+  this->active_pivots.insert(pivot_i, is_active);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 void InMemoryNode::UpdateBuffer::Segment::pop_front_pivots(i32 count)
 {
-  if (count < 1) {
-    return;
-  }
-
   BATT_CHECK_LT(count, 64);
-
-  // Before we modify the bit sets, make sure we aren't losing any active pivots.
-  //
-  const u64 mask = (u64{1} << count) - 1;
-
-  BATT_CHECK_EQ(bit_count(mask), count);
-  BATT_CHECK_EQ((this->active_pivots & mask), u64{0});
 
   // Shift the active pivot sets down by count.
   //
-  this->active_pivots =
-      (this->active_pivots >> count) | (this->active_pivots_overflow << (64 - count));
-  this->active_pivots_overflow = (this->active_pivots_overflow >> count);
+  this->active_pivots.pop_front_pivots(count);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 bool InMemoryNode::UpdateBuffer::Segment::is_inactive() const
 {
-  const bool inactive = (this->active_pivots == 0 && this->active_pivots_overflow == 0);
+  const bool inactive = this->active_pivots.is_inactive();
   if (inactive) {
     Slice<const Interval<u32>> filter_dropped_ranges = this->filter.dropped();
     BATT_CHECK_EQ(filter_dropped_ranges.size(), 1);
@@ -1800,14 +1782,14 @@ SmallFn<void(std::ostream&)> InMemoryNode::UpdateBuffer::SegmentedLevel::dump() 
 SmallFn<void(std::ostream&)> InMemoryNode::UpdateBuffer::Segment::dump(bool multi_line) const
 {
   return [this, multi_line](std::ostream& out) {
-    auto active = std::bitset<64>{this->active_pivots};
     if (multi_line) {
       out << "Segment:" << std::endl
-          << "   active=" << active << std::endl
+          << "   active=" << this->active_pivots.printable() << std::endl
           << "   filter=" << this->filter.dump() << std::endl
           << std::endl;
     } else {
-      out << "Segment{.active=" << active << ", .filter=" << this->filter.dump() << ",}";
+      out << "Segment{.active=" << this->active_pivots.printable()
+          << ", .filter=" << this->filter.dump() << ",}";
     }
   };
 }

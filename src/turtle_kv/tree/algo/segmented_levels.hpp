@@ -88,12 +88,6 @@ inline i32 get_last_active_pivot(const CInterval<usize>& pivot_range)
   return pivot_range.upper_bound;
 }
 
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-
-template <typename T>
-using EnableIfHasActivePivotsBitset = std::enable_if_t<
-    ActivePivotsSet<decltype(std::declval<std::decay_t<T>>().get_active_pivots())>>;
-
 //----- --- -- -  -  -   -
 
 template <HasActivePivotsSet T>

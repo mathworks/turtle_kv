@@ -87,16 +87,9 @@ struct InMemoryNode {
        */
       llfs::PageIdSlot page_id_slot;
 
-      /** \brief A bit set of pivots in whose key range this segment contains items. Used for
-       * pivots [0, 64).
+      /** \brief A bit set of pivots in whose key range this segment contains items.
        */
-      // u64 active_pivots = 0;
       ActivePivotsSet128 active_pivots;
-
-      /** \brief A bit set of pivots in whose key range this segment contains items. Used for
-       * pivots 64 and greater.
-       */
-      // u64 active_pivots_overflow = 0;
 
       /** \brief A filter over the flushed items in this segment.
        */
@@ -118,15 +111,6 @@ struct InMemoryNode {
       {
         return this->active_pivots;
       }
-
-      /** \brief Returns the active pivots bit set, as well as the overflow bit set.
-       */
-#if 0
-      std::array<u64, 2> get_active_pivots_with_overflow() const
-      {
-        return {this->active_pivots, this->active_pivots_overflow};
-      }
-#endif
 
       /** \brief Marks this segment as containing (or not) active keys addressed to `pivot_i`.
        */

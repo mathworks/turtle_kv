@@ -117,16 +117,13 @@ struct SegmentAlgorithms {
     // they were when this function was entered, regardless of what `fn` may do to change the state
     // of the segment.
     //
-    const std::array<u64, 2> observed_active_pivots =
-        this->segment_.get_active_pivots_with_overflow();
-
-    const i32 first_active_pivot = first_bit(observed_active_pivots);
+    const auto observed_active_pivots = this->segment_.get_active_pivots();
 
     const i32 first_pivot_i = std::max<i32>(pivot_range.lower_bound,  //
-                                            first_active_pivot);
+                                            observed_active_pivots.first());
 
     for (i32 pivot_i = first_pivot_i; pivot_i < pivot_range.upper_bound;
-         pivot_i = next_bit(observed_active_pivots, pivot_i)) {
+         pivot_i = observed_active_pivots.next(pivot_i)) {
       BATT_INVOKE_LOOP_FN((fn, this->segment_, pivot_i));
     }
   }

@@ -281,8 +281,6 @@ TEST_F(SegmentedLevelScannerTest, Test)
 
 void SegmentedLevelScannerTest::Scenario::run_with_pivot_count(usize pivot_count)
 {
-  constexpr usize kMaxPivotCount = 64;
-
   // Configure the test.
   //
   const bool debug_output = false;
@@ -350,7 +348,7 @@ void SegmentedLevelScannerTest::Scenario::run_with_pivot_count(usize pivot_count
 
     if (debug_output) {
       std::cout << BATT_INSPECT(segment_i) << BATT_INSPECT(leaf_view.get_key_crange()) << "\t"
-                << std::bitset<kMaxPivotCount>{fake_segment.get_active_pivots()} << " "
+                << fake_segment.get_active_pivots().printable() << " "
                 << batt::dump_range(fake_segment.pivot_items_count_) << std::endl;
     }
   }
@@ -424,7 +422,7 @@ void SegmentedLevelScannerTest::Scenario::run_with_pivot_count(usize pivot_count
 
       if (debug_output) {
         std::cout << std::setw(3) << segment_i
-                  << ": active=" << std::bitset<kMaxPivotCount>{segment.get_active_pivots()}
+                  << ": active=" << segment.get_active_pivots().printable()
                   << std::endl;
       }
     }

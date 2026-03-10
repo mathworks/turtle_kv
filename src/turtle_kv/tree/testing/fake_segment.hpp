@@ -2,6 +2,8 @@
 
 #include <turtle_kv/tree/testing/fake_page_loader.hpp>
 
+#include <turtle_kv/tree/active_pivots_set.hpp>
+
 #include <turtle_kv/core/packed_key_value.hpp>
 
 #include <turtle_kv/util/piecewise_filter.hpp>
@@ -24,8 +26,7 @@ struct FakeLevel;
 //
 struct FakeSegment {
   llfs::PageId page_id_;
-  u64 active_pivots_ = 0;
-  u64 active_pivots_overflow_ = 0;
+  ActivePivotsSet128 active_pivots_ = {};
   PiecewiseFilter<u32> filter_;
   std::map<usize, usize> pivot_items_count_;
 
@@ -43,40 +44,24 @@ struct FakeSegment {
                             });
   }
 
-  u64 get_active_pivots() const
+  auto get_active_pivots() const
   {
     return this->active_pivots_;
   }
 
-  std::pair<u64, u64> get_active_pivots_with_overflow() const
-  {
-    return std::make_pair(this->active_pivots_, this->active_pivots_overflow_);
-  }
-
   bool is_pivot_active(i32 pivot_i) const
   {
-    return get_bit(std::array<u64, 2>{this->active_pivots_, this->active_pivots_overflow_},
-                   pivot_i);
+    return this->active_pivots_.get(pivot_i);
   }
 
   void set_pivot_active(i32 pivot_i, bool active)
   {
-    std::array<u64, 2> active_pivots_out =
-        set_bit(std::array<u64, 2>{this->active_pivots_, this->active_pivots_overflow_},
-                pivot_i,
-                active);
-    this->active_pivots_ = active_pivots_out[0];
-    this->active_pivots_overflow_ = active_pivots_out[1];
+    this->active_pivots_.set(pivot_i, active);
   }
 
   void insert_active_pivot(usize pivot_i, bool is_active = true)
   {
-    std::array<u64, 2> active_pivots_out =
-        insert_bit(std::array<u64, 2>{this->active_pivots_, this->active_pivots_overflow_},
-                   pivot_i,
-                   is_active);
-    this->active_pivots_ = active_pivots_out[0];
-    this->active_pivots_overflow_ = active_pivots_out[1];
+    this->active_pivots_.insert(pivot_i, is_active);
   }
 
   void set_pivot_items_count(usize pivot_i, usize count)
@@ -101,13 +86,13 @@ struct FakeSegment {
 
   void clear_active_pivots()
   {
-    this->active_pivots_ = 0;
+    this->active_pivots_ = {};
     this->pivot_items_count_.clear();
   }
 
   bool is_inactive() const
   {
-    const bool inactive = (this->active_pivots_ == 0 && this->active_pivots_overflow_ == 0);
+    const bool inactive = this->active_pivots_.is_inactive();
     if (inactive) {
       Slice<const Interval<u32>> filter_dropped_ranges = this->filter_.dropped();
       BATT_CHECK_EQ(filter_dropped_ranges.size(), 1);
