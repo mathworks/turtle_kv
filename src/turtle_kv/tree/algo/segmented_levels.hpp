@@ -92,21 +92,20 @@ inline i32 get_last_active_pivot(const CInterval<usize>& pivot_range)
 
 template <typename T>
 using EnableIfHasActivePivotsBitset = std::enable_if_t<
-    std::is_convertible_v<decltype(std::declval<T&&>().get_active_pivots_with_overflow()),
-                          std::array<u64, 2>>>;
+    ActivePivotsSet<decltype(std::declval<std::decay_t<T>>().get_active_pivots())>>;
 
 //----- --- -- -  -  -   -
 
-template <typename T, typename = EnableIfHasActivePivotsBitset<T>>
-inline i32 get_first_active_pivot(T&& segment)
+template <HasActivePivotsSet T>
+inline i32 get_first_active_pivot(const T& segment)
 {
-  return first_bit(segment.get_active_pivots_with_overflow());
+  return segment.get_active_pivots().first();
 }
 
-template <typename T, typename = EnableIfHasActivePivotsBitset<T>>
-inline i32 get_last_active_pivot(T&& segment)
+template <HasActivePivotsSet T>
+inline i32 get_last_active_pivot(const T& segment)
 {
-  return last_bit(segment.get_active_pivots_with_overflow());
+  return segment.get_active_pivots().last();
 }
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------

@@ -109,7 +109,7 @@ using PackedSegment = PackedUpdateBuffer::Segment;
         Segment& segment = segmented_level.segments[segment_i];
 
         segment.page_id_slot = llfs::PageIdSlot::from_page_id(packed_segment.leaf_page_id.unpack());
-        segment.active_pivots = packed_segment.active_pivots;
+        segment.active_pivots = packed_segment.active_pivots.unpack();
 
         BATT_ASSIGN_OK_RESULT(segment.filter,
                               packed_node.create_piecewise_filter(level_i, segment_i));

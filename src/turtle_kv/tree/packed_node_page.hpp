@@ -1,5 +1,6 @@
 #pragma once
 
+#include <turtle_kv/tree/active_pivots_set.hpp>
 #include <turtle_kv/tree/key_query.hpp>
 #include <turtle_kv/tree/packed_node_page_key.hpp>
 
@@ -126,26 +127,28 @@ struct PackedNodePage {
     };
 
     struct Segment {
-      llfs::PackedPageId leaf_page_id;  // +8 -> 8
-      little_u64 active_pivots;         // +8 -> 16
-      little_u16 filter_start;          // +2 -> 18
+      llfs::PackedPageId leaf_page_id;        // +8 -> 8
+      PackedActivePivotsSet64 active_pivots;  // +8 -> 16
+      little_u16 filter_start;                // +2 -> 18
 
       //+++++++++++-+-+--+----- --- -- -  -  -   -
 
       bool is_pivot_active(i32 pivot_i) const
       {
-        return get_bit(this->active_pivots, pivot_i);
+        return this->active_pivots.get(pivot_i);
       }
 
-      u64 get_active_pivots() const
+      PackedActivePivotsSet64 get_active_pivots() const
       {
         return this->active_pivots;
       }
 
+#if 0
       std::array<u64, 2> get_active_pivots_with_overflow() const
       {
         return {this->active_pivots, u64{0}};
       }
+#endif
 
       llfs::PageId get_leaf_page_id() const
       {

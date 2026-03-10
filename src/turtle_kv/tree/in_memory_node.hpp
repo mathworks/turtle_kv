@@ -1,5 +1,6 @@
 #pragma once
 
+#include <turtle_kv/tree/active_pivots_set.hpp>
 #include <turtle_kv/tree/batch_update.hpp>
 #include <turtle_kv/tree/in_memory_leaf.hpp>
 #include <turtle_kv/tree/max_pending_bytes.hpp>
@@ -89,12 +90,13 @@ struct InMemoryNode {
       /** \brief A bit set of pivots in whose key range this segment contains items. Used for
        * pivots [0, 64).
        */
-      u64 active_pivots = 0;
+      // u64 active_pivots = 0;
+      ActivePivotsSet128 active_pivots;
 
       /** \brief A bit set of pivots in whose key range this segment contains items. Used for
        * pivots 64 and greater.
        */
-      u64 active_pivots_overflow = 0;
+      // u64 active_pivots_overflow = 0;
 
       /** \brief A filter over the flushed items in this segment.
        */
@@ -112,36 +114,32 @@ struct InMemoryNode {
 
       /** \brief Returns the active pivots bit set.
        */
-      u64 get_active_pivots() const
+      auto get_active_pivots() const
       {
         return this->active_pivots;
       }
 
       /** \brief Returns the active pivots bit set, as well as the overflow bit set.
        */
+#if 0
       std::array<u64, 2> get_active_pivots_with_overflow() const
       {
         return {this->active_pivots, this->active_pivots_overflow};
       }
+#endif
 
       /** \brief Marks this segment as containing (or not) active keys addressed to `pivot_i`.
        */
       void set_pivot_active(i32 pivot_i, bool active)
       {
-        std::array<u64, 2> active_pivots_out =
-            set_bit(std::array<u64, 2>{this->active_pivots, this->active_pivots_overflow},
-                    pivot_i,
-                    active);
-        this->active_pivots = active_pivots_out[0];
-        this->active_pivots_overflow = active_pivots_out[1];
+        this->active_pivots.set(pivot_i, active);
       }
 
       /** \brief Returns true iff this segment has active keys addressed to `pivot_i`.
        */
       bool is_pivot_active(i32 pivot_i) const
       {
-        return get_bit(std::array<u64, 2>{this->active_pivots, this->active_pivots_overflow},
-                       pivot_i);
+        return this->active_pivots.get(pivot_i);
       }
 
       template <typename Traits>
