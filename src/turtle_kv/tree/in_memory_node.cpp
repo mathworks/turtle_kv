@@ -1118,27 +1118,8 @@ StatusOr<std::unique_ptr<InMemoryNode>> InMemoryNode::try_split_direct(BatchUpda
 
   BATT_CHECK_EQ(orig_pivot_count + 1, orig_pivot_keys.size());
 
-  u64 tried_already = 0;
-  u64 tried_already_overflow = 0;
+  std::array<u64, 2> tried_already = {0, 0};
   usize split_pivot_i = (orig_pivot_count + 1) / 2;
-
-  const auto get_tried_bit = [&tried_already, &tried_already_overflow](usize i) -> bool {
-    if (i < 64) {
-      return get_bit(tried_already, i);
-    } else {
-      const i32 overflow_i = i - 64;
-      return get_bit(tried_already_overflow, overflow_i);
-    }
-  };
-
-  auto set_tried_bit = [&tried_already, &tried_already_overflow](usize i) {
-    if (i < 64) {
-      tried_already = set_bit(tried_already, i, true);
-    } else {
-      const i32 overflow_i = i - 64;
-      tried_already_overflow = set_bit(tried_already_overflow, overflow_i, true);
-    }
-  };
 
   auto* node_lower_half = this;
   auto node_upper_half = std::make_unique<InMemoryNode>(batt::make_copy(this->pinned_node_page_),
@@ -1152,10 +1133,10 @@ StatusOr<std::unique_ptr<InMemoryNode>> InMemoryNode::try_split_direct(BatchUpda
   for (;;) {
     // If we ever try the same split point a second time, fail.
     //
-    if (get_tried_bit(split_pivot_i)) {
+    if (get_bit(tried_already, split_pivot_i)) {
       return {batt::StatusCode::kInternal};
     }
-    set_tried_bit(split_pivot_i);
+    tried_already = set_bit(tried_already, split_pivot_i, true);
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
 
