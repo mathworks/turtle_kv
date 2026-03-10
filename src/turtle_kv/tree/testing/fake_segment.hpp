@@ -55,36 +55,28 @@ struct FakeSegment {
 
   bool is_pivot_active(i32 pivot_i) const
   {
-    if (pivot_i < 64) {
-      return get_bit(this->active_pivots_, pivot_i);
-    } else {
-      return get_bit(this->active_pivots_overflow_, pivot_i - 64);
-    }
+    return get_bit(std::array<u64, 2>{this->active_pivots_, this->active_pivots_overflow_},
+                   pivot_i);
   }
 
   void set_pivot_active(i32 pivot_i, bool active)
   {
-    if (pivot_i < 64) {
-      this->active_pivots_ = set_bit(this->active_pivots_, pivot_i, active);
-    } else {
-      this->active_pivots_overflow_ = set_bit(this->active_pivots_overflow_, pivot_i - 64, active);
-    }
+    std::array<u64, 2> active_pivots_out =
+        set_bit(std::array<u64, 2>{this->active_pivots_, this->active_pivots_overflow_},
+                pivot_i,
+                active);
+    this->active_pivots_ = active_pivots_out[0];
+    this->active_pivots_overflow_ = active_pivots_out[1];
   }
 
   void insert_active_pivot(usize pivot_i, bool is_active = true)
   {
-    if (pivot_i < 64) {
-      // Insert the highest bit from active_pivots to the overflow bit set.
-      //
-      this->active_pivots_overflow_ =
-          (this->active_pivots_overflow_ << 1) | ((this->active_pivots_ >> 63) & u64{1});
-
-      this->active_pivots_ = insert_bit(this->active_pivots_, pivot_i, is_active);
-    } else {
-      const i32 overflow_i = pivot_i - 64;
-      this->active_pivots_overflow_ =
-          insert_bit(this->active_pivots_overflow_, overflow_i, is_active);
-    }
+    std::array<u64, 2> active_pivots_out =
+        insert_bit(std::array<u64, 2>{this->active_pivots_, this->active_pivots_overflow_},
+                   pivot_i,
+                   is_active);
+    this->active_pivots_ = active_pivots_out[0];
+    this->active_pivots_overflow_ = active_pivots_out[1];
   }
 
   void set_pivot_items_count(usize pivot_i, usize count)
