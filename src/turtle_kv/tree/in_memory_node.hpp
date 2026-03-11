@@ -1,6 +1,6 @@
 #pragma once
 
-#include <turtle_kv/tree/algo/segments.hpp>
+#include <turtle_kv/tree/active_pivots_set.hpp>
 #include <turtle_kv/tree/batch_update.hpp>
 #include <turtle_kv/tree/in_memory_leaf.hpp>
 #include <turtle_kv/tree/max_pending_bytes.hpp>
@@ -65,6 +65,8 @@ struct InMemoryNode {
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  static constexpr usize kMaxTempPivots = 128;
+
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
   //
   /** \brief Mutable, in-memory representation of a node update buffer.
@@ -87,7 +89,7 @@ struct InMemoryNode {
 
       /** \brief A bit set of pivots in whose key range this segment contains items.
        */
-      u64 active_pivots = 0;
+      ActivePivotsSet128 active_pivots;
 
       /** \brief A filter over the flushed items in this segment.
        */
@@ -105,7 +107,7 @@ struct InMemoryNode {
 
       /** \brief Returns the active pivots bit set.
        */
-      u64 get_active_pivots() const
+      auto get_active_pivots() const
       {
         return this->active_pivots;
       }
@@ -114,14 +116,14 @@ struct InMemoryNode {
        */
       void set_pivot_active(i32 pivot_i, bool active)
       {
-        this->active_pivots = set_bit(this->active_pivots, pivot_i, active);
+        this->active_pivots.set(pivot_i, active);
       }
 
       /** \brief Returns true iff this segment has active keys addressed to `pivot_i`.
        */
       bool is_pivot_active(i32 pivot_i) const
       {
-        return get_bit(this->active_pivots, pivot_i);
+        return this->active_pivots.get(pivot_i);
       }
 
       template <typename Traits>
@@ -481,12 +483,12 @@ struct InMemoryNode {
 
   usize max_pivot_count() const
   {
-    return this->is_size_tiered() ? (64 - 1) : (64 - 1);
+    return this->is_size_tiered() ? kMaxPivots : kMaxPivots;
   }
 
   usize max_segment_count() const
   {
-    return this->is_size_tiered() ? (64 - 2) : (64 - 2);
+    return this->is_size_tiered() ? (kMaxPivots - 1) : (kMaxPivots - 1);
   }
 
   Slice<const KeyView> get_pivot_keys() const

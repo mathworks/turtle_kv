@@ -53,6 +53,7 @@ class SegmentedLevelScanner : private SegmentedLevelScannerBase
   using PageLoader = PageLoaderT;
   using PinnedPageT = typename PageLoader::PinnedPageT;
   using Segment = typename Level::Segment;
+  using ActivePivotsSetT = decltype(std::declval<const Segment&>().get_active_pivots());
 
   using Item = EditSlice;
 
@@ -205,8 +206,8 @@ inline auto SegmentedLevelScanner<NodeT, LevelT, PageLoaderT>::peek_next_impl(bo
 
   const Segment* segment = std::addressof(this->level_->get_segment(this->segment_i_));
 
-  u64 active_pivots = segment->get_active_pivots();
-  BATT_CHECK_NE(active_pivots, 0) << "This segment should have been dropped!";
+  ActivePivotsSetT active_pivots = segment->get_active_pivots();
+  BATT_CHECK(!active_pivots.is_inactive()) << "This segment should have been dropped!";
 
   // Make sure we have a leaf page loaded.
   //
@@ -215,7 +216,7 @@ inline auto SegmentedLevelScanner<NodeT, LevelT, PageLoaderT>::peek_next_impl(bo
 
     // Skip ahead to the next segment that is active at or past the minimum pivot.
     //
-    while (last_bit(active_pivots) < this->min_pivot_i_) {
+    while (active_pivots.last() < this->min_pivot_i_) {
       ++this->segment_i_;
       if (this->segment_i_ == this->level_->segment_count()) {
         return None;
@@ -238,9 +239,8 @@ inline auto SegmentedLevelScanner<NodeT, LevelT, PageLoaderT>::peek_next_impl(bo
 
     this->pinned_leaf_ = std::move(*loaded_page);
 
-    i32 target_pivot_i = std::max(first_bit(active_pivots), this->min_pivot_i_);
-    while (target_pivot_i < (i32)this->node_->pivot_count() &&
-           !get_bit(active_pivots, target_pivot_i)) {
+    i32 target_pivot_i = std::max(active_pivots.first(), this->min_pivot_i_);
+    while (target_pivot_i < (i32)this->node_->pivot_count() && !active_pivots.get(target_pivot_i)) {
       ++target_pivot_i;
     }
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <turtle_kv/tree/active_pivots_set.hpp>
 #include <turtle_kv/tree/key_query.hpp>
 #include <turtle_kv/tree/packed_node_page_key.hpp>
 
@@ -42,14 +43,13 @@ struct Subtree;
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 
 struct PackedNodePage {
-  static constexpr usize kMaxPivots = 64;
   static constexpr usize kMaxSegments = kMaxPivots - 1;
   static constexpr usize kMaxLevels = batt::log2_ceil(kMaxPivots);
   static constexpr usize kPivotKeysSize =
       kMaxPivots + 1 /*max_key*/ + 1 /*common_prefix*/ + 1 /*final_offset*/;
 
   static constexpr u8 kFlagSizeTiered = 0x80;
-  static constexpr u8 kPivotCountMask = 0x3f;
+  static constexpr u8 kPivotCountMask = 0x7f;
   static constexpr u16 kSegmentStartsFiltered = 0x8000;
 
   using Key = PackedNodePageKey;
@@ -127,18 +127,18 @@ struct PackedNodePage {
     };
 
     struct Segment {
-      llfs::PackedPageId leaf_page_id;  // +8 -> 8
-      little_u64 active_pivots;         // +8 -> 16
-      little_u16 filter_start;          // +2 -> 18
+      llfs::PackedPageId leaf_page_id;        // +8 -> 8
+      PackedActivePivotsSet64 active_pivots;  // +8 -> 16
+      little_u16 filter_start;                // +2 -> 18
 
       //+++++++++++-+-+--+----- --- -- -  -  -   -
 
       bool is_pivot_active(i32 pivot_i) const
       {
-        return get_bit(this->active_pivots, pivot_i);
+        return this->active_pivots.get(pivot_i);
       }
 
-      u64 get_active_pivots() const
+      PackedActivePivotsSet64 get_active_pivots() const
       {
         return this->active_pivots;
       }

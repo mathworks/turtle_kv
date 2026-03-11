@@ -68,7 +68,7 @@ PackedNodePage* build_node_page(const MutableBuffer& buffer, const InMemoryNode&
 
   const usize pivot_count = src_node.pivot_count();
 
-  BATT_CHECK_LE(pivot_count, PackedNodePage::kMaxPivots);
+  BATT_CHECK_LE(pivot_count, kMaxPivots);
   BATT_CHECK_EQ(src_node.pivot_keys_.size(), pivot_count + 1);
   BATT_CHECK_EQ(src_node.children.size(), pivot_count);
   BATT_CHECK_EQ(src_node.pending_bytes.size(), pivot_count);
@@ -146,8 +146,7 @@ PackedNodePage* build_node_page(const MutableBuffer& buffer, const InMemoryNode&
         dst_segment.leaf_page_id = llfs::PackedPageId::from(src_segment.page_id_slot.page_id);
         dst_segment.active_pivots = src_segment.get_active_pivots();
 
-        BATT_CHECK_EQ(bit_count(src_segment.get_active_pivots()),
-                      bit_count(dst_segment.active_pivots));
+        BATT_CHECK_EQ(src_segment.get_active_pivots().count(), dst_segment.active_pivots.count());
 
         dst_segment.filter_start = BATT_CHECKED_CAST(u16, segment_filters_offset);
 
@@ -494,7 +493,7 @@ std::function<void(std::ostream&)> PackedNodePage::dump() const
           (segment.filter_start.value() & PackedNodePage::kSegmentStartsFiltered) != 0;
       out << "   - [" << std::setw(2) << std::setfill(' ') << i << "]:" << std::endl
           << "     leaf_page_id: " << segment.leaf_page_id.unpack() << std::endl
-          << "     active_pivots:  " << std::bitset<64>{segment.active_pivots.value()} << std::endl
+          << "     active_pivots:  " << segment.active_pivots.printable() << std::endl
           << "     filter_start:  " << filter_start_i << std::endl
           << "     starts_filtered: " << start_filtered << std::endl
           << std::endl;

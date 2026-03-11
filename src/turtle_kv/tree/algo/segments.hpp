@@ -1,5 +1,6 @@
 #pragma once
 
+#include <turtle_kv/tree/in_memory_node.hpp>
 #include <turtle_kv/tree/key_query.hpp>
 #include <turtle_kv/tree/packed_leaf_page.hpp>
 #include <turtle_kv/tree/tree_options.hpp>
@@ -47,7 +48,7 @@ struct SegmentAlgorithms {
       this->segment_.check_invariants(__FILE__, __LINE__);
     });
 
-    BATT_CHECK_LT(pivot_i, 63);
+    BATT_CHECK_LT(pivot_i, InMemoryNode::kMaxTempPivots - 1);
 
     // Simplest case: pivot not active for this segment.
     //
@@ -128,13 +129,13 @@ struct SegmentAlgorithms {
     // they were when this function was entered, regardless of what `fn` may do to change the state
     // of the segment.
     //
-    const u64 observed_active_pivots = this->segment_.get_active_pivots();
+    const auto observed_active_pivots = this->segment_.get_active_pivots();
 
     const i32 first_pivot_i = std::max<i32>(pivot_range.lower_bound,  //
-                                            first_bit(observed_active_pivots));
+                                            observed_active_pivots.first());
 
     for (i32 pivot_i = first_pivot_i; pivot_i < pivot_range.upper_bound;
-         pivot_i = next_bit(observed_active_pivots, pivot_i)) {
+         pivot_i = observed_active_pivots.next(pivot_i)) {
       BATT_INVOKE_LOOP_FN((fn, this->segment_, pivot_i));
     }
   }

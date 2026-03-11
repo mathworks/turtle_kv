@@ -2,6 +2,8 @@
 
 #include <turtle_kv/tree/testing/fake_page_loader.hpp>
 
+#include <turtle_kv/tree/active_pivots_set.hpp>
+
 #include <turtle_kv/core/packed_key_value.hpp>
 
 #include <turtle_kv/util/piecewise_filter.hpp>
@@ -24,8 +26,8 @@ struct FakeLevel;
 //
 struct FakeSegment {
   llfs::PageId page_id_;
-  u64 active_pivots_ = 0;
-  PiecewiseFilter<u32> filter;
+  ActivePivotsSet128 active_pivots_ = {};
+  PiecewiseFilter<u32> filter_;
   std::map<usize, usize> pivot_items_count_;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -42,29 +44,29 @@ struct FakeSegment {
                             });
   }
 
-  u64 get_active_pivots() const
+  auto get_active_pivots() const
   {
     return this->active_pivots_;
   }
 
-  bool is_pivot_active(usize pivot_i) const
+  bool is_pivot_active(i32 pivot_i) const
   {
-    return get_bit(this->active_pivots_, pivot_i);
+    return this->active_pivots_.get(pivot_i);
   }
 
-  void set_pivot_active(usize pivot_i, bool active)
+  void set_pivot_active(i32 pivot_i, bool active)
   {
-    this->active_pivots_ = set_bit(this->active_pivots_, pivot_i, active);
+    this->active_pivots_.set(pivot_i, active);
   }
 
   void insert_active_pivot(usize pivot_i, bool is_active = true)
   {
-    this->active_pivots_ = insert_bit(this->active_pivots_, pivot_i, is_active);
+    this->active_pivots_.insert(pivot_i, is_active);
   }
 
   void set_pivot_items_count(usize pivot_i, usize count)
   {
-    this->active_pivots_ = set_bit(this->active_pivots_, pivot_i, (count > 0));
+    this->set_pivot_active(pivot_i, (count > 0));
     if (count > 0) {
       this->pivot_items_count_[pivot_i] = count;
     } else {
@@ -84,40 +86,51 @@ struct FakeSegment {
 
   void clear_active_pivots()
   {
-    this->active_pivots_ = 0;
+    this->active_pivots_ = {};
     this->pivot_items_count_.clear();
+  }
+
+  bool is_inactive() const
+  {
+    const bool inactive = this->active_pivots_.is_inactive();
+    if (inactive) {
+      Slice<const Interval<u32>> filter_dropped_ranges = this->filter_.dropped();
+      BATT_CHECK_EQ(filter_dropped_ranges.size(), 1);
+      BATT_CHECK_EQ(filter_dropped_ranges[0].lower_bound, 0);
+    }
+    return inactive;
   }
 
   template <typename Traits>
   void drop_key_range(const BasicInterval<Traits>& key_range,
                       const Slice<const PackedKeyValue>& items)
   {
-    drop_item_range(this->filter, items, key_range, llfs::KeyRangeOrder{});
+    drop_item_range(this->filter_, items, key_range, llfs::KeyRangeOrder{});
   }
 
   void drop_index_range(Interval<u32> i)
   {
-    this->filter.drop_index_range(i);
+    this->filter_.drop_index_range(i);
   }
 
   bool is_index_filtered(const FakeLevel&, u32 index) const
   {
-    return !this->filter.live_at_index(index);
+    return !this->filter_.live_at_index(index);
   }
 
   bool is_unfiltered() const
   {
-    return !this->filter.dropped_total();
+    return !this->filter_.dropped_total();
   }
 
   u32 live_lower_bound(const FakeLevel&, u32 item_i) const
   {
-    return this->filter.live_lower_bound(item_i);
+    return this->filter_.live_lower_bound(item_i);
   }
 
   Interval<u32> get_live_item_range(const FakeLevel&, Interval<u32> i) const
   {
-    return this->filter.find_live_range(i);
+    return this->filter_.find_live_range(i);
   }
 };
 

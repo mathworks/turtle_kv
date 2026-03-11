@@ -255,7 +255,7 @@ void ChangeLogWriter::writer_task_main() noexcept
         // appending; in this case, enter our timed polling loop.
         //
         const i64 delay_usec = pick_delay_usec(rng);
-        batt::Task::sleep(boost::posix_time::microseconds(delay_usec));
+        batt::Task::sleep(std::chrono::microseconds(delay_usec));
 
         if (this->halt_requested_.load()) {
           return batt::OkStatus();

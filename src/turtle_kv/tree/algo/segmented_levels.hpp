@@ -88,24 +88,18 @@ inline i32 get_last_active_pivot(const CInterval<usize>& pivot_range)
   return pivot_range.upper_bound;
 }
 
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-
-template <typename T>
-using EnableIfHasActivePivotsBitset =
-    std::enable_if_t<std::is_convertible_v<decltype(std::declval<T&&>().get_active_pivots()), u64>>;
-
 //----- --- -- -  -  -   -
 
-template <typename T, typename = EnableIfHasActivePivotsBitset<T>>
-inline i32 get_first_active_pivot(T&& segment)
+template <HasActivePivotsSet T>
+inline i32 get_first_active_pivot(const T& segment)
 {
-  return first_bit(segment.get_active_pivots());
+  return segment.get_active_pivots().first();
 }
 
-template <typename T, typename = EnableIfHasActivePivotsBitset<T>>
-inline i32 get_last_active_pivot(T&& segment)
+template <HasActivePivotsSet T>
+inline i32 get_last_active_pivot(const T& segment)
 {
-  return last_bit(segment.get_active_pivots());
+  return segment.get_active_pivots().last();
 }
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
@@ -181,8 +175,7 @@ struct SegmentedLevelAlgorithms {
 
       // Skip this segment if the pivot is not active.
       //
-      const u64 active_pivots = segment.get_active_pivots();
-      if (!get_bit(active_pivots, pivot_i)) {
+      if (!segment.is_pivot_active(pivot_i)) {
         ++segment_i;
         continue;
       }
@@ -208,7 +201,7 @@ struct SegmentedLevelAlgorithms {
 
       // Drop the segment if it has become inactive due to the flush.
       //
-      if (segment.get_active_pivots() == 0) {
+      if (segment.is_inactive()) {
         this->level_.drop_segment(segment_i);
       } else {
         ++segment_i;
@@ -236,7 +229,7 @@ struct SegmentedLevelAlgorithms {
             << batt::c_str_literal(old_pivot_key_range.upper_bound)
             << "), key=" << batt::c_str_literal(split_key) << ")";
 
-    BATT_CHECK_LT(this->node_.pivot_count(), 64);
+    BATT_CHECK_LT(this->node_.pivot_count(), InMemoryNode::kMaxTempPivots);
 
     const KeyView pivot_key = old_pivot_key_range.lower_bound;
     const usize segment_count = this->level_.segment_count();
