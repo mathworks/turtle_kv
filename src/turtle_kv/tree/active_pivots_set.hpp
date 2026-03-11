@@ -134,8 +134,13 @@ class ActivePivotsSet128 : public ActivePivotsSetBase<std::array<u64, 2>>
       return;
     }
 
-    this->bit_set_[0] = (this->bit_set_[0] >> count) | (this->bit_set_[1] << (64 - count));
-    this->bit_set_[1] >>= count;
+    if (count < 64) {
+      this->bit_set_[0] = (this->bit_set_[0] >> count) | (this->bit_set_[1] << (64 - count));
+      this->bit_set_[1] >>= count;
+    } else {
+      this->bit_set_[0] = this->bit_set_[1] >> (count - 64);
+      this->bit_set_[1] = 0;
+    }
   }
 };
 
