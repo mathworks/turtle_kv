@@ -420,8 +420,6 @@ struct InMemoryNode {
 
     SmallFn<void(std::ostream&)> dump() const;
 
-    u64 compute_active_pivots() const;
-
     usize count_non_empty_levels() const
     {
       usize count = 0;

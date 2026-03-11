@@ -741,7 +741,7 @@ Status InMemoryNode::merge_child(BatchUpdateContext& update_context, i32 pivot_i
 
   if (pivot_i == 0) {
     sibling_i = pivot_i + 1;
-  } else if (pivot_i == this->pivot_count() - 1) {
+  } else if ((usize)pivot_i == this->pivot_count() - 1) {
     sibling_i = pivot_i - 1;
   } else {
     sibling_i = pivot_i + 1;
@@ -772,7 +772,10 @@ Status InMemoryNode::merge_child(BatchUpdateContext& update_context, i32 pivot_i
   for (Level& level : this->update_buffer.levels) {
     if (batt::is_case<SegmentedLevel>(level)) {
       SegmentedLevel& segmented_level = std::get<SegmentedLevel>(level);
-      in_segmented_level(*this, segmented_level, update_context.page_loader)
+      in_segmented_level(*this,
+                         segmented_level,
+                         update_context.page_loader,
+                         update_context.overcommit)
           .merge_pivots(left_pivot_i, right_pivot_i);
     }
   }
@@ -798,9 +801,10 @@ Status InMemoryNode::merge_child(BatchUpdateContext& update_context, i32 pivot_i
   this->pivot_keys_.erase(this->pivot_keys_.begin() + right_pivot_i);
 
   if ((usize)right_pivot_i == old_pivot_count - 1) {
-    BATT_ASSIGN_OK_RESULT(
-        this->max_key_,
-        this->children.back().get_max_key(update_context.page_loader, this->child_pages.back()));
+    BATT_ASSIGN_OK_RESULT(this->max_key_,
+                          this->children.back().get_max_key(update_context.page_loader,
+                                                            update_context.overcommit,
+                                                            this->child_pages.back()));
   }
 
   // Finally, split the newly merged child if needed.
@@ -897,8 +901,8 @@ Status InMemoryNode::try_merge(BatchUpdateContext& context,
                   for (usize segment_i = 0; segment_i < right_segmented_level.segment_count();
                        ++segment_i) {
                     Segment& segment = right_segmented_level.get_segment(segment_i);
-                    segment.active_pivots <<= left_node_pivot_count;
-                  }
+                    segment.active_pivots.pop_back_pivots(left_node_pivot_count);
+                  };
 
                   left_segmented_level.segments.insert(
                       left_segmented_level.segments.end(),
@@ -937,7 +941,7 @@ Status InMemoryNode::try_merge(BatchUpdateContext& context,
           for (usize segment_i = 0; segment_i < right_segmented_level.segment_count();
                ++segment_i) {
             Segment& segment = right_segmented_level.get_segment(segment_i);
-            segment.active_pivots <<= left_node_pivot_count;
+            segment.active_pivots.pop_back_pivots(left_node_pivot_count);
           }
 
           this->update_buffer.levels.emplace_back(right_segmented_level);
@@ -1973,6 +1977,7 @@ void InMemoryNode::UpdateBuffer::SegmentedLevel::check_items_sorted(
           segmented_level,
           context.page_loader,
           llfs::PinPageToJob::kDefault,
+          context.overcommit,
           segment_load_status,
           /*min_pivot_i=*/0}  //
       | seq::boxed();
@@ -2022,7 +2027,7 @@ void InMemoryNode::UpdateBuffer::Segment::remove_pivot(i32 pivot_i)
     this->check_invariants(__FILE__, __LINE__);
   });
 
-  this->active_pivots = remove_bit(this->active_pivots, pivot_i);
+  this->active_pivots.remove(pivot_i);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -2064,24 +2069,6 @@ SmallFn<void(std::ostream&)> InMemoryNode::UpdateBuffer::dump() const
     }
     out << "},}";
   };
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-u64 InMemoryNode::UpdateBuffer::compute_active_pivots() const
-{
-  u64 active_pivots = 0;
-  for (const Level& level : this->levels) {
-    if (batt::is_case<SegmentedLevel>(level)) {
-      const SegmentedLevel& segmented_level = std::get<SegmentedLevel>(level);
-      for (usize segment_i = 0; segment_i < segmented_level.segment_count(); ++segment_i) {
-        const Segment& segment = segmented_level.get_segment(segment_i);
-        active_pivots |= segment.get_active_pivots();
-      }
-    }
-  }
-
-  return active_pivots;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

@@ -135,16 +135,6 @@ void verify_table_point_queries(Table& expected_table, Table& actual_table, Rng&
   }
 }
 
-void verify_deleted_point_queries(Table& expected_table,
-                                  Table& actual_table,
-                                  const std::vector<KeyView>& deleted_keys)
-{
-  for (const KeyView& key : deleted_keys) {
-    EXPECT_EQ(expected_table.get(key).status(), batt::StatusCode::kNotFound);
-    EXPECT_EQ(actual_table.get(key).status(), batt::StatusCode::kNotFound);
-  }
-}
-
 void verify_range_scan(LatencyMetric* scan_latency,
                        Table& expected_table,
                        const Slice<std::pair<KeyView, ValueView>>& actual_read_items,
@@ -233,6 +223,14 @@ struct BatchUpdateGenerator {
     }
 
     return result_set;
+  }
+
+  void verify_deleted_point_queries(Table& expected_table, Table& actual_table)
+  {
+    for (const KeyView& key : this->pending_deletes) {
+      EXPECT_EQ(expected_table.get(key).status(), batt::StatusCode::kNotFound);
+      EXPECT_EQ(actual_table.get(key).status(), batt::StatusCode::kNotFound);
+    }
   }
 };
 
@@ -348,7 +346,7 @@ void SubtreeBatchUpdateScenario::run()
             },
         // TODO [vsilai 2026-01-09] Enable delete support for batch generation.
         //
-        .result_set = update_generator.next_batch(i, rng, /*update_pending_deletes=*/false),
+        .result_set = update_generator.next_batch(i, rng, /*update_pending_deletes=*/true),
         .edit_size_totals = None,
     };
     update.update_edit_size_totals();
@@ -386,8 +384,8 @@ void SubtreeBatchUpdateScenario::run()
         << BATT_INSPECT(this->seed) << BATT_INSPECT(i);
 
     ASSERT_NO_FATAL_FAILURE(
-          verify_deleted_point_queries(expected_table, actual_table, pending_deletes))
-          << BATT_INSPECT(this->seed) << BATT_INSPECT(i);
+        update_generator.verify_deleted_point_queries(expected_table, actual_table))
+        << BATT_INSPECT(this->seed) << BATT_INSPECT(i);
 
     if (((i + 1) % chi) == 0) {
       if (my_id == 0) {
@@ -424,7 +422,7 @@ void SubtreeBatchUpdateScenario::run()
           << BATT_INSPECT(this->seed) << BATT_INSPECT(i);
 
       ASSERT_NO_FATAL_FAILURE(
-          verify_deleted_point_queries(expected_table, actual_table, pending_deletes))
+          update_generator.verify_deleted_point_queries(expected_table, actual_table))
           << BATT_INSPECT(this->seed) << BATT_INSPECT(i);
 
       {
@@ -533,6 +531,7 @@ TEST(InMemoryNodeTest, SubtreeDeletions)
   SubtreeTable actual_table{*page_cache, tree_options, tree};
 
   batt::WorkerPool& worker_pool = batt::WorkerPool::null_pool();
+  turtle_kv::BatchUpdateMetrics metrics;
 
   Optional<PinningPageLoader> page_loader{*page_cache};
 
@@ -580,6 +579,8 @@ TEST(InMemoryNodeTest, SubtreeDeletions)
                   .worker_pool = worker_pool,
                   .page_loader = *page_loader,
                   .cancel_token = batt::CancelToken{},
+                  .metrics = metrics,
+                  .overcommit = llfs::PageCacheOvercommit::not_allowed(),
               },
           .result_set = std::move(result),
           .edit_size_totals = None,
@@ -589,7 +590,8 @@ TEST(InMemoryNodeTest, SubtreeDeletions)
       Status table_update_status = update_table(expected_table, update.result_set);
       ASSERT_TRUE(table_update_status.ok()) << BATT_INSPECT(table_update_status);
 
-      StatusOr<i32> tree_height_before = tree.get_height(*page_loader);
+      StatusOr<i32> tree_height_before =
+          tree.get_height(*page_loader, llfs::PageCacheOvercommit::not_allowed());
       ASSERT_TRUE(tree_height_before.ok()) << BATT_INSPECT(tree_height_before);
 
       Status status =  //
@@ -601,7 +603,8 @@ TEST(InMemoryNodeTest, SubtreeDeletions)
 
       ASSERT_TRUE(status.ok()) << BATT_INSPECT(status) << BATT_INSPECT(i);
 
-      StatusOr<i32> tree_height_after = tree.get_height(*page_loader);
+      StatusOr<i32> tree_height_after =
+          tree.get_height(*page_loader, llfs::PageCacheOvercommit::not_allowed());
       ASSERT_TRUE(tree_height_after.ok()) << BATT_INSPECT(tree_height_after);
 
       if (*tree_height_after == 0) {
@@ -620,7 +623,10 @@ TEST(InMemoryNodeTest, SubtreeDeletions)
 
       if (((i + 1) % chi) == 0) {
         std::unique_ptr<llfs::PageCacheJob> page_job = page_cache->new_job();
-        TreeSerializeContext context{tree_options, *page_job, worker_pool};
+        TreeSerializeContext context{tree_options,
+                                     *page_job,
+                                     worker_pool,
+                                     llfs::PageCacheOvercommit::not_allowed()};
 
         Status start_status = tree.start_serialize(context);
         ASSERT_TRUE(start_status.ok()) << BATT_INSPECT(start_status);
@@ -647,12 +653,16 @@ TEST(InMemoryNodeTest, SubtreeDeletions)
           std::array<std::pair<KeyView, ValueView>, kMaxScanSize> scan_items_buffer;
           KeyView min_key = update.result_set.get_min_key();
 
+          PageSliceStorage page_slice_storage;
+
           KVStoreScanner kv_scanner{*page_loader,
                                     root_ptr->page_id_slot_or_panic(),
-                                    BATT_OK_RESULT_OR_PANIC(root_ptr->get_height(*page_loader)),
+                                    BATT_OK_RESULT_OR_PANIC(root_ptr->get_height(
+                                        *page_loader,  //
+                                        llfs::PageCacheOvercommit::not_allowed())),
                                     min_key,
                                     tree_options.trie_index_sharded_view_size(),
-                                    None};
+                                    &page_slice_storage};
 
           usize n_read = 0;
           {
@@ -689,7 +699,8 @@ TEST(InMemoryNodeTest, SubtreeDeletions)
   LOG(INFO) << "Deleting key/value pairs from tree...";
   for (usize i = 0; i < total_batches; ++i) {
     bool perform_scan = i == 0 ? true : false;
-    StatusOr<i32> tree_height = tree.get_height(*page_loader);
+    StatusOr<i32> tree_height =
+        tree.get_height(*page_loader, llfs::PageCacheOvercommit::not_allowed());
     ASSERT_TRUE(tree_height.ok()) << BATT_INSPECT(tree_height);
     if (*tree_height > 0) {
       apply_tree_updates(create_deletion_batch, perform_scan);

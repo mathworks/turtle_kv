@@ -99,6 +99,11 @@ class ActivePivotsSetBase
     this->bit_set_ = insert_bit(this->bit_set_, i, v);
   }
 
+  BATT_ALWAYS_INLINE void remove(i32 i)
+  {
+    this->bit_set_ = remove_bit(this->bit_set_, i);
+  }
+
   BATT_ALWAYS_INLINE bool is_inactive() const
   {
     return this->bit_set_ == Bitset{};
@@ -134,8 +139,28 @@ class ActivePivotsSet128 : public ActivePivotsSetBase<std::array<u64, 2>>
       return;
     }
 
-    this->bit_set_[0] = (this->bit_set_[0] >> count) | (this->bit_set_[1] << (64 - count));
-    this->bit_set_[1] >>= count;
+    if (count < 64) {
+      this->bit_set_[0] = (this->bit_set_[0] >> count) | (this->bit_set_[1] << (64 - count));
+      this->bit_set_[1] >>= count;
+    } else {
+      this->bit_set_[0] = this->bit_set_[1] >> (count - 64);
+      this->bit_set_[1] = 0;
+    }
+  }
+
+  BATT_ALWAYS_INLINE void pop_back_pivots(i32 count)
+  {
+    if (count < 1) {
+      return;
+    }
+
+    if (count < 64) {
+      this->bit_set_[1] = (this->bit_set_[1] << count) | (this->bit_set_[0] >> (64 - count));
+      this->bit_set_[0] <<= count;
+    } else {
+      this->bit_set_[1] = this->bit_set_[0] << (count - 64);
+      this->bit_set_[0] = 0;
+    }
   }
 };
 

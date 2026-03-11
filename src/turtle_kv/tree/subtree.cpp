@@ -268,7 +268,7 @@ Status Subtree::apply_batch_update(const TreeOptions& tree_options,
           return OkStatus();
         }
 
-        Status status = new_subtree->flush_and_shrink(update.context);
+        Status status = new_subtree.flush_and_shrink(update_context);
 
         if (!status.ok()) {
           LOG(INFO) << "flush_and_shrink failed;" << BATT_INSPECT(needs_merge);
@@ -591,13 +591,13 @@ Status Subtree::try_merge(BatchUpdateContext& context, Subtree&& sibling) noexce
   return batt::case_of(
       this->impl_,
 
-      [&](const llfs::PageIdSlot& page_id_slot) -> StatusOr<Optional<Subtree>> {
+      [&](const llfs::PageIdSlot& page_id_slot) -> Status {
         BATT_PANIC() << "Cannot try merging a serialized subtree!";
 
         return {batt::StatusCode::kUnimplemented};
       },
 
-      [&](auto& in_memory) -> StatusOr<Optional<Subtree>> {
+      [&](auto& in_memory) -> Status {
         using PtrT = std::decay_t<decltype(in_memory)>;
 
         BATT_CHECK(batt::is_case<PtrT>(sibling.impl_));
