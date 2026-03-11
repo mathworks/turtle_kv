@@ -143,13 +143,6 @@ struct PackedNodePage {
         return this->active_pivots;
       }
 
-#if 0
-      std::array<u64, 2> get_active_pivots_with_overflow() const
-      {
-        return {this->active_pivots, u64{0}};
-      }
-#endif
-
       llfs::PageId get_leaf_page_id() const
       {
         return this->leaf_page_id.unpack();
