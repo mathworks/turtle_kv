@@ -1,8 +1,5 @@
 #pragma once
 
-#include <turtle_kv/config.hpp>
-//
-
 #include <turtle_kv/import/int_types.hpp>
 
 #include <batteries/case_of.hpp>
