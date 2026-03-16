@@ -194,6 +194,7 @@ struct BatchUpdateGenerator {
   StableStringStore strings;
   RandomResultSetGenerator result_set_generator;
   std::vector<KeyView> pending_deletes;
+  std::vector<KeyView> already_deleted;
   usize delete_frequency;
 
   explicit BatchUpdateGenerator(usize delete_frequency_param,
@@ -208,6 +209,8 @@ struct BatchUpdateGenerator {
   {
     ResultSet<false> result_set =
         result_set_generator(DecayToItem<false>{}, rng, this->strings, this->pending_deletes);
+
+    this->already_deleted = this->pending_deletes;
 
     if (update_pending_deletes) {
       if (!this->pending_deletes.empty()) {
@@ -227,7 +230,7 @@ struct BatchUpdateGenerator {
 
   void verify_deleted_point_queries(Table& expected_table, Table& actual_table)
   {
-    for (const KeyView& key : this->pending_deletes) {
+    for (const KeyView& key : this->already_deleted) {
       EXPECT_EQ(expected_table.get(key).status(), batt::StatusCode::kNotFound);
       EXPECT_EQ(actual_table.get(key).status(), batt::StatusCode::kNotFound);
     }
@@ -344,8 +347,6 @@ void SubtreeBatchUpdateScenario::run()
                 .metrics = metrics,
                 .overcommit = llfs::PageCacheOvercommit::not_allowed(),
             },
-        // TODO [vsilai 2026-01-09] Enable delete support for batch generation.
-        //
         .result_set = update_generator.next_batch(i, rng, /*update_pending_deletes=*/true),
         .edit_size_totals = None,
     };
@@ -497,7 +498,7 @@ TEST(InMemoryNodeTest, SubtreeDeletions)
                                  .set_value_size_hint(value_size);
 
   usize items_per_leaf = tree_options.flush_size() / tree_options.expected_item_size();
-  usize total_batches = 81;
+  usize total_batches = 100;
 
   std::vector<KeyView> keys;
   keys.reserve(total_batches * items_per_leaf);
@@ -551,15 +552,12 @@ TEST(InMemoryNodeTest, SubtreeDeletions)
 
     usize per_batch = items_per_leaf / total_batches;
     usize batch_remainder = items_per_leaf % total_batches;
+
+    usize offset = batch_number * per_batch + std::min(batch_number, batch_remainder);
     usize total_amount_per_batch = per_batch + (batch_number < batch_remainder ? 1 : 0);
 
-    for (usize i = 0; i < total_batches; ++i) {
-      usize base_i = i * items_per_leaf;
-      usize offset = batch_number * per_batch + std::min(batch_number, batch_remainder);
-
-      for (usize j = 0; j < total_amount_per_batch; ++j) {
-        current_batch.emplace_back(keys[base_i + offset + j], ValueView::deleted());
-      }
+    for (usize j = 0; j < total_amount_per_batch; ++j) {
+      current_batch.emplace_back(keys[offset + j], ValueView::deleted());
     }
     BATT_CHECK_LE(current_batch.size(), items_per_leaf) << BATT_INSPECT(batch_number);
 

@@ -25,6 +25,7 @@ using Level = UpdateBuffer::Level;
 using EmptyLevel = UpdateBuffer::EmptyLevel;
 using MergedLevel = UpdateBuffer::MergedLevel;
 using SegmentedLevel = UpdateBuffer::SegmentedLevel;
+using HybridLevel = UpdateBuffer::HybridLevel;
 using Segment = UpdateBuffer::Segment;
 
 using PackedUpdateBuffer = PackedNodePage::UpdateBuffer;
@@ -667,6 +668,20 @@ Status InMemoryNode::split_child(BatchUpdateContext& update_context, i32 pivot_i
                                     update_context.page_loader,
                                     update_context.overcommit)  //
               .split_pivot(pivot_i, pivot_key_range, sibling_min_key);
+        },
+        [&](HybridLevel& hybrid_level) -> Status {
+          for (auto& sub_level : hybrid_levels.levels) {
+            if (batt::is_case<SegmentedLevel>(sub_level)) {
+              SegmentedLevel& segmented_sub_level = std::get<SegmentedLevel>(sub_level);
+              BATT_REQUIRE_OK(in_segmented_level(*this,
+                                                 segmented_sub_level,
+                                                 update_context.page_loader,
+                                                 update_context.overcommit)  //
+                                  .split_pivot(pivot_i, pivot_key_range, sibling_min_key));
+            }
+
+            return OkStatus();
+          }
         }));
   }
 
@@ -853,7 +868,7 @@ Status InMemoryNode::try_merge(BatchUpdateContext& context,
                 },
                 [&](MergedLevel& right_merged_level) -> Status {
                   this->update_buffer.levels[i] =
-                      std::move(left_merged_level.concat(right_merged_level));
+                      std::move(left_merged_level.concat(std::move(right_merged_level)));
                   return OkStatus();
                 },
                 [&](SegmentedLevel& right_segmented_level) -> Status {
@@ -1957,6 +1972,51 @@ void InMemoryNode::UpdateBuffer::SegmentedLevel::check_items_sorted(
       item_i += slice_impl.size();
     });
   }
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+BoxedSeq<EditSlice> InMemoryNode::UpdateBuffer::HybridLevel::edit_slices(
+    InMemoryNode& node,
+    BatchUpdateContext& update_context,
+    Status& segment_load_status,
+    i32 min_pivot_i,
+    bool only_pivot,
+    Optional<KeyView> min_key) const
+{
+  std::vector<BoxedSeq<EditSlice>> sequences;
+  sequences.reserve(this->levels.size());
+
+  for (const std::variant<MergedLevel, SegmentedLevel>& level : this->levels) {
+    batt::case_of(
+        level,
+        [&](const MergedLevel& merged_level) {
+          sequences.emplace_back(
+              merged_level.result_set.live_edit_slices(node.get_pivot_key(min_pivot_i)) |
+              seq::boxed());
+        },
+        [&](const SegmentedLevel& segmented_level) {
+          if (!only_pivot || segmented_level.is_pivot_active(min_pivot_i)) {
+            sequences.emplace_back(
+                SegmentedLevelScanner<const InMemoryNode, const SegmentedLevel, llfs::PageLoader>{
+                    node,
+                    segmented_level,
+                    update_context.page_loader,
+                    llfs::PinPageToJob::kDefault,
+                    update_context.overcommit,
+                    segment_load_status,
+                    min_pivot_i,
+                    min_key} |
+                seq::boxed());
+          }
+        });
+  }
+
+  if (sequences.empty()) {
+    return seq::Empty<EditSlice>{} | seq::boxed();
+  }
+
+  return as_seq(std::move(sequences)) | seq::flatten() | seq::boxed();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

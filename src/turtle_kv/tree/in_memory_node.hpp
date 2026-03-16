@@ -386,7 +386,7 @@ struct InMemoryNode {
         return estimated;
       }
 
-      MergedLevel concat(MergedLevel& that)
+      MergedLevel concat(MergedLevel&& that)
       {
         return MergedLevel{
             .result_set = MergeCompactor::ResultSet<false>::concat(std::move(this->result_set),
@@ -404,7 +404,18 @@ struct InMemoryNode {
       SmallFn<void(std::ostream&)> dump() const;
     };
 
-    using Level = std::variant<EmptyLevel, MergedLevel, SegmentedLevel>;
+    struct HybridLevel {
+      std::vector<std::variant<MergedLevel, SegmentedLevel>> levels;
+
+      BoxedSeq<EditSlice> edit_slices(InMemoryNode& node,
+                                      BatchUpdateContext& update_context,
+                                      Status& segment_load_status,
+                                      i32 min_pivot_i,
+                                      bool only_pivot,
+                                      Optional<KeyView> min_key) const;
+    };
+
+    using Level = std::variant<EmptyLevel, MergedLevel, SegmentedLevel, HybridLevel>;
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -619,7 +630,7 @@ struct InMemoryNode {
   Subtree try_shrink();
 
   /** \brief Merge the node in place with its right sibling.
-   * 
+   *
    * Returns nullptr if `sibling` is completely consumed; otherwise, returns the modified sibling
    * since a borrow occurred.
    */
@@ -646,9 +657,9 @@ struct InMemoryNode {
                                             i32 pivot_i,
                                             const Interval<KeyView>& pivot_key_range);
 
-  /** \brief Merges and compacts all live edits in all levels/segments, producing a single level (if
-   * not size-tiered), or a series of non-key-overlapping levels with a single segment in each (if
-   * size-tiered).
+  /** \brief Merges and compacts all live edits in all levels/segments, producing a single level
+   * (if not size-tiered), or a series of non-key-overlapping levels with a single segment in each
+   * (if size-tiered).
    *
    * This can be done if node splitting fails, to reduce the serialized space required by getting
    * rid of all the non-zero flushed key upper bounds.  This should NOT be done under normal
