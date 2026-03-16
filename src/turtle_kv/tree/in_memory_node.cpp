@@ -8,6 +8,7 @@
 #include <turtle_kv/tree/leaf_page_view.hpp>
 #include <turtle_kv/tree/node_page_view.hpp>
 #include <turtle_kv/tree/segmented_level_scanner.hpp>
+#include <turtle_kv/tree/subtree_viability.hpp>
 
 #include <turtle_kv/core/algo/split_parts.hpp>
 #include <turtle_kv/core/key_view.hpp>
@@ -979,7 +980,7 @@ SubtreeViability InMemoryNode::get_viability() const
   NeedsMerge needs_merge;
 
   needs_merge.single_pivot = (this->pivot_count() == 1);
-  needs_merge.too_few_pivots = (this->pivot_count() < 4);
+  needs_merge.too_few_pivots = (this->pivot_count() < kMinPivotCount);
 
   if (needs_merge) {
     return needs_merge;
@@ -1118,7 +1119,7 @@ StatusOr<std::unique_ptr<InMemoryNode>> InMemoryNode::try_split_direct(BatchUpda
 
   BATT_CHECK_EQ(orig_pivot_count + 1, orig_pivot_keys.size());
 
-  std::array<u64, 2> tried_already = {0, 0};
+  ActivePivotsSet128 tried_already;
   usize split_pivot_i = (orig_pivot_count + 1) / 2;
 
   auto* node_lower_half = this;
@@ -1133,10 +1134,10 @@ StatusOr<std::unique_ptr<InMemoryNode>> InMemoryNode::try_split_direct(BatchUpda
   for (;;) {
     // If we ever try the same split point a second time, fail.
     //
-    if (get_bit(tried_already, split_pivot_i)) {
+    if (tried_already.get(split_pivot_i)) {
       return {batt::StatusCode::kInternal};
     }
-    tried_already = set_bit(tried_already, split_pivot_i, true);
+    tried_already.set(split_pivot_i, true);
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -1258,7 +1259,7 @@ StatusOr<std::unique_ptr<InMemoryNode>> InMemoryNode::try_split_direct(BatchUpda
 
     // If the lower half is too large, then move the split point down and retry if possible.
     //
-    if (split_pivot_i > 4 && batt::is_case<NeedsSplit>(lower_viability) &&
+    if (split_pivot_i > kMinPivotCount && batt::is_case<NeedsSplit>(lower_viability) &&
         !batt::is_case<NeedsSplit>(upper_viability)) {
       --split_pivot_i;
       continue;
@@ -1266,8 +1267,8 @@ StatusOr<std::unique_ptr<InMemoryNode>> InMemoryNode::try_split_direct(BatchUpda
 
     // If the upper half is too large, then move the split point up and retry if possible.
     //
-    if (split_pivot_i + 4 < orig_pivot_count && batt::is_case<NeedsSplit>(upper_viability) &&
-        !batt::is_case<NeedsSplit>(lower_viability)) {
+    if (split_pivot_i + kMinPivotCount < orig_pivot_count &&
+        batt::is_case<NeedsSplit>(upper_viability) && !batt::is_case<NeedsSplit>(lower_viability)) {
       ++split_pivot_i;
       continue;
     }
