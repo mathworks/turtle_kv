@@ -1,5 +1,6 @@
 #pragma once
 
+#include <turtle_kv/tree/active_pivots_set.hpp>
 #include <turtle_kv/tree/leaf_page_view.hpp>
 #include <turtle_kv/tree/packed_leaf_page.hpp>
 
@@ -54,6 +55,8 @@ class SegmentedLevelScanner : private SegmentedLevelScannerBase
   using PinnedPageT = typename PageLoader::PinnedPageT;
   using Segment = typename Level::Segment;
   using ActivePivotsSetT = decltype(std::declval<const Segment&>().get_active_pivots());
+
+  static_assert(ActivePivotsSet<ActivePivotsSetT>);
 
   using Item = EditSlice;
 
