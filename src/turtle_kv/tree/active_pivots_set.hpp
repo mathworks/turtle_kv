@@ -205,5 +205,6 @@ class PackedActivePivotsSet64 : public ActivePivotsSetBase<little_u64>
 };
 
 static_assert(ActivePivotsSet<PackedActivePivotsSet64>);
+static_assert(sizeof(PackedActivePivotsSet64) == 8);
 
 }  // namespace turtle_kv
