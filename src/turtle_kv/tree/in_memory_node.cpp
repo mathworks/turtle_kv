@@ -16,6 +16,7 @@
 #include <turtle_kv/core/value_view.hpp>
 
 #include <batteries/case_of.hpp>
+#include <batteries/require.hpp>
 
 namespace turtle_kv {
 
@@ -46,6 +47,8 @@ using PackedSegment = PackedUpdateBuffer::Segment;
                                              packed_node.is_size_tiered());
 
   const usize pivot_count = packed_node.pivot_count();
+
+  BATT_REQUIRE_LE(pivot_count, kMaxPivots);
 
   node->tree_options = tree_options;
   node->height = packed_node.height;
@@ -608,6 +611,13 @@ Status InMemoryNode::split_child(BatchUpdateContext& update_context, i32 pivot_i
 #if TURTLE_KV_PROFILE_UPDATES
   update_context.metrics.split_count.add(1);
 #endif
+
+  // Make sure we don't exceed the temporary pivot count limit.
+  //
+  BATT_CHECK_LT(this->pivot_count(), (i32)InMemoryNode::kMaxTempPivots);
+  auto on_scope_exit = batt::finally([&] {
+    BATT_CHECK_LE(this->pivot_count(), (i32)InMemoryNode::kMaxTempPivots);
+  });
 
   Subtree& child = this->children[pivot_i];
 
