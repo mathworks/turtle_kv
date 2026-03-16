@@ -980,7 +980,7 @@ SubtreeViability InMemoryNode::get_viability() const
   NeedsMerge needs_merge;
 
   needs_merge.single_pivot = (this->pivot_count() == 1);
-  needs_merge.too_few_pivots = (this->pivot_count() < kMinPivotCount);
+  needs_merge.too_few_pivots = (this->pivot_count() < kMinPivots);
 
   if (needs_merge) {
     return needs_merge;
@@ -1259,7 +1259,7 @@ StatusOr<std::unique_ptr<InMemoryNode>> InMemoryNode::try_split_direct(BatchUpda
 
     // If the lower half is too large, then move the split point down and retry if possible.
     //
-    if (split_pivot_i > kMinPivotCount && batt::is_case<NeedsSplit>(lower_viability) &&
+    if (split_pivot_i > kMinPivots && batt::is_case<NeedsSplit>(lower_viability) &&
         !batt::is_case<NeedsSplit>(upper_viability)) {
       --split_pivot_i;
       continue;
@@ -1267,7 +1267,7 @@ StatusOr<std::unique_ptr<InMemoryNode>> InMemoryNode::try_split_direct(BatchUpda
 
     // If the upper half is too large, then move the split point up and retry if possible.
     //
-    if (split_pivot_i + kMinPivotCount < orig_pivot_count &&
+    if (split_pivot_i + kMinPivots < orig_pivot_count &&
         batt::is_case<NeedsSplit>(upper_viability) && !batt::is_case<NeedsSplit>(lower_viability)) {
       ++split_pivot_i;
       continue;

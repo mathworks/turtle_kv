@@ -1,5 +1,8 @@
 #pragma once
 
+#include <turtle_kv/config.hpp>
+//
+
 #include <turtle_kv/import/int_types.hpp>
 
 #include <batteries/case_of.hpp>
@@ -9,10 +12,6 @@
 #include <variant>
 
 namespace turtle_kv {
-
-/** \brief The minimum number of pivots allowed in a non-root node.
- */
-inline constexpr u16 kMinPivotCount = 4;
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 //

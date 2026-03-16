@@ -462,12 +462,12 @@ struct InMemoryNode {
 
   usize max_pivot_count() const
   {
-    return this->is_size_tiered() ? kMaxPivots : kMaxPivots;
+    return kMaxPivots;
   }
 
   usize max_segment_count() const
   {
-    return this->is_size_tiered() ? (kMaxPivots - 1) : (kMaxPivots - 1);
+    return kMaxPivots - 1;
   }
 
   Slice<const KeyView> get_pivot_keys() const
