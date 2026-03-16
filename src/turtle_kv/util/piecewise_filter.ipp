@@ -154,7 +154,7 @@ Interval<OffsetT> PiecewiseFilter<OffsetT>::find_live_range(Interval<OffsetT> i)
   OffsetT start_i = i.lower_bound;
   OffsetT end_i = i.upper_bound;
 
-  BATT_CHECK_LT(start_i, end_i);
+  BATT_CHECK_LE(start_i, end_i);
 
   auto iter = std::lower_bound(this->dropped_.begin(),
                                this->dropped_.end(),
@@ -183,7 +183,7 @@ Interval<OffsetT> PiecewiseFilter<OffsetT>::find_live_range(Interval<OffsetT> i)
     end_i = std::min(end_i, iter->lower_bound);
   }
 
-  BATT_CHECK_LT(start_i, end_i) << BATT_INSPECT(i);
+  BATT_CHECK_LE(start_i, end_i) << BATT_INSPECT(i);
 
   return Interval<OffsetT>{start_i, end_i};
 }
