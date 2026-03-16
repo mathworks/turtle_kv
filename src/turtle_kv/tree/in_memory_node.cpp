@@ -1720,7 +1720,7 @@ void InMemoryNode::UpdateBuffer::Segment::pop_front_pivots(i32 count)
 //
 bool InMemoryNode::UpdateBuffer::Segment::is_inactive() const
 {
-  const bool inactive = this->active_pivots.is_inactive();
+  const bool inactive = this->active_pivots.is_empty();
   if (inactive) {
     Slice<const Interval<u32>> filter_dropped_ranges = this->filter.dropped();
     BATT_CHECK_EQ(filter_dropped_ranges.size(), 1);

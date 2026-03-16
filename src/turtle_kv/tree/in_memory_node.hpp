@@ -107,7 +107,7 @@ struct InMemoryNode {
 
       /** \brief Returns the active pivots bit set.
        */
-      auto get_active_pivots() const
+      ActivePivotsSet128 get_active_pivots() const
       {
         return this->active_pivots;
       }

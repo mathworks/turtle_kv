@@ -17,37 +17,47 @@ namespace turtle_kv {
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 //
 template <typename T>
-concept ActivePivotsSet = requires(T pivots) {
+concept ConstActivePivotsSet = requires(const T& obj, i32 index, bool value, std::ostream& out) {
   // count
-  { std::declval<const T&>().count() } -> std::convertible_to<usize>;
-
-  // set
-  { pivots.set(std::declval<i32>(), std::declval<bool>()) } -> std::same_as<void>;
+  { obj.count() } -> std::convertible_to<usize>;
 
   // get
-  { std::declval<const T&>().get(std::declval<i32>()) } -> std::same_as<bool>;
+  { obj.get(index) } -> std::convertible_to<bool>;
 
   // first
-  { std::declval<const T&>().first() } -> std::convertible_to<i32>;
+  { obj.first() } -> std::convertible_to<i32>;
 
   // last
-  { std::declval<const T&>().last() } -> std::convertible_to<i32>;
+  { obj.last() } -> std::convertible_to<i32>;
 
   // next
-  { std::declval<const T&>().next(std::declval<i32>()) } -> std::convertible_to<i32>;
+  { obj.next(index) } -> std::convertible_to<i32>;
 
   // printable
-  {
-    std::declval<std::ostream&>() << std::declval<const T&>().printable()
-  } -> std::convertible_to<std::ostream&>;
+  { out << obj.printable() } -> std::convertible_to<std::ostream&>;
 
-  // is_inactive
-  { std::declval<const T&>().is_inactive() } -> std::same_as<bool>;
+  // is_empty
+  { obj.is_empty() } -> std::convertible_to<bool>;
 };
 
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+//
 template <typename T>
-concept HasActivePivotsSet = requires(const T& obj) {
-  { obj.get_active_pivots() } -> ActivePivotsSet;
+concept MutableActivePivotsSet = requires(T& obj, i32 index, bool value) {
+  // set
+  { obj.set(index, value) };
+};
+
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+//
+template <typename T>
+concept ActivePivotsSet = ConstActivePivotsSet<T> && MutableActivePivotsSet<T>;
+
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+//
+template <typename T>
+concept HasConstActivePivotsSet = requires(const T& obj) {
+  { obj.get_active_pivots() } -> ConstActivePivotsSet;
 };
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
@@ -58,7 +68,9 @@ template <typename Bitset>
 class ActivePivotsSetBase
 {
  public:
-  BATT_ALWAYS_INLINE ActivePivotsSetBase() noexcept : bit_set_{} {}
+  BATT_ALWAYS_INLINE ActivePivotsSetBase() noexcept : bit_set_{}
+  {
+  }
 
   BATT_ALWAYS_INLINE explicit ActivePivotsSetBase(const Bitset& bit_set) : bit_set_{bit_set}
   {
@@ -99,7 +111,7 @@ class ActivePivotsSetBase
     this->bit_set_ = insert_bit(this->bit_set_, i, v);
   }
 
-  BATT_ALWAYS_INLINE bool is_inactive() const
+  BATT_ALWAYS_INLINE bool is_empty() const
   {
     return this->bit_set_ == Bitset{};
   }
@@ -127,7 +139,7 @@ class ActivePivotsSet128 : public ActivePivotsSetBase<std::array<u64, 2>>
   }
 
   /** \brief Removes the specified number (`count`) pivots from the bit set.
- */
+   */
   BATT_ALWAYS_INLINE void pop_front_pivots(i32 count)
   {
     if (count < 1) {

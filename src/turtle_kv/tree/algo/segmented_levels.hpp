@@ -90,13 +90,13 @@ inline i32 get_last_active_pivot(const CInterval<usize>& pivot_range)
 
 //----- --- -- -  -  -   -
 
-template <HasActivePivotsSet T>
+template <HasConstActivePivotsSet T>
 inline i32 get_first_active_pivot(const T& segment)
 {
   return segment.get_active_pivots().first();
 }
 
-template <HasActivePivotsSet T>
+template <HasConstActivePivotsSet T>
 inline i32 get_last_active_pivot(const T& segment)
 {
   return segment.get_active_pivots().last();

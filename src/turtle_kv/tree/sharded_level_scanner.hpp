@@ -244,7 +244,7 @@ inline auto ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::peek_next_impl(bool
 
   ActivePivotsSetT active_pivots = segment->get_active_pivots();
   {
-    BATT_CHECK(!active_pivots.is_inactive()) << "This segment should have been dropped!";
+    BATT_CHECK(!active_pivots.is_empty()) << "This segment should have been dropped!";
   }
 
   // Check for need to load new segment.
