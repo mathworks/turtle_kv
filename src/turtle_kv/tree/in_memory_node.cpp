@@ -1553,7 +1553,7 @@ StatusOr<SegmentedLevel> MergedLevel::finish_serialize(const InMemoryNode& node,
                           context.get_build_page_result(this->segment_future_ids_[segment_i]));
 
     segment.page_id_slot.page_id = pinned_leaf_page.page_id();
-    segment.active_pivots = {};
+    segment.active_pivots.clear();
 
     const PackedLeafPage& leaf_page = PackedLeafPage::view_of(pinned_leaf_page);
 

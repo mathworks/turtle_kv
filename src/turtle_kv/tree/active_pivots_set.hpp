@@ -131,6 +131,25 @@ class ActivePivotsSet128 : public ActivePivotsSetBase<std::array<u64, 2>>
   friend class PackedActivePivotsSet64;
 
  public:
+  using Super = ActivePivotsSetBase<std::array<u64, 2>>;
+  using Self = ActivePivotsSet128;
+
+  BATT_ALWAYS_INLINE ActivePivotsSet128() noexcept : Super{}
+  {
+    // Make sure the bit set starts out empty.
+    //
+    this->clear();
+  }
+
+  /** \brief Removes all pivots from the set.
+   */
+  BATT_ALWAYS_INLINE void clear()
+  {
+    this->bit_set_.fill(0);
+  }
+
+  /** \brief Returns a printable representation of this object.
+   */
   BATT_ALWAYS_INLINE auto printable() const
   {
     return [this](std::ostream& out) {
