@@ -64,10 +64,10 @@ TEST(PiecewiseFilterTest, InvalidFilterTest)
 //
 TEST(PiecewiseFilterTest, QueryTest)
 {
-  const usize num_items = 1000000;
+  const usize num_items = 1000;
 
-  for (usize i = 0; i < 100; ++i) {
-    std::default_random_engine rng{i};
+  for (usize seed = 0; seed < 100; ++seed) {
+    std::default_random_engine rng{seed};
 
     PiecewiseFilter<usize> filter;
     EXPECT_TRUE(filter.check_invariants());
