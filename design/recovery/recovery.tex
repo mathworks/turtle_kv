@@ -1,0 +1,549 @@
+\documentclass[11pt]{article}
+\usepackage[margin=3cm]{geometry}
+\usepackage{graphicx}
+	\usepackage{times}
+
+\title{TurtleKV Recovery Design}
+\author{
+Tony Astolfi
+\and
+Gabe Bornstein
+}
+
+\begin{document}
+\maketitle{}
+
+%%------------------------------------------------------------------------------
+\section{Concepts}\label{section:concepts}
+
+\subsection{Edit}
+
+A single-key modification to the database.
+
+\subsection{EditOffset (bytes)}
+
+A scalar quantity that uniquely identifies a location in the logical
+ordering of edits to the database.  Equal to the total size of all the
+individual edit records since the database was in an \textit{Empty}
+state.
+
+Every Edit is assigned a unique EditOffset interval
+\texttt{$e_{begin}$...$e_{end}$}, when the edit is applied to the
+database.  Edits to a given key must be applied in-order on recovery
+(R7) for consistency, as the order of update may affect the eventual
+key value.  We also need to recover the total order of update between
+edits of different keys so that we can recover as many edits as
+possible, and so that we can answer point-in-time queries consistently
+across restart/recovery.
+
+\subsection{Checkpoint}
+
+A TurtleTree that captures the end state of all edits up to some
+EditOffset, the \textit{UpperBound} of the Checkpoint.
+
+\subsection{Log}\label{section:concepts:log}
+
+An append-only, fixed maximum capacity file which stores edits more
+recent than the latest committed Checkpoint.  The Log
+``file\footnote{The Log may be a self-contained file, a contiguous
+region of some other file, or a contiguous region of a raw block
+device.}" begins with a 4KiB \textit{Meta-Block}, followed by a series
+of fixed size (default: 8KiB) \textit{Blocks}:
+
+\vspace{11pt}
+\includegraphics[width=0.9\textwidth]{figures/LogLayout.pdf}
+\vspace{11pt}
+
+The Meta-Block contains a magic number, a version number (of the Log
+file layout; \texttt{1} for the format described in this document),
+the Block size $B$ and count $N$, and the approximate active upper
+bound and lower bound Block index (the \textit{active range}).  The
+active range marks the contiguous set of Blocks which are in active
+use, within a configured number of bytes (default=32MiB; the active
+range accuracy $\Delta$, given in units of Block size, is also stored
+as a field in the Meta-Block).  During Normal Operation
+(post-Recovery), the Log's Meta-Block is periodically updated to keep
+the active range up to date, within the configured accuracy
+($\Delta$).
+
+Note, the ``upper-bound" of the active range may be less-than the
+``lower-bound," since both are given as Block indices relative to the
+Log file start; if this is the case, it indicates that the active
+range of blocks wraps around from the end of the file (i.e. the last
+Black) back round to Block 1.  The stored active range bounds are
+approximate because the true bound may be anywhere from the stated
+index $I$ up to $I+\Delta$.
+
+The Log \textbf{must not} ever record an active range $I_{lower},
+I_{upper}, \Delta$ such that (any of):
+
+\iffalse{}
+OK:
+\begin{itemize}
+	\item $I_{lower} \le I_{upper} < (I_{upper}+\Delta) \pmod{N} $
+	\item $I_{upper} < (I_{upper}+\Delta) \le I_{lower} \pmod{N} $
+	\item $(I_{upper}+\Delta) \le I_{lower} \le I_{upper} \pmod{N} $
+\end{itemize}
+\fi
+
+\begin{itemize}
+	\item[a.] $(I_{upper}+\Delta) < I_{upper} \le I_{lower} \pmod{N} $
+	\item[b.] $I_{lower} < (I_{upper}+\Delta) \le I_{upper} \pmod{N} $
+	\item[c.] $I_{upper} \le I_{lower} < (I_{upper}+\Delta) \pmod{N} $
+\end{itemize}
+
+\begin{figure*}
+	\centering
+	\includegraphics[width=0.98\textwidth]{figures/LogActiveRange.pdf}
+	\caption{Valid and Invalid Active Log Ranges, as recorded by
+          the Meta-Block.  $I_{lower}$ may not appear in between
+          $I_{upper}$ and $I_{upper} + \Delta$ (with wrap-around)}
+\end{figure*}
+
+\subsection{MemTable}
+
+An in-memory dictionary data structure that stores an index of Edits
+newer than the most recent Checkpoint.  A given MemTable does not
+necessary contain all Edits newer than a Checkpoint; there may be
+several MemTables between Checkpoints.
+
+The current MemTable implementation uses Adaptive Radix Trees (ARTs)
+with Optimistic Lock Coupling (OLC).
+
+\subsection{Block}
+
+The Log is stored as a collection of fixed-size Blocks (currently of
+size 8KiB).  Blocks are laid out (Figure \ref{figure:blocklayout}) as
+a fixed-size header (64 bytes), followed by a series of
+variable-length \textit{Slots}, and then finally a reverse-order array
+of the ending offset of each Slot relative to the end of the header.
+The Block header includes the union interval of the EditOffset
+intervals of all edits contained in its Slots, stored as a
+\texttt{u64}, the lower bound EditOffset (inclusive), and the 32-bit
+delta of the upper bound (exclusive).  The delta between lower and
+upper bound EditOffset in a Block must be less than $2^{32}$, because
+we store the EditOffset of each slot as a \texttt{u32} offset from the
+lower bound (\texttt{u64}) of the Block.
+
+\begin{figure}
+\centering
+\includegraphics[width=0.25\columnwidth]{figures/BlockLayout.pdf}
+\caption{Log Block layout}\label{figure:blocklayout}
+\end{figure}
+
+The order of Slots containing Edits in a Block \textbf{must} match the
+order of their EditOffsets.\footnote{In practice, this comes for free
+as a consequence of a design where Block buffers are allocated
+exclusively to a single thread.}
+
+%%------------------------------------------------------------------------------
+\section{Requirements}\label{section:requirements}
+
+The recovery design for TurtleKV is constrained by the following:
+
+\begin{enumerate}
+	\item[R1.] The Log must retain all edits newer than the most
+          recent recovered Checkpoint (TurtleTree)
+	\item[R2.] The Log must trim all edits that have been
+          incorporated into a committed Checkpoint
+	\item[R3.] The unit of writing to the Log is a Block
+	\item[R4.] Blocks are fixed size (in the current design, 8KiB)
+	\item[R5.] The Block size may be greater than the unit of
+          atomic update for the Log's storage device (typically 512B
+          up to 4KiB)
+	\item[R6.] During Recovery, the system must be able to detect
+          \textit{short writes} (i.e. Blocks which have only been
+          partially written)
+	\item[R7.] The original total order (EditOffset) of Edits must
+          be preserved across recoveries
+	\item[R8.] The Blocks in the Log must be written and
+          trimmed/over-written in a consistent order, to minimize
+          storage device overhead (i.e., the Block writing pattern
+          should be ``circular")
+	\item[R9.] There must be no Block in the Log whose EditOffset
+          interval spans the upper bound offset of a Checkpoint (i.e.,
+          all Blocks must be either after a Checkpoint, or included in
+          it)
+\end{enumerate}
+
+When comparing two designs, all else being equal, the design of better
+\textit{Quality}:
+
+\begin{enumerate}
+	\item[Q1.] Minimizes the stored footprint per item (space amplification)
+	\item[Q2.] Minimizes memory overhead during normal (post-Recovery) operation
+	\item[Q3.] Minimizes the latency of Recovery
+	\item[Q4.] Minimizes the memory overhead of Recovery
+\end{enumerate}
+
+%%------------------------------------------------------------------------------
+\section{Design}
+
+\subsection{Normal Operation}
+
+When an Edit is applied to the database, it is assigned a unique
+EditOffset.  This is done by maintaining a per-database
+\texttt{std::atomic<u64>} variable, \texttt{next\_offset},
+representing the least unused EditOffset; when processing an edit $e$,
+we compute the serialized Log Slot size $|e|$ of $e$, and then invoke:
+\texttt{e\_offset = next\_offset.fetch\_add($|e|$)} to assign the
+EditOffset of $e$.
+
+Once the EditOffset of $e$ has been determined, $e$ is added to a Slot
+in a Block, so it can be appended to the Log.  Each thread that uses
+the database has its own exclusive Log Writer Context.  This Context
+stores an atomic pointer to the current Block buffer for its owning
+thread.  One (or more) background threads managed by the Log Writer
+are responsible for periodically ``stealing" ownership of the Block
+buffers so they can be written to the Log.  While ownership of a Block
+buffer resides with the thread who created it, that thread has
+exclusive access free from data races.
+
+When a thread wishes to append an Edit to the Log, it requests a
+destination buffer, which is a slice (corresponding to a Slot) of a
+Block buffer from its Log Writer Context.  The inputs for this request
+are:
+
+\begin{itemize}
+	\item \texttt{min\_lb}: The minimum required EditOffset lower
+          bound for the Block
+	\item \texttt{edit\_offset}: The EditOffset lower bound of the
+          Edit
+	\item \texttt{edit\_size}: The size $|e|$ of the serialized
+          Edit (i.e., the size of the Slot)
+\end{itemize}
+
+The Block header and Slot sizes are updated to reflect the allocation
+of a new Slot.  The Block's EditSlot upper bound is also increased (if
+necessary) so that it includes the new slot:
+
+\vspace{11pt} \small{\texttt{block.upper\_bound =
+    max(block.upper\_bound, edit.lower\_bound + edit.size)}}
+\vspace{11pt}
+
+The Block that is returned to the caller (into which the edit is
+serialized) will be guaranteed to have an EditOffset lower bound
+not-before the specified minimum lower bound.  This lets the caller
+guarantee that the Block into which a given Edit is serialized does
+not also contain Edits older a given offset.
+
+To guarantee a consistent order of updates between the MemTable index
+and the stored EditOffsets associated with each slot, a writer only
+requests a Block to write into once it has determined where the update
+will go in the MemTable (ART) index.  At the point when an ART-node
+write lock has been acquired by the writer thread, we do the
+\texttt{fetch\_add} on \texttt{next\_offet}, bail out if the MemTable
+has overflowed, and eventually obtain a writable slot in a Block
+buffer.  Contention across threads should not be impacted by this
+design since \texttt{fetch\_add} is non-blocking; because of this,
+there is no possibility of deadlock introduced.
+
+The Edit slot stores its EditOffset as a \texttt{u32} offset from the
+lower bound (\texttt{u64}) of the Block.  In the unlikely event that
+this would cause an integer overflow, we just retry the Block buffer
+allocation after updating \texttt{min\_lb}.
+
+\subsubsection{MemTable Full}
+
+MemTables have a maximum capacity (bytes).  When an Edit is applied,
+the assigned EditOffset may indicate that the Edit cannot be added to
+the current MemTable without exceeding its capacity.  When this
+happens, the MemTable is permanently locked against future
+modifications (i.e., it is \textit{finalized}).
+
+MemTable boundaries are candidates for Checkpoint (upper bounds), so
+when a MemTable is finalized, the next MemTable must use a
+\texttt{min\_lb} EditOffset value equal to \texttt{next\_offset} (when
+the MemTable is created).
+
+\subsubsection{Periodic Updating of \texttt{min\_lb}}\label{section:minlbrebase}
+
+When the database is shut down and later recovered, the Checkpoint
+distance parameter (which determines the capacity of a MemTable) may
+be set to a smaller value than it was before the restart.  For
+example, the memory budget for the database may have been decreased.
+However, since (R9) requires that no Checkpoint may have an upper
+bound that bisects the EditOffset interval of a Block, it may not be
+possible to find a valid Checkpoint upper bound to fit the new
+Checkpoint distance.
+
+To prevent this from happening\footnote{or at least, to minimize the
+negative impact of this effect}, MemTables should periodically
+"re-base" their \texttt{min\_lb}, by increasing it to the current
+\texttt{next\_offset}.  This may waste up to $B-c$ bytes in each
+active Block buffer (where $B$ is the size of a Block and $c$ is some
+small constant).  This overhead is amortized against the period of
+re-base, which should not be less than the size of a Checkpoint update
+batch ($=L$, the leaf size, by default 32MiB).
+
+\iffalse{}
+\subsubsection{Key \texttt{locator}s}
+
+The current design provides two formats for Edit slots; one for when a
+key is first seen by a MemTable, and one for when the key is updated
+with a new value.  The former of these includes the key bytes in the
+slot itself; the latter replaces the key with a 32-bit integer
+\texttt{locator} field.  This is broken into the upper 16-bits, which
+identifies the Block (index) within the scope of the MemTable which
+created it, and the lower 16-bits, which is the slot index within that
+Block.
+
+In order to recover the association between a physical Block in the
+Log and the MemTable-scoped Block index used in locators, the current
+Block header contains a 64-bit value called \texttt{owner\_id}.  This
+is problematic in the new recovery design, after the introduction of
+Big MemTables, which decouple Checkpoint batches from MemTables in
+order to eliminate the trade-off between higher in-memory costs for
+queries on recent updates and lower update costs from larger
+Checkpoint distance.
+
+The problem is that Big MemTables change the association between
+Blocks and MemTables from static and durable in storage to a dyanmic,
+runtime relationship which is not saved and may change between
+restarts.  Also, locators create a link between blocks which
+constrains Log trimming: the Log cannot be trimmed at a given point if
+doing so would discard a Slot referenced by a locator in some later
+Block.
+
+We could attempt to keep locators and introduce a notion of
+\textit{Log Epochs}, which would be logical segments of the Log
+delineated by the points at which the \texttt{min\_lb} is re-based as
+described in $\S$\ref{section:minlbrebase}.  However, this makes the
+job of the MemTable more complicated, as it now needs to track (in the
+ART entries) whether a given key has been seen in the current epoch,
+which blocks belong to which Epoch, etc.
+
+It is not clear that the benefit of locators (reducing the size of
+Edit Log Slots for frequently updated keys) outweigh these costs in
+additional complexity and runtime overhead.  Therefore, this design
+proposes to remove locators in favor of a single Edit slot layout,
+which always includes the key bytes\footnote{There are several design
+options available if we want to reintroduce something like this; e.g.,
+we could only store keys the first time they appear within a Block.}.
+\fi{}
+
+%%------------------------------------------------------------------------------
+\subsection{Recovery}
+
+This document does not cover the design for recovering the latest
+Checkpoint; that is already handled through our use of \texttt{LLFS}
+Volumes to implement the Checkpoint Log (not to be confused with the
+Write-Ahead-Log or Change-Log for recent updates, which is what the
+unqualified term ``Log" refers to in this document).
+
+\subsubsection{Inputs to Recovery}
+
+\begin{itemize}
+	\item The latest Checkpoint's EditOffset upper bound
+	\item The current value of Checkpoint distance (in units of
+          batch size = leaf page size)
+	\item The set of recovered Block buffers, with their physical
+          Log file offset (in units of Block size)
+\end{itemize}
+
+\subsubsection{Outputs/Effects of Recovery}
+
+\begin{itemize}
+	\item A single active MemTable
+	\item An ordered sequence of zero or more finalized MemTables
+	\item The Log file offsets (in units of Block size) of the
+          oldest and newest active Blocks
+	\item All MemTables contain ART entries for the keys edited
+          within their time span (the MemTable's \textit{scope}), each
+          with the latest value for that key within the MemTable's
+          scope
+	\item All MemTables contain owning references (i.e.,
+          \texttt{boost::intrusive\_ptr} or equivalent) to all Blocks
+          in their scope; ART entries will reference key/value data
+          from these Blocks
+	\item The \texttt{ChangeLogFile} object's (block) lower/upper
+          bound members are initialized to \textit{logical}
+          equivalents of the Log file offset bounds (see previous
+          item): if the physical newest block offset is less than the
+          oldest, its logical equivalent is physical offset plus the
+          capacity of the Log; the logical lower bound is always the
+          physical lower bound
+	\item All Block buffers own a \texttt{ChangeLogReadLock}
+          covering their logical offset in the Log
+	\item The Checkpoint generator is initialized with the latest
+          recovered Checkpoint upper bound
+	\item The Checkpoint update pipeline is initialized with the
+          finalized MemTables
+\end{itemize}
+
+\subsubsection{Recovery Algorithm}
+
+\begin{figure*}
+\centering
+\includegraphics[width=0.85\columnwidth]{figures/RecoveryScenario.pdf}
+\caption{\small{A possible recovery scenario.  Boxes represent Blocks;
+    green checkmarks are recovered Blocks, red x's are unrecoverable
+    Blocks; the left- and right-edges of each Block's box in the
+    diagram represent the EditOffset interval of the Block. Cluster
+    boundaries are shown by large-dashed gray vertical lines; there
+    are three Clusters.  The blue vertical dotted line represents the
+    upper bound of the longest contiguous sequence of recoverable Edit
+    slots.  Everything to the right, in the gray hashed region, is not
+    recoverable because of the top-most of the two Blocks with a red
+    X.}}\label{figure:recoveryscenario}
+\end{figure*}
+
+\textbf{Phase 1: Recover Clusters from Blocks}
+
+\begin{enumerate}
+	\item Read all Blocks in the Log's active range
+          ($\S$\ref{section:concepts:log}) as recovered set $R$
+	\item Remove from $R$ any Blocks for which any of the following are true:
+	\begin{enumerate}
+		\item EditOffset upper bound is not greater-than the
+                  latest recovered Checkpoint upper bound
+		\item Magic number is not correct
+		\item Data integrity hash does not match the actual
+                  contents of the Block
+	\end{enumerate}
+	\item Partition $R$ into disjoint \textit{Clusters} ($C_1,
+          C_2, C_3, ...$) such that any two Blocks $b_i, b_j$ are in
+          the same Cluster if their EditOffset intervals overlap.
+          Note, not every pair of Blocks in a given Cluster will
+          necessarily have overlapping EditOffset intervals
+		\begin{itemize}
+		    \item[] In the example of Figure
+                      \ref{figure:recoveryscenario}, Block $b_1$ must
+                      be in the same cluster as $b_2$ because they
+                      overlap, and the same is true for $b_2$ and
+                      $b_3$; so, $b_1$ and $b_3$ end up in the same
+                      Cluster $C_1$, even though their EditOffset
+                      intervals are disjoint.
+		\end{itemize}
+	\item For all Clusters, verify that the total sizes of all
+          Slots in all Blocks of that Cluster is exactly equal to the
+          size of the EditOffset interval for the Cluster.  The first
+          (in EditOffset order) Cluster for which this is \textit{not}
+          true is the \textit{last recovered Cluster}; all Clusters
+          after the last are dropped
+	\item For the last recovered Cluster $C_{\Omega}$ (if there is
+          one-- in the example, $C_3$):
+	\begin{enumerate}
+		\item Create a priority queue of all the recovered
+                  Blocks in $C_{\Omega}$, prioritized by the
+                  EditOffset of the first unprocessed Slot in the
+                  Block
+		\item While there are no gaps in the sequence of
+                  recovered Slots, continue to pull the first Block
+                  out of the queue, marking its first unprocessed slot
+                  as processed (+recovered), and re-inserting the
+                  Block into the queue
+		\item When a gap is encountered (i.e., the lower bound
+                  of the next unprocessed Slot is greater than the
+                  upper bound of the previously processed Slot),
+                  \textsc{Stop;} add the longest recovered prefix
+                  $C_{\Omega}'$ of $C_{\Omega}$ to the set of
+                  recovered Clusters
+		\begin{itemize}
+		    \item[] In the example of Figure
+                      \ref{figure:recoveryscenario}, we stop when we
+                      reach the offset of the first slot in $b_7$.  If
+                      we continue past that point, to include the
+                      remainders of $b_4, b_5,$ and $b_6$, there will
+                      be some Edits missing (in unrecoverable block
+                      $b_7$).  Therefore we only recover a prefix of
+                      of the Slots/Edits in Blocks $b_4, b_5,$ and
+                      $b_6$.  None of the Edits in $b_8$ are
+                      recoverable, despite the fact that $b_8$ is
+                      recoverable per se, because of the gap created
+                      by $b_7$.
+		\end{itemize}
+	\end{enumerate}
+\end{enumerate}
+
+\textit{Phase 1 Outputs:}
+
+\begin{itemize}
+	\item Block Clusters: $C_1, C_2, ... C_{\Omega}'$
+	\item Set the Log's true active range according to the
+          intersection of the Meta-Block's approximate active range
+          and the recovered Blocks:
+	\begin{itemize}
+		\item Recovered active lower bound = minimum index of
+                  Blocks from the recovered Clusters that are in the
+                  range $[I_{lower}, \min(I_{upper}, I_{lower} +
+                    \Delta))$
+		\item Recovered active upper bound = 1 + maximum index
+                  of Blocks from the recovered Clusters that are in
+                  the range $[I_{upper}, I_{upper}+\Delta)$
+		\item (Note: this recovers the \textit{physical}
+                  active range -- convert to logical active range by
+                  adding $N$ (maximum configured Log Block count) to
+                  the upper bound if it is less than the lower bound
+	\end{itemize}
+\end{itemize}
+
+\textbf{Phase 2: Recover MemTables from Clusters}
+
+\begin{enumerate}
+	\item Create an empty MemTable
+	\item For all clusters $\in \{C_1, C_2, ..., C_{\Omega}'\}$:
+	\begin{enumerate}
+	    \item If the next cluster can be added to the current
+              MemTable without overflowing its maximum capacity
+              (Checkpoint Distance), add all the slots in EditOffset
+              order
+	    \item Else finalize the current MemTable, create a new
+              one, and try again
+	\end{enumerate}
+\end{enumerate}
+
+\textit{Phase 1 Outputs:}
+
+\begin{itemize}
+\item Zero or more finalized MemTables, in increasing order of EditOffset range
+\item A single active MemTable
+\end{itemize}
+
+\textbf{Phase 3: Recover Checkpoint Pipeline from MemTables}
+
+\vspace{11pt} At this point the only thing that must be done is to
+start up the Checkpoint Generator and Batch scanner threads, feeding
+the finalized MemTables in order.  The recovered active MemTable
+becomes the active MemTable for the KVStore.
+\vspace{11pt}
+
+%%------------------------------------------------------------------------------
+\section{Alternate/Rejected Designs}
+
+\subsection{Partial Ordering of Slots (with \texttt{u16} revision per slot)}
+
+\subsubsection{Summary}
+
+To save space in the log, only store 16bits of ``revision" number to
+order updates of the same key.  This is based on the following
+assumptions:
+
+\begin{enumerate}
+\item Slots within a block are ordered implicitly
+\item Resolving the order of two updates with different keys is not
+  important; what matters is same-key
+\item Therefore we only need to store enough version information to
+  order same-key updates in ``concurrent" Blocks, i.e. those whose
+  EditOffset intervals overlap
+\item 16bits is sufficient because we need 1-bit to resolve
+  wrap-around (like TCP packet sequence numbers within a stream),
+  there is at most 1 Block per thread at a time, and $2^{32}=32768$ is
+  a safe upper bound on the number of concurrent writer threads
+\end{enumerate}
+
+\subsubsection{Reason for Rejecting}
+
+Assumption (2.) above turns out not to be true for two reasons:
+
+\begin{itemize}
+\item[i.] We need a way to be able to determine the longest recovered
+  contiguous sequence of edits in the \textit{last} Block cluster --
+  otherwise we essentially are forced to roll-back everything since
+  the last Checkpoint, which defeats the point of the Log
+\item[ii.] Point-in-time queries (i.e., snapshot isolated reads)
+  require being able to know exactly what was visible at a given
+  EditOffset, down to the individual key update
+\end{itemize}
+
+\end{document}
