@@ -146,6 +146,9 @@ auto ChangeLogFile::PackedConfig::unpack() const noexcept -> ChangeLogFile::Conf
 //
 ChangeLogFile::~ChangeLogFile() noexcept
 {
+  Interval<i64> block_range = this->active_blocks();
+  BATT_CHECK_EQ(block_range.size(), 0);
+
   VLOG(1) << BATT_INSPECT(this->write_throughput_.get());
 }
 
@@ -169,12 +172,13 @@ void ChangeLogFile::unlock_for_read(const Interval<i64>& block_range) noexcept
                               << BATT_INSPECT(batt::to_string(std::hex, (u64)old_count))
                               << BATT_INSPECT(block_i) << BATT_INSPECT(this->config_.block_count);
                         });
-  this->update_lower_bound(block_range.upper_bound);
+
+  this->update_lower_bound();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-void ChangeLogFile::update_lower_bound(i64 update_upper_bound) noexcept
+void ChangeLogFile::update_lower_bound() noexcept
 {
   u64 n_blocks_freed = 0;
   i64 old_lower_bound = 0;
@@ -182,14 +186,20 @@ void ChangeLogFile::update_lower_bound(i64 update_upper_bound) noexcept
   {
     absl::MutexLock lock{&this->lower_bound_mutex_};
 
+    i64 observed_upper_bound = this->upper_bound_.load();
     i64 observed_lower_bound = this->lower_bound_.load();
     i64 new_lower_bound = observed_lower_bound;
     old_lower_bound = observed_lower_bound;
 
     i64 addr = new_lower_bound % this->config_.block_count;
-    while (new_lower_bound < update_upper_bound) {
-      if (this->read_lock_counter_per_block_[addr]->load() > 0) {
-        break;
+    while (this->read_lock_counter_per_block_[addr]->load() == 0) {
+      if (new_lower_bound >= observed_upper_bound) {
+        i64 new_observed_upper_bound = this->upper_bound_.load();
+        if (new_observed_upper_bound == observed_upper_bound) {
+          break;
+        } else {
+          observed_upper_bound = new_observed_upper_bound;
+        }
       }
       ++addr;
       if (addr == this->config_.block_count) {
@@ -199,12 +209,8 @@ void ChangeLogFile::update_lower_bound(i64 update_upper_bound) noexcept
       ++n_blocks_freed;
     }
 
-    while (observed_lower_bound < new_lower_bound) {
-      if (this->lower_bound_.compare_exchange_weak(observed_lower_bound, new_lower_bound)) {
-        break;
-      }
-    }
-
+    const i64 prior_lower_bound = this->lower_bound_.exchange(new_lower_bound);
+    BATT_CHECK_EQ(prior_lower_bound, observed_lower_bound);
     BATT_CHECK_EQ(new_lower_bound - old_lower_bound, BATT_CHECKED_CAST(i64, n_blocks_freed));
   }
 
@@ -229,6 +235,54 @@ StatusOr<batt::Grant> ChangeLogFile::reserve_blocks(
     this->metrics_.reserved_blocks_count.add(grant->size());
   }
   return grant;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+ChangeLogFile::ReadLock ChangeLogFile::set_block_range_in_use(
+    batt::Grant& grant,
+    const Interval<i64>& block_range) noexcept
+{
+  i64 blocks_written = block_range.size();
+  this->lock_for_read(block_range);
+
+  // Important: only do this after locking the range.
+  //
+  {
+    BATT_CHECK_EQ(grant.size(), blocks_written);
+
+    batt::Grant now_in_use =
+        BATT_OK_RESULT_OR_PANIC(grant.spend(blocks_written, batt::WaitForResource::kFalse));
+
+    this->in_use_block_tokens_.subsume(std::move(now_in_use));
+
+    BATT_CHECK_EQ(grant.size(), 0);
+  }
+
+  return ReadLock{this, block_range};
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+// TODO: [Gabe Bornstein 1/20/26] Only read in blocks that are written after most recent checkpoint.
+//
+batt::StatusOr<std::vector<boost::intrusive_ptr<ChangeLogBlock>>>
+ChangeLogFile::read_blocks_into_vector()
+{
+  std::vector<boost::intrusive_ptr<ChangeLogBlock>> blocks;
+  batt::Status read_blocks_status =
+      this->read_blocks([&](boost::intrusive_ptr<ChangeLogBlock> block) -> batt::Status {
+        BATT_CHECK_EQ(block->ref_count(), 1);
+
+        blocks.push_back(block);
+
+        VLOG(3) << "ChangeLogBlock->block_size() == " << blocks.back()->block_size()
+                << " owner_id() == " << blocks.back()->owner_id();
+
+        return batt::OkStatus();
+      });
+
+  BATT_REQUIRE_OK(read_blocks_status);
+  return blocks;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -283,24 +337,10 @@ auto ChangeLogFile::append(batt::Grant& grant, batt::SmallVecBase<ConstBuffer>& 
 
   auto block_range = Interval<i64>{append_lower_bound, append_upper_bound};
 
-  this->lock_for_read(block_range);
+  ChangeLogFile::ReadLock read_lock = this->set_block_range_in_use(grant, block_range);
+  this->upper_bound_.fetch_add(block_range.size());
 
-  // Important: only do this after locking the range.
-  //
-  {
-    this->upper_bound_.fetch_add(blocks_written);
-
-    BATT_CHECK_EQ(grant.size(), blocks_written);
-
-    batt::Grant now_in_use =
-        BATT_OK_RESULT_OR_PANIC(grant.spend(blocks_written, batt::WaitForResource::kFalse));
-
-    this->in_use_block_tokens_.subsume(std::move(now_in_use));
-
-    BATT_CHECK_EQ(grant.size(), 0);
-  }
-
-  return {ReadLock{this, block_range}};
+  return {std::move(read_lock)};
 }
 
 }  // namespace turtle_kv

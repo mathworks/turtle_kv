@@ -3,6 +3,8 @@
 
 #include <llfs/page_cache_slot.hpp>
 
+#include <batteries/require.hpp>
+
 #include <xxhash.h>
 
 #include <pcg_random.hpp>
@@ -11,18 +13,70 @@ namespace turtle_kv {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-/*static*/ ChangeLogBlock* ChangeLogBlock::allocate(u64 owner_id,
-                                                    batt::Grant&& grant,
-                                                    usize n_bytes) noexcept
+/*static*/ ChangeLogBlock::ScopedMemory ChangeLogBlock::allocate_aligned(usize n_bytes) noexcept
 {
   BATT_CHECK_GE(n_bytes, Self::kMinSize);
 
   void* const memory = std::aligned_alloc(Self::kDefaultAlign, n_bytes);
   BATT_CHECK_NOT_NULLPTR(memory);
 
-  ChangeLogBlock* buffer = new (memory) ChangeLogBlock{owner_id, std::move(grant), n_bytes};
+  return ChangeLogBlock::ScopedMemory{memory, n_bytes};
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+/*static*/ ChangeLogBlock* ChangeLogBlock::allocate(u64 owner_id,
+                                                    batt::Grant&& grant,
+                                                    usize n_bytes) noexcept
+{
+  ChangeLogBlock::ScopedMemory memory = ChangeLogBlock::allocate_aligned(n_bytes);
+
+  void* data = memory.release_ownership();
+
+  ChangeLogBlock* buffer = new (data) ChangeLogBlock{owner_id, std::move(grant), n_bytes};
 
   return buffer;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+/*static*/ StatusOr<boost::intrusive_ptr<ChangeLogBlock>> ChangeLogBlock::recover(
+    ChangeLogBlock::ScopedMemory memory,
+    batt::Grant&& grant)
+{
+  ChangeLogBlock* block = reinterpret_cast<ChangeLogBlock*>(memory.data());
+
+  // Need to check if block_size is zero. It indicates we have read an unitialized block.
+  //
+  if (block->block_size() == 0) {
+    return {batt::StatusCode::kOutOfRange};
+  }
+
+  if (block->block_size() != memory.size()) {
+    return {batt::StatusCode::kDataLoss};
+  }
+
+  batt::Status verify_status = block->verify();
+
+  if (!verify_status.ok()) {
+    return {batt::StatusCode::kDataLoss};
+  }
+
+  batt::Status hash_status = block->verify_hash();
+
+  if (!hash_status.ok()) {
+    return {batt::StatusCode::kDataLoss};
+  }
+
+  block->init_ephemeral_state(std::move(grant));
+
+  // ref_count is 2 after reading from the change log. We want to initialize it to 1.
+  //
+  block->set_ref_count(1);
+
+  return boost::intrusive_ptr<ChangeLogBlock>{
+      reinterpret_cast<ChangeLogBlock*>(memory.release_ownership()),
+      false};
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -30,7 +84,7 @@ namespace turtle_kv {
 /*explicit*/ ChangeLogBlock::ChangeLogBlock(u64 owner_id,
                                             batt::Grant&& grant,
                                             usize block_size) noexcept
-    : magic_{reinterpret_cast<u64>(this) ^ ChangeLogBlock::kMagic}
+    : magic_{ChangeLogBlock::kMagic}
     , owner_id_{owner_id}
     , block_size_{BATT_CHECKED_CAST(u16, block_size)}
     , slot_count_{0}
@@ -41,9 +95,7 @@ namespace turtle_kv {
     , xxh3_checksum_{0}
     , xxh3_seed_{0}
 {
-  new (&this->ephemeral_state_storage_) EphemeralStatePtr{new EphemeralState{std::move(grant)}};
-
-  BATT_CHECK_EQ(this->ephemeral_state().grant_.size(), 1);
+  this->init_ephemeral_state(std::move(grant));
 
   this->slots_rbegin()->offset = sizeof(ChangeLogBlock);
 
@@ -80,8 +132,7 @@ void ChangeLogBlock::remove_ref(i32 count) noexcept
     // Load the ref count as a sanity check and with acquire order to complete the fence.
     //
     BATT_CHECK_EQ(0, this->ref_count_.load(std::memory_order_acquire));
-    this->~ChangeLogBlock();
-    free(this);
+    ChangeLogBlock::free_allocated(this);
   }
 }
 
@@ -149,10 +200,24 @@ batt::Grant ChangeLogBlock::consume_grant() noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-void ChangeLogBlock::verify() const noexcept
+batt::Status ChangeLogBlock::verify() const noexcept
 {
-  BATT_CHECK_NE(this->magic_, ChangeLogBlock::kExpired);
-  BATT_CHECK_EQ(this->magic_, reinterpret_cast<u64>(this) ^ ChangeLogBlock::kMagic);
+  static_assert(ChangeLogBlock::kMagic != ChangeLogBlock::kExpired);
+  BATT_REQUIRE_EQ(this->magic_, ChangeLogBlock::kMagic);
+  return batt::OkStatus();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+batt::Status ChangeLogBlock::verify_hash() const noexcept
+{
+  // XXH3_64bits requires a size >= 0 or else it will segfault
+  //
+  BATT_CHECK_GE(this->block_size() - sizeof(ChangeLogBlock), 0);
+
+  u64 xxh3_hash = XXH3_64bits(this + 1, this->block_size() - sizeof(ChangeLogBlock));
+  BATT_REQUIRE_EQ(this->xxh3_checksum_, xxh3_hash);
+  return batt::OkStatus();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

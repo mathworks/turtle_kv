@@ -1264,6 +1264,10 @@ Status KVStore::commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_jo
       /*lock_holder=*/"TabletCheckpointTask::handle_checkpoint_commit");
 
   BATT_REQUIRE_OK(slot_read_lock);
+  BATT_REQUIRE_OK(this->checkpoint_log_->sync(llfs::LogReadMode::kDurable,
+                                              llfs::SlotUpperBoundAt{
+                                                  .offset = checkpoint_slot_range->upper_bound,
+                                              }));
 
   // Update the base checkpoint and clear deltas.
   //

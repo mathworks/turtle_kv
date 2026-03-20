@@ -230,6 +230,8 @@ class MemTable : public batt::RefCounted<MemTable>
     return bool{this->art_index_};
   }
 
+  // TODO: [Gabe Bornstein 1/7/25] The art index is public? That doesn't feel right...
+  //
   ART<MemTableValueEntry>& art_index()
   {
     BATT_CHECK(this->art_index_);

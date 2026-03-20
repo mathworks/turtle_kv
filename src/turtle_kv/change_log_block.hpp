@@ -11,6 +11,8 @@
 #include <batteries/async/grant.hpp>
 #include <batteries/async/latch.hpp>
 
+#include <llfs/ioring_file.hpp>
+
 #include <boost/intrusive_ptr.hpp>
 
 namespace turtle_kv {
@@ -48,14 +50,96 @@ class ChangeLogBlock
     u16 offset;
   };
 
+  class ScopedMemory
+  {
+   public:
+    using Self = ScopedMemory;
+
+    explicit ScopedMemory(void* ptr, usize size) noexcept : buffer_{ptr, size}
+    {
+    }
+
+    ScopedMemory(const Self&) = delete;
+    Self& operator=(const Self&) = delete;
+
+    ScopedMemory(Self&& other) noexcept : buffer_{std::exchange(other.buffer_, {})}
+    {
+    }
+
+    Self& operator=(Self&& other) noexcept
+    {
+      if (this != &other) {
+        // Free any memory currently owned by *this beore overwriting it.
+        //
+        if (this->buffer_.data() != nullptr) {
+          free(this->buffer_.data());
+        }
+
+        this->buffer_ = std::exchange(other.buffer_, {});
+      }
+      return *this;
+    }
+
+    ~ScopedMemory() noexcept
+    {
+      if (this->buffer_.data() != nullptr) {
+        free(this->buffer_.data());
+      }
+    }
+
+    void* data() const
+    {
+      return this->buffer_.data();
+    }
+
+    usize size() const
+    {
+      return this->buffer_.size();
+    }
+
+    MutableBuffer buffer() const
+    {
+      return this->buffer_;
+    }
+
+    void* release_ownership()
+    {
+      void* released_ptr = this->buffer_.data();
+      this->buffer_ = MutableBuffer{};
+      return released_ptr;
+    }
+
+   private:
+    MutableBuffer buffer_;
+  };
+
   /** \brief ChangeLogBlock objects must be deallocated by calling ChangeLogBlock::remove_ref(); the
    * delete operator is disabled to enforce this.
    */
   void operator delete(void* ptr) noexcept = delete;
 
+  /** \brief Allocates and returns a pointer of the specifed size aligned to
+   * ChangeLogBlock::kDefaultAlign bytes.
+   */
+  static ScopedMemory allocate_aligned(usize n_bytes) noexcept;
+
   /** \brief Allocates and returns a buffer of the specifed size.
    */
   static ChangeLogBlock* allocate(u64 owner_id, batt::Grant&& grant, usize n_bytes) noexcept;
+
+  /** \brief Deallocates the dynamic memory of block.
+   */
+  static void free_allocated(ChangeLogBlock* block)
+  {
+    block->~ChangeLogBlock();
+    free(block);
+  }
+
+  /** \brief Read a ChangeLogBlock from the ChangeLogFile into the buffer, buf. Returns an error
+   * status if malformed or unsuccessful.
+   */
+  static StatusOr<boost::intrusive_ptr<ChangeLogBlock>> recover(ScopedMemory memory,
+                                                                batt::Grant&& grant);
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -64,6 +148,8 @@ class ChangeLogBlock
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  // TODO: [Gabe Bornstein 2/11/26] Currently doesn't mean much, needs to be updated.
+  //
   u64 owner_id() const noexcept
   {
     return this->owner_id_;
@@ -80,6 +166,13 @@ class ChangeLogBlock
   i32 ref_count() const noexcept
   {
     return this->ref_count_;
+  }
+
+  /** \brief Return a referenece to this ChangeLogBlock's underlying grant.
+   */
+  batt::Grant& get_grant()
+  {
+    return this->ephemeral_state().grant_;
   }
 
   usize slot_count() const noexcept
@@ -165,7 +258,11 @@ class ChangeLogBlock
 
   /** \brief Perform basic sanity checks to make sure this is a valid ChangeLogBlock object.
    */
-  void verify() const noexcept;
+  batt::Status verify() const noexcept;
+
+  /** \brief Recomputes the xxh3 hash and verifies that it matches the saved xxh3 hash.
+   */
+  batt::Status verify_hash() const noexcept;
 
   /** \brief Checks to make sure all space within the buffer is accounted for.
    */
@@ -183,6 +280,8 @@ class ChangeLogBlock
   /** \brief The members of this object which live outside the block buffer.
    */
   struct EphemeralState {
+    // TODO: [Gabe Bornstein 2/2/26] Consider turning grant and read lock into Variant
+    //
     /** \brief Used to track whether this block has been flushed.
      */
     batt::Latch<boost::intrusive_ptr<ChangeLogReadLock>> read_lock_;
@@ -237,6 +336,21 @@ class ChangeLogBlock
     return this->slots_rbegin() - this->slot_count_;
   }
 
+  void set_ref_count(i64 ref_count)
+  {
+    this->ref_count_.store(ref_count);
+  }
+
+  /** \brief Helper function to initialize the ephemeral state of this ChangeLogBlock. Transfers
+   * ownership of grant to ChangeLogBlock, and initializes the reference count to ref_count.
+   */
+  void init_ephemeral_state(batt::Grant&& grant)
+  {
+    new (&this->ephemeral_state_storage_) EphemeralStatePtr{new EphemeralState{std::move(grant)}};
+
+    BATT_CHECK_EQ(this->ephemeral_state().grant_.size(), 1);
+  }
+
   EphemeralStatePtr& ephemeral_state_ptr() noexcept
   {
     return reinterpret_cast<EphemeralStatePtr&>(this->ephemeral_state_storage_);
@@ -248,7 +362,6 @@ class ChangeLogBlock
   }
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
-
   /** \brief Initialized to (int)this XOR kMagic while this object is valid; set to kExpired when
    * it is destructed.
    */
@@ -300,6 +413,21 @@ class ChangeLogBlock
 
   // TODO [tastolfi 2025-12-16] Add a field for the _last_ GBID of the _prior_ epoch.
 };
+
+/** \brief Free function necessary for intrusive_ptr usage. Adds a reference to the ChangeLogBlock.
+ */
+inline void intrusive_ptr_add_ref(ChangeLogBlock* block) noexcept
+{
+  block->add_ref(1);
+}
+
+/** \brief Free function necessary for intrusive_ptr usage. Removes a reference from the
+ * ChangeLogBlock.
+ */
+inline void intrusive_ptr_release(ChangeLogBlock* block) noexcept
+{
+  block->remove_ref(1);
+}
 
 namespace {
 

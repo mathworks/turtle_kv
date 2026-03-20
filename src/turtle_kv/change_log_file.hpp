@@ -1,6 +1,7 @@
 #pragma once
 
 #include <turtle_kv/api_types.hpp>
+#include <turtle_kv/change_log_block.hpp>
 #include <turtle_kv/change_log_file_metrics.hpp>
 #include <turtle_kv/change_log_read_lock.hpp>
 #include <turtle_kv/file_utils.hpp>
@@ -119,6 +120,26 @@ class ChangeLogFile
   StatusOr<batt::Grant> reserve_blocks(BlockCount block_count,
                                        batt::WaitForResource wait_for_resource) noexcept;
 
+  /** \brief Recovers all previously active ChangeLogBlocks from disk and returns them to the user.
+   * All blocks initially have a reference count of 1. intrusive_ptr will help manage the lifetime
+   * of the block, however, the user is also resposnsible for altering and managing the lifetime of
+   * the returned blocks (https://www.boost.org/doc/libs/1_40_0/libs/smart_ptr/intrusive_ptr.html).
+   */
+  batt::StatusOr<std::vector<boost::intrusive_ptr<ChangeLogBlock>>> read_blocks_into_vector();
+
+  // TODO: [Gabe Bornstein 1/20/26] Consider using concepts here to define required parameters and
+  // return types?
+  //
+  /** \brief Read over all the blocks currently in the ChangeLogFile, calling process_block for each
+   * block.
+   * process_block is responsible for determining when to stop reading blocks, and what to do
+   * with each recovered block.
+   * Ownership of the ChangeLogBlock's memory is transferred to `process_block`.
+   * `process_block` must free the block's memory if it plans to do nothing with it.
+   */
+  template <typename SerializeFn = batt::Status(boost::intrusive_ptr<ChangeLogBlock>)>
+  batt::Status read_blocks(SerializeFn process_block);
+
   StatusOr<ReadLock> append(batt::Grant& grant, batt::SmallVecBase<ConstBuffer>& data) noexcept;
 
   Interval<i64> active_blocks() noexcept
@@ -176,7 +197,13 @@ class ChangeLogFile
 
   void unlock_for_read(const Interval<i64>& block_range) noexcept;
 
-  void update_lower_bound(i64 update_upper_bound) noexcept;
+  void update_lower_bound() noexcept;
+
+  /** \brief Marks grant as in use by adding grant to this->in_use_block_tokens_.
+   * Updates this->upper_bound_ to include the new number of blocks_written.
+   * Returns a ReadLock on the range block_range.
+   */
+  ReadLock set_block_range_in_use(batt::Grant& grant, const Interval<i64>& block_range) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -209,6 +236,69 @@ class ChangeLogFile
 
   batt::RateMetric<u64, /*seconds=*/100> write_throughput_;
 };
+
+// TODO: [Gabe Bornstein 1/16/26] Do I need to update other ChangeLogFile member data? Like lower,
+// upper bound? They aren't recovered from ::open.
+//
+template <typename SerializeFn>
+batt::Status ChangeLogFile::read_blocks(SerializeFn process_block)
+{
+  i64 blocks_read = 0;
+  batt::Status status = batt::OkStatus();
+  while (status.ok()) {
+    // The offset of where we are writing to our buffer.
+    //
+    i64 curr_block_offset = blocks_read * this->config_.block_size;
+
+    // The offset of where we are reading from the Change Log File.
+    //
+    i64 curr_file_offset = this->config_.block0_offset + curr_block_offset;
+
+    batt::StatusOr<batt::Grant> buffer_grant =
+        this->reserve_blocks(BlockCount{1}, batt::WaitForResource::kFalse);
+
+    BATT_REQUIRE_OK(buffer_grant);
+
+    ChangeLogBlock::ScopedMemory block_memory =
+        ChangeLogBlock::allocate_aligned(this->config_.block_size);
+
+    batt::Status read_status = this->file_.read_all(curr_file_offset, block_memory.buffer());
+
+    if (!read_status.ok()) {
+      LOG(INFO) << "Recovered " << blocks_read << " blocks. Stopped reading with status:"
+                << BATT_INSPECT(batt::StatusCode::kOutOfRange);
+      return batt::OkStatus();
+    }
+
+    StatusOr<boost::intrusive_ptr<ChangeLogBlock>> block =
+        ChangeLogBlock::recover(std::move(block_memory), std::move(*buffer_grant));
+
+    // TODO: [Gabe Bornstein 3/9/26] Handle case where we reach a corrupt block, but need to keep
+    // reading and reach correct blocks that come after it.
+    //
+    if (block.status() == batt::StatusCode::kOutOfRange ||
+        block.status() == batt::StatusCode::kDataLoss) {
+      LOG(INFO) << "Recovered " << blocks_read
+                << " blocks. Stopped reading with status:" << BATT_INSPECT(block.status());
+      return batt::OkStatus();
+    }
+
+    // TODO: [Gabe Bornstein 3/11/26] Eventually, call (*block)->set_read_lock and
+    // this->upper_bound_.fetch_add() when we know the logical ranges of each block.
+    //
+
+    // `process_block` is responsible for determining when to stop reading.
+    //
+    batt::Status process_status = process_block(std::move(*block));
+    if (process_status == batt::StatusCode::kLoopBreak) {
+      break;
+    } else if (!process_status.ok()) {
+      return process_status;
+    }
+    ++blocks_read;
+  }
+  return batt::OkStatus();
+}
 
 // #=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
 
