@@ -1,5 +1,7 @@
 #pragma once
 
+#include <turtle_kv/import/int_types.hpp>
+
 #include <batteries/case_of.hpp>
 #include <batteries/static_assert.hpp>
 
@@ -107,9 +109,9 @@ inline bool compacting_levels_might_fix(const SubtreeViability& viability)
       },
       [](const NeedsSplit& needs_split) {
         return (needs_split.segment_filters_too_large ||  //
-                needs_split.too_many_segments) &&             //
-               !needs_split.items_too_large &&                //
-               !needs_split.keys_too_large &&                 //
+                needs_split.too_many_segments) &&         //
+               !needs_split.items_too_large &&            //
+               !needs_split.keys_too_large &&             //
                !needs_split.too_many_pivots;
       });
 }
@@ -130,11 +132,11 @@ inline bool normal_flush_might_fix(const SubtreeViability& viability)
         return false;
       },
       [](const NeedsSplit& needs_split) {
-        return needs_split.height == 2 &&                  //
-               (needs_split.segment_filters_too_large      //
-                || needs_split.too_many_segments) &&       //
-               !needs_split.items_too_large &&             //
-               !needs_split.keys_too_large &&              //
+        return needs_split.height == 2 &&              //
+               (needs_split.segment_filters_too_large  //
+                || needs_split.too_many_segments) &&   //
+               !needs_split.items_too_large &&         //
+               !needs_split.keys_too_large &&          //
                !needs_split.too_many_pivots;
       });
 }

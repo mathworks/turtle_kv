@@ -1,5 +1,6 @@
 #pragma once
 
+#include <turtle_kv/tree/active_pivots_set.hpp>
 #include <turtle_kv/tree/leaf_page_view.hpp>
 #include <turtle_kv/tree/packed_leaf_page.hpp>
 
@@ -54,6 +55,8 @@ class SegmentedLevelScanner : private SegmentedLevelScannerBase
   using PinnedPageT = typename PageLoader::PinnedPageT;
   using Segment = typename Level::Segment;
   using ActivePivotsSetT = decltype(std::declval<const Segment&>().get_active_pivots());
+
+  static_assert(ActivePivotsSet<ActivePivotsSetT>);
 
   using Item = EditSlice;
 
@@ -207,7 +210,7 @@ inline auto SegmentedLevelScanner<NodeT, LevelT, PageLoaderT>::peek_next_impl(bo
   const Segment* segment = std::addressof(this->level_->get_segment(this->segment_i_));
 
   ActivePivotsSetT active_pivots = segment->get_active_pivots();
-  BATT_CHECK(!active_pivots.is_inactive()) << "This segment should have been dropped!";
+  BATT_CHECK(!active_pivots.is_empty()) << "This segment should have been dropped!";
 
   // Make sure we have a leaf page loaded.
   //

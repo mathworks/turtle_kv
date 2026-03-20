@@ -1,5 +1,6 @@
 #pragma once
 
+#include <turtle_kv/tree/active_pivots_set.hpp>
 #include <turtle_kv/tree/segmented_level_scanner.hpp>
 
 #include <turtle_kv/core/sharded_key_value_slice.hpp>
@@ -68,6 +69,8 @@ class ShardedLevelScanner : private SegmentedLevelScannerBase
   using PinnedPageT = typename PageLoader::PinnedPageT;
   using Segment = typename Level::Segment;
   using ActivePivotsSetT = decltype(std::declval<const Segment&>().get_active_pivots());
+
+  static_assert(ActivePivotsSet<ActivePivotsSetT>);
 
   using Item = ShardedKeyValueSlice;
 
@@ -244,7 +247,7 @@ inline auto ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::peek_next_impl(bool
 
   ActivePivotsSetT active_pivots = segment->get_active_pivots();
   {
-    BATT_CHECK(!active_pivots.is_inactive()) << "This segment should have been dropped!";
+    BATT_CHECK(!active_pivots.is_empty()) << "This segment should have been dropped!";
   }
 
   // Check for need to load new segment.

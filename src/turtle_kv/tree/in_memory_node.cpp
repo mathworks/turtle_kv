@@ -8,6 +8,7 @@
 #include <turtle_kv/tree/leaf_page_view.hpp>
 #include <turtle_kv/tree/node_page_view.hpp>
 #include <turtle_kv/tree/segmented_level_scanner.hpp>
+#include <turtle_kv/tree/subtree_viability.hpp>
 
 #include <turtle_kv/core/algo/split_parts.hpp>
 #include <turtle_kv/core/key_view.hpp>
@@ -15,6 +16,7 @@
 #include <turtle_kv/core/value_view.hpp>
 
 #include <batteries/case_of.hpp>
+#include <batteries/require.hpp>
 
 namespace turtle_kv {
 
@@ -46,6 +48,8 @@ using PackedSegment = PackedUpdateBuffer::Segment;
                                              packed_node.is_size_tiered());
 
   const usize pivot_count = packed_node.pivot_count();
+
+  BATT_REQUIRE_LE(pivot_count, kMaxPivots);
 
   node->tree_options = tree_options;
   node->height = packed_node.height;
@@ -615,6 +619,13 @@ Status InMemoryNode::split_child(BatchUpdateContext& update_context, i32 pivot_i
   update_context.metrics.split_count.add(1);
 #endif
 
+  // Make sure we don't exceed the temporary pivot count limit.
+  //
+  BATT_CHECK_LT(this->pivot_count(), (i32)InMemoryNode::kMaxTempPivots);
+  auto on_scope_exit = batt::finally([&] {
+    BATT_CHECK_LE(this->pivot_count(), (i32)InMemoryNode::kMaxTempPivots);
+  });
+
   Subtree& child = this->children[pivot_i];
 
   StatusOr<Optional<Subtree>> status_or_sibling = child.try_split(update_context);
@@ -670,7 +681,7 @@ Status InMemoryNode::split_child(BatchUpdateContext& update_context, i32 pivot_i
               .split_pivot(pivot_i, pivot_key_range, sibling_min_key);
         },
         [&](HybridLevel& hybrid_level) -> Status {
-          for (auto& sub_level : hybrid_levels.levels) {
+          for (auto& sub_level : hybrid_level.levels) {
             if (batt::is_case<SegmentedLevel>(sub_level)) {
               SegmentedLevel& segmented_sub_level = std::get<SegmentedLevel>(sub_level);
               BATT_REQUIRE_OK(in_segmented_level(*this,
@@ -679,9 +690,9 @@ Status InMemoryNode::split_child(BatchUpdateContext& update_context, i32 pivot_i
                                                  update_context.overcommit)  //
                                   .split_pivot(pivot_i, pivot_key_range, sibling_min_key));
             }
-
-            return OkStatus();
           }
+
+          return OkStatus();
         }));
   }
 
@@ -872,16 +883,20 @@ Status InMemoryNode::try_merge(BatchUpdateContext& context,
                   return OkStatus();
                 },
                 [&](SegmentedLevel& right_segmented_level) -> Status {
-                  // When merging a MergedLevel and a SegmentedLevel, create a new MergedLevel.
-                  //
-                  BATT_ASSIGN_OK_RESULT(
-                      MergedLevel new_merged_level,
-                      UpdateBuffer::concat_segmented_and_merged_level(context,
-                                                                      left_merged_level,
-                                                                      right_segmented_level,
-                                                                      *sibling));
+                  HybridLevel new_hybrid_level;
+                  new_hybrid_level.add_new_sub_level(std::move(left_merged_level));
+                  new_hybrid_level.add_new_sub_level(std::move(right_segmented_level));
 
-                  this->update_buffer.levels[i] = std::move(new_merged_level);
+                  this->update_buffer.levels[i] = std::move(new_hybrid_level);
+
+                  return OkStatus();
+                },
+                [&](HybridLevel& right_hybrid_level) -> Status {
+                  HybridLevel new_hybrid_level;
+                  new_hybrid_level.add_new_sub_level(std::move(left_merged_level));
+                  new_hybrid_level.add_new_sub_level(std::move(right_hybrid_level));
+
+                  this->update_buffer.levels[i] = std::move(new_hybrid_level);
 
                   return OkStatus();
                 }));
@@ -897,14 +912,11 @@ Status InMemoryNode::try_merge(BatchUpdateContext& context,
                   return OkStatus();
                 },
                 [&](MergedLevel& right_merged_level) -> Status {
-                  BATT_ASSIGN_OK_RESULT(
-                      MergedLevel new_merged_level,
-                      UpdateBuffer::concat_segmented_and_merged_level(context,
-                                                                      right_merged_level,
-                                                                      left_segmented_level,
-                                                                      *this));
+                  HybridLevel new_hybrid_level;
+                  new_hybrid_level.add_new_sub_level(std::move(left_segmented_level));
+                  new_hybrid_level.add_new_sub_level(std::move(right_merged_level));
 
-                  this->update_buffer.levels[i] = std::move(new_merged_level);
+                  this->update_buffer.levels[i] = std::move(new_hybrid_level);
 
                   return OkStatus();
                 },
@@ -924,6 +936,8 @@ Status InMemoryNode::try_merge(BatchUpdateContext& context,
                       std::make_move_iterator(right_segmented_level.segments.begin()),
                       std::make_move_iterator(right_segmented_level.segments.end()));
 
+                  // Erase potential duplicate segments that have resulted from a previous split.
+                  //
                   left_segmented_level.segments.erase(
                       std::unique(left_segmented_level.segments.begin(),
                                   left_segmented_level.segments.end(),
@@ -933,7 +947,36 @@ Status InMemoryNode::try_merge(BatchUpdateContext& context,
                       left_segmented_level.segments.end());
 
                   return OkStatus();
+                },
+                [&](HybridLevel& right_hybrid_level) -> Status {
+                  HybridLevel new_hybrid_level;
+                  new_hybrid_level.add_new_sub_level(std::move(left_segmented_level));
+                  new_hybrid_level.add_new_sub_level(std::move(right_hybrid_level));
+
+                  this->update_buffer.levels[i] = std::move(new_hybrid_level);
+
+                  return OkStatus();
                 }));
+          }
+
+          return OkStatus();
+        },
+        [&](HybridLevel& left_hybrid_level) -> Status {
+          if (i < sibling->update_buffer.levels.size()) {
+            batt::case_of(
+                sibling->update_buffer.levels[i],
+                [](EmptyLevel&) {
+
+                },
+                [&](MergedLevel& right_merged_level) {
+                  left_hybrid_level.add_new_sub_level(std::move(right_merged_level));
+                },
+                [&](SegmentedLevel& right_segmented_level) {
+                  left_hybrid_level.add_new_sub_level(std::move(right_segmented_level));
+                },
+                [&](HybridLevel& right_hybrid_level) {
+                  left_hybrid_level.add_new_sub_level(std::move(right_hybrid_level));
+                });
           }
 
           return OkStatus();
@@ -959,7 +1002,10 @@ Status InMemoryNode::try_merge(BatchUpdateContext& context,
             segment.active_pivots.pop_back_pivots(left_node_pivot_count);
           }
 
-          this->update_buffer.levels.emplace_back(right_segmented_level);
+          this->update_buffer.levels.emplace_back(std::move(right_segmented_level));
+        },
+        [&](HybridLevel& right_hybrid_level) {
+          this->update_buffer.levels.emplace_back(std::move(right_hybrid_level));
         });
   }
 
@@ -1018,18 +1064,21 @@ Status InMemoryNode::set_pivot_items_flushed(BatchUpdateContext& update_context,
           // nothing to do
         },
         [&](MergedLevel& merged_level) {
-          merged_level.result_set.drop_key_range(flush_key_crange);
-
-          is_now_empty = merged_level.result_set.empty();
+          is_now_empty = merged_level.set_items_flushed(flush_key_crange);
         },
         [&](SegmentedLevel& segmented_level) {
-          segment_load_status.Update(in_segmented_level(*this,
-                                                        segmented_level,
-                                                        update_context.page_loader,
-                                                        update_context.overcommit)
-                                         .drop_key_range(pivot_i, flush_key_crange.upper_bound));
-
-          is_now_empty = segmented_level.empty();
+          is_now_empty = segmented_level.set_pivot_items_flushed(*this,
+                                                                 update_context,
+                                                                 pivot_i,
+                                                                 flush_key_crange,
+                                                                 segment_load_status);
+        },
+        [&](HybridLevel& hybrid_level) {
+          is_now_empty = hybrid_level.set_pivot_items_flushed(*this,
+                                                              update_context,
+                                                              pivot_i,
+                                                              flush_key_crange,
+                                                              segment_load_status);
         });
 
     if (is_now_empty) {
@@ -1058,23 +1107,13 @@ Status InMemoryNode::set_pivot_completely_flushed(usize pivot_i,
           // nothing to do
         },
         [&](MergedLevel& merged_level) {
-          merged_level.result_set.drop_key_range_half_open(pivot_key_range);
-
-          is_now_empty = merged_level.result_set.empty();
+          is_now_empty = merged_level.set_items_flushed(pivot_key_range);
         },
         [&](SegmentedLevel& segmented_level) {
-          for (usize segment_i = 0; segment_i < segmented_level.segment_count();) {
-            Segment& segment = segmented_level.get_segment(segment_i);
-
-            segment.set_pivot_active(pivot_i, false);
-
-            if (segment.is_inactive()) {
-              segmented_level.drop_segment(segment_i);
-            } else {
-              ++segment_i;
-            }
-          }
-          is_now_empty = segmented_level.empty();
+          is_now_empty = segmented_level.set_pivot_completely_flushed(pivot_i);
+        },
+        [&](HybridLevel& hybrid_level) {
+          is_now_empty = hybrid_level.set_pivot_completely_flushed(pivot_i, pivot_key_range);
         });
 
     if (is_now_empty) {
@@ -1148,26 +1187,26 @@ void InMemoryNode::push_levels_to_merge(MergeCompactor& compactor,
         },
         [&](const MergedLevel& merged_level) -> BoxedSeq<EditSlice> {
           has_page_refs = HasPageRefs{has_page_refs || merged_level.result_set.has_page_refs()};
-          return merged_level.result_set.live_edit_slices(this->get_pivot_key(min_pivot_i));
+          return merged_level.to_boxed_seq(*this, min_pivot_i);
         },
         [&](const SegmentedLevel& segmented_level) -> BoxedSeq<EditSlice> {
           //----- --- -- -  -  -   -
           // TODO [tastolfi 2025-03-14] update has_page_refs here!
           //----- --- -- -  -  -   -
-          if (only_pivot && !segmented_level.is_pivot_active(min_pivot_i)) {
-            return seq::Empty<EditSlice>{}  //
-                   | seq::boxed();
-          }
-          return SegmentedLevelScanner<const InMemoryNode, const SegmentedLevel, llfs::PageLoader>{
-                     *this,
-                     segmented_level,
-                     update_context.page_loader,
-                     llfs::PinPageToJob::kDefault,
-                     update_context.overcommit,
-                     segment_load_status,
-                     min_pivot_i,
-                     min_key}  //
-                 | seq::boxed();
+          return segmented_level.to_boxed_seq(*this,
+                                              update_context,
+                                              segment_load_status,
+                                              min_pivot_i,
+                                              only_pivot,
+                                              min_key);
+        },
+        [&](const HybridLevel& hybrid_level) -> BoxedSeq<EditSlice> {
+          return hybrid_level.to_boxed_seq(*this,
+                                           update_context,
+                                           segment_load_status,
+                                           min_pivot_i,
+                                           only_pivot,
+                                           min_key);
         }));
   }
 }
@@ -1188,6 +1227,9 @@ usize InMemoryNode::segment_count() const
         },
         [](const SegmentedLevel& segmented_level) -> usize {
           return segmented_level.segment_count();
+        },
+        [this](const HybridLevel hybrid_level) -> usize {
+          return hybrid_level.segment_count(this->tree_options);
         });
   }
   return total;
@@ -1232,10 +1274,19 @@ usize InMemoryNode::total_segment_filter_cut_points() const
           return 0;
         },
         [](const SegmentedLevel& segmented_level) -> usize {
+          return segmented_level.segment_filter_cut_points();
+        },
+        [](const HybridLevel& hybrid_level) -> usize {
           usize n = 0;
-          for (const Segment& segment : segmented_level.segments) {
-            n += segment.num_cut_points();
+
+          auto sub_levels = hybrid_level.get_levels();
+          for (auto iter = sub_levels.begin(); iter != sub_levels.end(); ++iter) {
+            if (batt::is_case<SegmentedLevel>(*iter)) {
+              const SegmentedLevel& segmented_sub_level = std::get<SegmentedLevel>(*iter);
+              n += segmented_sub_level.segment_filter_cut_points();
+            }
           }
+
           return n;
         });
   }
@@ -1269,7 +1320,7 @@ SubtreeViability InMemoryNode::get_viability() const
   NeedsMerge needs_merge;
 
   needs_merge.single_pivot = (this->pivot_count() == 1);
-  needs_merge.too_few_pivots = (this->pivot_count() < 4);
+  needs_merge.too_few_pivots = (this->pivot_count() < kMinPivots);
 
   if (needs_merge) {
     return needs_merge;
@@ -1408,7 +1459,7 @@ StatusOr<std::unique_ptr<InMemoryNode>> InMemoryNode::try_split_direct(BatchUpda
 
   BATT_CHECK_EQ(orig_pivot_count + 1, orig_pivot_keys.size());
 
-  std::array<u64, 2> tried_already = {0, 0};
+  ActivePivotsSet128 tried_already;
   usize split_pivot_i = (orig_pivot_count + 1) / 2;
 
   auto* node_lower_half = this;
@@ -1423,10 +1474,10 @@ StatusOr<std::unique_ptr<InMemoryNode>> InMemoryNode::try_split_direct(BatchUpda
   for (;;) {
     // If we ever try the same split point a second time, fail.
     //
-    if (get_bit(tried_already, split_pivot_i)) {
+    if (tried_already.get(split_pivot_i)) {
       return {batt::StatusCode::kInternal};
     }
-    tried_already = set_bit(tried_already, split_pivot_i, true);
+    tried_already.set(split_pivot_i, true);
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -1548,7 +1599,7 @@ StatusOr<std::unique_ptr<InMemoryNode>> InMemoryNode::try_split_direct(BatchUpda
 
     // If the lower half is too large, then move the split point down and retry if possible.
     //
-    if (split_pivot_i > 4 && batt::is_case<NeedsSplit>(lower_viability) &&
+    if (split_pivot_i > kMinPivots && batt::is_case<NeedsSplit>(lower_viability) &&
         !batt::is_case<NeedsSplit>(upper_viability)) {
       --split_pivot_i;
       continue;
@@ -1556,8 +1607,8 @@ StatusOr<std::unique_ptr<InMemoryNode>> InMemoryNode::try_split_direct(BatchUpda
 
     // If the upper half is too large, then move the split point up and retry if possible.
     //
-    if (split_pivot_i + 4 < orig_pivot_count && batt::is_case<NeedsSplit>(upper_viability) &&
-        !batt::is_case<NeedsSplit>(lower_viability)) {
+    if (split_pivot_i + kMinPivots < orig_pivot_count &&
+        batt::is_case<NeedsSplit>(upper_viability) && !batt::is_case<NeedsSplit>(lower_viability)) {
       ++split_pivot_i;
       continue;
     }
@@ -1606,6 +1657,31 @@ StatusOr<ValueView> InMemoryNode::find_key_in_level(usize level_i,
       [&](const SegmentedLevel& segmented_level) -> StatusOr<ValueView> {
         return in_segmented_level(*this, segmented_level, *query.page_loader, query.overcommit())
             .find_key(key_pivot_i, query);
+      },
+      [&](const HybridLevel& hybrid_level) -> StatusOr<ValueView> {
+        StatusOr<ValueView> result{Status{batt::StatusCode::kNotFound}};
+
+        auto sub_levels = hybrid_level.get_levels();
+        for (auto iter = sub_levels.begin(); iter != sub_levels.end(); ++iter) {
+          result = batt::case_of(
+              *iter,
+              [&](const MergedLevel& merged_sub_level) -> StatusOr<ValueView> {
+                return merged_sub_level.result_set.find_key(query.key());
+              },
+              [&](const SegmentedLevel& segmented_sub_level) -> StatusOr<ValueView> {
+                return in_segmented_level(*this,
+                                          segmented_sub_level,
+                                          *query.page_loader,
+                                          query.overcommit())
+                    .find_key(key_pivot_i, query);
+              });
+
+          if (result.ok()) {
+            return result;
+          }
+        }
+
+        return result;
       });
 }
 
@@ -1614,7 +1690,7 @@ StatusOr<ValueView> InMemoryNode::find_key_in_level(usize level_i,
 bool InMemoryNode::is_packable() const
 {
   for (const Level& level : this->update_buffer.levels) {
-    if (batt::is_case<MergedLevel>(level)) {
+    if (batt::is_case<MergedLevel>(level) || batt::is_case<HybridLevel>(level)) {
       return false;
     }
   }
@@ -1652,6 +1728,12 @@ Status InMemoryNode::start_serialize(TreeSerializeContext& context)
             },
             [&total_segments](const SegmentedLevel& segmented_level) -> Status {
               total_segments += segmented_level.segment_count();
+              return OkStatus();
+            },
+            [this, &context, &total_segments](HybridLevel& hybrid_level) -> Status {
+              BATT_ASSIGN_OK_RESULT(usize segment_count,
+                                    hybrid_level.start_serialize(*this, context));
+              total_segments += segment_count;
               return OkStatus();
             }));
   }
@@ -1697,6 +1779,13 @@ StatusOr<llfs::PageId> InMemoryNode::finish_serialize(TreeSerializeContext& cont
               r_metrics.serialized_nonempty_level_count.add(1);
               r_metrics.serialized_buffer_segment_count.add(segmented_level.segment_count());
               return OkStatus();
+            },
+            [this, &context, &new_segmented_level](HybridLevel& hybrid_level) -> Status {
+              StatusOr<SegmentedLevel> result = hybrid_level.finish_serialize(*this, context);
+              if (result.ok()) {
+                new_segmented_level.emplace(std::move(*result));
+              }
+              return result.status();
             }));
 
     if (new_segmented_level) {
@@ -1843,7 +1932,7 @@ StatusOr<SegmentedLevel> MergedLevel::finish_serialize(const InMemoryNode& node,
                           context.get_build_page_result(this->segment_future_ids_[segment_i]));
 
     segment.page_id_slot.page_id = pinned_leaf_page.page_id();
-    segment.active_pivots = {};
+    segment.active_pivots.clear();
 
     const PackedLeafPage& leaf_page = PackedLeafPage::view_of(pinned_leaf_page);
 
@@ -1976,85 +2065,274 @@ void InMemoryNode::UpdateBuffer::SegmentedLevel::check_items_sorted(
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-BoxedSeq<EditSlice> InMemoryNode::UpdateBuffer::HybridLevel::edit_slices(
-    InMemoryNode& node,
+BoxedSeq<EditSlice> InMemoryNode::UpdateBuffer::SegmentedLevel::to_boxed_seq(
+    const InMemoryNode& node,
     BatchUpdateContext& update_context,
     Status& segment_load_status,
     i32 min_pivot_i,
     bool only_pivot,
     Optional<KeyView> min_key) const
 {
-  std::vector<BoxedSeq<EditSlice>> sequences;
-  sequences.reserve(this->levels.size());
-
-  for (const std::variant<MergedLevel, SegmentedLevel>& level : this->levels) {
-    batt::case_of(
-        level,
-        [&](const MergedLevel& merged_level) {
-          sequences.emplace_back(
-              merged_level.result_set.live_edit_slices(node.get_pivot_key(min_pivot_i)) |
-              seq::boxed());
-        },
-        [&](const SegmentedLevel& segmented_level) {
-          if (!only_pivot || segmented_level.is_pivot_active(min_pivot_i)) {
-            sequences.emplace_back(
-                SegmentedLevelScanner<const InMemoryNode, const SegmentedLevel, llfs::PageLoader>{
-                    node,
-                    segmented_level,
-                    update_context.page_loader,
-                    llfs::PinPageToJob::kDefault,
-                    update_context.overcommit,
-                    segment_load_status,
-                    min_pivot_i,
-                    min_key} |
-                seq::boxed());
-          }
-        });
+  if (only_pivot && !this->is_pivot_active(min_pivot_i)) {
+    return seq::Empty<EditSlice>{}  //
+           | seq::boxed();
   }
-
-  if (sequences.empty()) {
-    return seq::Empty<EditSlice>{} | seq::boxed();
-  }
-
-  return as_seq(std::move(sequences)) | seq::flatten() | seq::boxed();
+  return SegmentedLevelScanner<const InMemoryNode, const SegmentedLevel, llfs::PageLoader>{
+             node,
+             *this,
+             update_context.page_loader,
+             llfs::PinPageToJob::kDefault,
+             update_context.overcommit,
+             segment_load_status,
+             min_pivot_i,
+             min_key}  //
+         | seq::boxed();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-/*static*/ StatusOr<MergedLevel> InMemoryNode::UpdateBuffer::concat_segmented_and_merged_level(
-    BatchUpdateContext& context,
-    MergedLevel& merged_level,
-    SegmentedLevel& segmented_level,
-    InMemoryNode& segmented_level_node) noexcept
+bool InMemoryNode::UpdateBuffer::SegmentedLevel::set_pivot_items_flushed(
+    const InMemoryNode& node,
+    BatchUpdateContext& update_context,
+    usize pivot_i,
+    const CInterval<KeyView>& flush_key_crange,
+    Status segment_load_status)
 {
-  MergedLevel new_merged_level;
-  HasPageRefs has_page_refs{false};
-  Status segment_load_status;
+  segment_load_status.Update(
+      in_segmented_level(node, *this, update_context.page_loader, update_context.overcommit)
+          .drop_key_range(pivot_i, flush_key_crange.upper_bound));
 
-  BoxedSeq<EditSlice> segmented_level_slices =
-      SegmentedLevelScanner<const InMemoryNode, const SegmentedLevel, llfs::PageLoader>{
-          segmented_level_node,
-          segmented_level,
-          context.page_loader,
-          llfs::PinPageToJob::kDefault,
-          context.overcommit,
-          segment_load_status,
-          /*min_pivot_i=*/0}  //
-      | seq::boxed();
+  return this->empty();
+}
 
-  BATT_ASSIGN_OK_RESULT(  //
-      new_merged_level.result_set,
-      context.merge_compact_edits</*decay_to_items=*/false>(  //
-          global_max_key(),
-          [&](MergeCompactor& compactor) -> Status {
-            compactor.push_level(merged_level.result_set.live_edit_slices());
-            compactor.push_level(std::move(segmented_level_slices));
-            return OkStatus();
-          }));
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+bool InMemoryNode::UpdateBuffer::SegmentedLevel::set_pivot_completely_flushed(usize pivot_i)
+{
+  // TODO [vsilai 2026-3-17]: call drop_key_range on segment filter with pivot key range?
+  //
+  for (usize segment_i = 0; segment_i < this->segment_count();) {
+    Segment& segment = this->get_segment(segment_i);
 
-  BATT_REQUIRE_OK(segment_load_status);
+    segment.set_pivot_active(pivot_i, false);
 
-  return new_merged_level;
+    if (segment.is_inactive()) {
+      this->drop_segment(segment_i);
+    } else {
+      ++segment_i;
+    }
+  }
+
+  return this->empty();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+usize InMemoryNode::UpdateBuffer::SegmentedLevel::segment_filter_cut_points() const
+{
+  usize n = 0;
+  for (const Segment& segment : this->segments) {
+    n += segment.num_cut_points();
+  }
+  return n;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+BoxedSeq<EditSlice> InMemoryNode::UpdateBuffer::HybridLevel::to_boxed_seq(
+    const InMemoryNode& node,
+    BatchUpdateContext& update_context,
+    Status& segment_load_status,
+    i32 min_pivot_i,
+    bool only_pivot,
+    Optional<KeyView> min_key) const
+{
+  return as_seq(this->levels) |
+         seq::map([&](const std::variant<MergedLevel, SegmentedLevel>& v) -> BoxedSeq<EditSlice> {
+           return batt::case_of(
+               v,
+               [&](const MergedLevel& merged_level) -> BoxedSeq<EditSlice> {
+                 return merged_level.to_boxed_seq(node, min_pivot_i);
+               },
+               [&](const SegmentedLevel& segmented_level) -> BoxedSeq<EditSlice> {
+                 return segmented_level.to_boxed_seq(node,
+                                                     update_context,
+                                                     segment_load_status,
+                                                     min_pivot_i,
+                                                     only_pivot,
+                                                     min_key);
+               });
+         }) |
+         seq::flatten() | seq::boxed();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+bool InMemoryNode::UpdateBuffer::HybridLevel::set_pivot_items_flushed(
+    const InMemoryNode& node,
+    BatchUpdateContext& update_context,
+    usize pivot_i,
+    const CInterval<KeyView>& flush_key_crange,
+    Status segment_load_status)
+{
+  for (auto iter = this->levels.begin(); iter != this->levels.end();) {
+    bool sub_level_is_now_empty = false;
+
+    batt::case_of(
+        *iter,
+        [&](MergedLevel& merged_sub_level) {
+          sub_level_is_now_empty = merged_sub_level.set_items_flushed(flush_key_crange);
+        },
+        [&](SegmentedLevel& segmented_sub_level) {
+          sub_level_is_now_empty = segmented_sub_level.set_pivot_items_flushed(node,
+                                                                               update_context,
+                                                                               pivot_i,
+                                                                               flush_key_crange,
+                                                                               segment_load_status);
+        });
+
+    if (sub_level_is_now_empty) {
+      iter = this->levels.erase(iter);
+    } else {
+      ++iter;
+    }
+  }
+
+  return this->empty();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+bool InMemoryNode::UpdateBuffer::HybridLevel::set_pivot_completely_flushed(
+    usize pivot_i,
+    const Interval<KeyView>& pivot_key_range)
+{
+  for (auto iter = this->levels.begin(); iter != this->levels.end();) {
+    bool sub_level_is_now_empty = false;
+
+    batt::case_of(
+        *iter,
+        [&](MergedLevel& merged_sub_level) {
+          sub_level_is_now_empty = merged_sub_level.set_items_flushed(pivot_key_range);
+        },
+        [&](SegmentedLevel& segmented_sub_level) {
+          sub_level_is_now_empty = segmented_sub_level.set_pivot_completely_flushed(pivot_i);
+        });
+
+    if (sub_level_is_now_empty) {
+      iter = this->levels.erase(iter);
+    } else {
+      ++iter;
+    }
+  }
+
+  return this->empty();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+usize InMemoryNode::UpdateBuffer::HybridLevel::segment_count(const TreeOptions& tree_options) const
+{
+  usize total = 0;
+
+  for (auto iter = this->levels.begin(); iter != this->levels.end(); ++iter) {
+    total += batt::case_of(
+        *iter,
+        [&](const MergedLevel& merged_sub_level) -> usize {
+          return merged_sub_level.estimate_segment_count(tree_options);
+        },
+        [&](const SegmentedLevel& segmented_sub_level) -> usize {
+          return segmented_sub_level.segment_count();
+        });
+  }
+
+  return total;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void InMemoryNode::UpdateBuffer::HybridLevel::drop_before_pivot(i32 pivot_i,
+                                                                const KeyView& pivot_key,
+                                                                llfs::PageLoader& page_loader,
+                                                                const TreeOptions& tree_options)
+{
+  for (auto iter = this->levels.begin(); iter != this->levels.end(); ++iter) {
+    batt::case_of(*iter, [&](auto& sub_level) {
+      sub_level.drop_before_pivot(pivot_i, pivot_key, page_loader, tree_options);
+    });
+  }
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void InMemoryNode::UpdateBuffer::HybridLevel::drop_after_pivot(i32 pivot_i,
+                                                               const KeyView& pivot_key,
+                                                               llfs::PageLoader& page_loader,
+                                                               const TreeOptions& tree_options)
+{
+  for (auto iter = this->levels.begin(); iter != this->levels.end(); ++iter) {
+    batt::case_of(*iter, [&](auto& sub_level) {
+      sub_level.drop_after_pivot(pivot_i, pivot_key, page_loader, tree_options);
+    });
+  }
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+StatusOr<usize> InMemoryNode::UpdateBuffer::HybridLevel::start_serialize(
+    const InMemoryNode& node,
+    TreeSerializeContext& context)
+{
+  usize total_segment_count = 0;
+
+  for (auto iter = this->levels.begin(); iter != this->levels.end(); ++iter) {
+    if (batt::is_case<MergedLevel>(*iter)) {
+      MergedLevel& merged_sub_level = std::get<MergedLevel>(*iter);
+      BATT_ASSIGN_OK_RESULT(usize sub_level_total, merged_sub_level.start_serialize(node, context));
+      total_segment_count += sub_level_total;
+    }
+  }
+
+  return total_segment_count;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+StatusOr<SegmentedLevel> InMemoryNode::UpdateBuffer::HybridLevel::finish_serialize(
+    const InMemoryNode& node,
+    TreeSerializeContext& context)
+{
+  static Metrics& r_metrics = InMemoryNode::metrics();
+
+  for (auto iter = this->levels.begin(); iter != this->levels.end(); ++iter) {
+    r_metrics.serialized_nonempty_level_count.add(1);
+    BATT_REQUIRE_OK(batt::case_of(
+        *iter,
+        [&](MergedLevel& merged_sub_level) -> Status {
+          BATT_ASSIGN_OK_RESULT(StatusOr<SegmentedLevel> new_segmented_sub_level,
+                                merged_sub_level.finish_serialize(node, context));
+          *iter = *new_segmented_sub_level;
+          r_metrics.serialized_buffer_segment_count.add(new_segmented_sub_level->segment_count());
+
+          return OkStatus();
+        },
+        [&](SegmentedLevel& segmented_sub_level) {
+          r_metrics.serialized_buffer_segment_count.add(segmented_sub_level.segment_count());
+          return OkStatus();
+        }));
+  }
+
+  SegmentedLevel final_segmented_level;
+  for (auto iter = this->levels.begin(); iter != this->levels.end(); ++iter) {
+    BATT_CHECK(batt::is_case<SegmentedLevel>(*iter));
+    SegmentedLevel& segmented_sub_level = std::get<SegmentedLevel>(*iter);
+    final_segmented_level.segments.insert(
+        final_segmented_level.segments.end(),
+        std::make_move_iterator(segmented_sub_level.segments.begin()),
+        std::make_move_iterator(segmented_sub_level.segments.end()));
+  }
+
+  return final_segmented_level;
 }
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
@@ -2105,7 +2383,7 @@ void InMemoryNode::UpdateBuffer::Segment::pop_front_pivots(i32 count)
 //
 bool InMemoryNode::UpdateBuffer::Segment::is_inactive() const
 {
-  const bool inactive = this->active_pivots.is_inactive();
+  const bool inactive = this->active_pivots.is_empty();
   if (inactive) {
     Slice<const Interval<u32>> filter_dropped_ranges = this->filter.dropped();
     BATT_CHECK_EQ(filter_dropped_ranges.size(), 1);
@@ -2157,6 +2435,21 @@ SmallFn<void(std::ostream&)> InMemoryNode::UpdateBuffer::SegmentedLevel::dump() 
     out << "SegmentedLevel{\n";
     for (const Segment& segment : this->segments) {
       out << "    " << segment.dump(/*multi_line=*/false) << ",\n";
+    }
+    out << "  }";
+  };
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+SmallFn<void(std::ostream&)> InMemoryNode::UpdateBuffer::HybridLevel::dump() const
+{
+  return [this](std::ostream& out) {
+    out << "HybridLevel{\n";
+    for (auto iter = this->levels.begin(); iter != this->levels.end(); ++iter) {
+      batt::case_of(*iter, [](const auto& sub_level) {
+        sub_level.dump();
+      });
     }
     out << "  }";
   };

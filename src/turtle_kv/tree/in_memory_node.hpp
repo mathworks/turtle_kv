@@ -107,7 +107,7 @@ struct InMemoryNode {
 
       /** \brief Returns the active pivots bit set.
        */
-      auto get_active_pivots() const
+      ActivePivotsSet128 get_active_pivots() const
       {
         return this->active_pivots;
       }
@@ -325,6 +325,23 @@ struct InMemoryNode {
        */
       void check_items_sorted(const InMemoryNode& node, llfs::PageLoader& page_loader) const;
 
+      BoxedSeq<EditSlice> to_boxed_seq(const InMemoryNode& node,
+                                       BatchUpdateContext& update_context,
+                                       Status& segment_load_status,
+                                       i32 min_pivot_i,
+                                       bool only_pivot,
+                                       Optional<KeyView> min_key) const;
+
+      bool set_pivot_items_flushed(const InMemoryNode& node,
+                                   BatchUpdateContext& update_context,
+                                   usize pivot_i,
+                                   const CInterval<KeyView>& flush_key_crange,
+                                   Status segment_load_status);
+
+      bool set_pivot_completely_flushed(usize pivot_i);
+
+      usize segment_filter_cut_points() const;
+
       /** \brief Prints a human-readable representation of the level.
        */
       SmallFn<void(std::ostream&)> dump() const;
@@ -394,6 +411,23 @@ struct InMemoryNode {
             .segment_future_ids_ = {}};
       }
 
+      BoxedSeq<EditSlice> to_boxed_seq(const InMemoryNode& node, i32 min_pivot_i) const
+      {
+        return this->result_set.live_edit_slices(node.get_pivot_key(min_pivot_i));
+      }
+
+      bool set_items_flushed(const CInterval<KeyView>& flush_key_crange)
+      {
+        this->result_set.drop_key_range(flush_key_crange);
+        return this->result_set.empty();
+      }
+
+      bool set_items_flushed(const Interval<KeyView>& flush_key_range)
+      {
+        this->result_set.drop_key_range_half_open(flush_key_range);
+        return this->result_set.empty();
+      }
+
       /** \brief Returns the number of segment leaf page build jobs added to the context.
        */
       StatusOr<usize> start_serialize(const InMemoryNode& node, TreeSerializeContext& context);
@@ -407,12 +441,61 @@ struct InMemoryNode {
     struct HybridLevel {
       std::vector<std::variant<MergedLevel, SegmentedLevel>> levels;
 
-      BoxedSeq<EditSlice> edit_slices(InMemoryNode& node,
-                                      BatchUpdateContext& update_context,
-                                      Status& segment_load_status,
-                                      i32 min_pivot_i,
-                                      bool only_pivot,
-                                      Optional<KeyView> min_key) const;
+      bool empty() const
+      {
+        return this->levels.empty();
+      }
+
+      Slice<const std::variant<MergedLevel, SegmentedLevel>> get_levels() const
+      {
+        return as_const_slice(this->levels);
+      }
+      
+      void add_new_sub_level(std::variant<MergedLevel, SegmentedLevel>&& level)
+      {
+        this->levels.emplace_back(std::move(level));
+      }
+
+      void add_new_sub_level(HybridLevel&& other)
+      {
+        this->levels.insert(this->levels.end(),
+                            std::make_move_iterator(other.levels.begin()),
+                            std::make_move_iterator(other.levels.end()));
+      }
+
+      bool set_pivot_items_flushed(const InMemoryNode& node,
+                                   BatchUpdateContext& update_context,
+                                   usize pivot_i,
+                                   const CInterval<KeyView>& flush_key_crange,
+                                   Status segment_load_status);
+
+      bool set_pivot_completely_flushed(usize pivot_i, const Interval<KeyView>& pivot_key_range);
+
+      BoxedSeq<EditSlice> to_boxed_seq(const InMemoryNode& node,
+                                       BatchUpdateContext& update_context,
+                                       Status& segment_load_status,
+                                       i32 min_pivot_i,
+                                       bool only_pivot,
+                                       Optional<KeyView> min_key) const;
+
+      usize segment_count(const TreeOptions& tree_options) const;
+
+      void drop_before_pivot(i32 pivot_i,
+                             const KeyView& pivot_key,
+                             llfs::PageLoader& page_loader,
+                             const TreeOptions& tree_options);
+
+      void drop_after_pivot(i32 pivot_i,
+                            const KeyView& pivot_key,
+                            llfs::PageLoader& page_loader,
+                            const TreeOptions& tree_options);
+
+      StatusOr<usize> start_serialize(const InMemoryNode& node, TreeSerializeContext& context);
+
+      StatusOr<SegmentedLevel> finish_serialize(const InMemoryNode& node,
+                                                TreeSerializeContext& context);
+
+      SmallFn<void(std::ostream&)> dump() const;
     };
 
     using Level = std::variant<EmptyLevel, MergedLevel, SegmentedLevel, HybridLevel>;
@@ -422,12 +505,6 @@ struct InMemoryNode {
     SmallVec<Level, 6> levels;
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
-
-    static StatusOr<MergedLevel> concat_segmented_and_merged_level(
-        BatchUpdateContext& context,  //
-        MergedLevel& merged_level,
-        SegmentedLevel& segmented_level,
-        InMemoryNode& segmented_level_node) noexcept;
 
     SmallFn<void(std::ostream&)> dump() const;
 
@@ -492,12 +569,12 @@ struct InMemoryNode {
 
   usize max_pivot_count() const
   {
-    return this->is_size_tiered() ? kMaxPivots : kMaxPivots;
+    return kMaxPivots;
   }
 
   usize max_segment_count() const
   {
-    return this->is_size_tiered() ? (kMaxPivots - 1) : (kMaxPivots - 1);
+    return kMaxPivots - 1;
   }
 
   Slice<const KeyView> get_pivot_keys() const

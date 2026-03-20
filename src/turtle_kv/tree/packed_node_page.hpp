@@ -49,7 +49,7 @@ struct PackedNodePage {
       kMaxPivots + 1 /*max_key*/ + 1 /*common_prefix*/ + 1 /*final_offset*/;
 
   static constexpr u8 kFlagSizeTiered = 0x80;
-  static constexpr u8 kPivotCountMask = 0x7f;
+  static constexpr u8 kPivotCountMask = 0x7f;  // Needs to be at least 64
   static constexpr u16 kSegmentStartsFiltered = 0x8000;
 
   using Key = PackedNodePageKey;

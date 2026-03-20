@@ -90,13 +90,13 @@ inline i32 get_last_active_pivot(const CInterval<usize>& pivot_range)
 
 //----- --- -- -  -  -   -
 
-template <HasActivePivotsSet T>
+template <HasConstActivePivotsSet T>
 inline i32 get_first_active_pivot(const T& segment)
 {
   return segment.get_active_pivots().first();
 }
 
-template <HasActivePivotsSet T>
+template <HasConstActivePivotsSet T>
 inline i32 get_last_active_pivot(const T& segment)
 {
   return segment.get_active_pivots().last();
@@ -242,7 +242,7 @@ struct SegmentedLevelAlgorithms {
 
       // If we can split the pivot without loading the leaf, great!
       //
-      if (in_segment(segment).split_pivot(pivot_i, None, this->level_)) {
+      if (in_segment(segment).split_pivot(pivot_i, /*split_indices=*/None, this->level_)) {
         continue;
       }
 
@@ -255,17 +255,29 @@ struct SegmentedLevelAlgorithms {
 
       const PackedLeafPage& leaf_page = PackedLeafPage::view_of(segment_pinned_leaf);
 
-      const usize pivot_offset_in_leaf =
-          std::distance(leaf_page.items_begin(), leaf_page.lower_bound(pivot_key));
+      const auto first_item_in_leaf = leaf_page.items_begin();
+
+      const usize pivot_begin_in_leaf =
+          std::distance(first_item_in_leaf, leaf_page.lower_bound(pivot_key));
 
       const usize split_offset_in_leaf =
-          std::distance(leaf_page.items_begin(), leaf_page.lower_bound(split_key));
+          std::distance(first_item_in_leaf, leaf_page.lower_bound(split_key));
 
-      VLOG(1) << " --" << BATT_INSPECT(split_offset_in_leaf) << BATT_INSPECT(pivot_offset_in_leaf);
+      const usize pivot_end_in_leaf =
+          std::distance(first_item_in_leaf, leaf_page.lower_bound(old_pivot_key_range.upper_bound));
 
-      BATT_CHECK_LE(pivot_offset_in_leaf, split_offset_in_leaf);
+      VLOG(1) << " --" << BATT_INSPECT(split_offset_in_leaf) << BATT_INSPECT(pivot_begin_in_leaf);
 
-      BATT_CHECK(in_segment(segment).split_pivot(pivot_i, split_offset_in_leaf, this->level_));
+      BATT_CHECK_LE(pivot_begin_in_leaf, split_offset_in_leaf);
+      BATT_CHECK_LE(split_offset_in_leaf, pivot_end_in_leaf);
+
+      BATT_CHECK(in_segment(segment).split_pivot(pivot_i,
+                                                 SegmentPivotSplitIndices{
+                                                     pivot_begin_in_leaf,
+                                                     split_offset_in_leaf,
+                                                     pivot_end_in_leaf,
+                                                 },
+                                                 this->level_));
     }
 
     return OkStatus();

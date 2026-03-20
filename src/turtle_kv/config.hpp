@@ -91,6 +91,12 @@ constexpr i64 kNewLeafLruPriority = kLeafLruPriority + kNewPagePriorityBoost;
 
 constexpr u32 kDefaultLeafShardedViewSize = 4096;
 
-constexpr usize kMaxPivots = 64;
+/** \brief The minimum number of pivots allowed in a non-root node.
+ */
+inline constexpr usize kMinPivots = 4;
+
+/** \brief The maximum number of pivots allowed in a packed node.
+ */
+inline constexpr usize kMaxPivots = 64;
 
 }  // namespace turtle_kv

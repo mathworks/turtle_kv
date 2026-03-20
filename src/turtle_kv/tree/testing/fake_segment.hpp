@@ -44,7 +44,7 @@ struct FakeSegment {
                             });
   }
 
-  auto get_active_pivots() const
+  ActivePivotsSet128 get_active_pivots() const
   {
     return this->active_pivots_;
   }
@@ -92,7 +92,7 @@ struct FakeSegment {
 
   bool is_inactive() const
   {
-    const bool inactive = this->active_pivots_.is_inactive();
+    const bool inactive = this->active_pivots_.is_empty();
     if (inactive) {
       Slice<const Interval<u32>> filter_dropped_ranges = this->filter_.dropped();
       BATT_CHECK_EQ(filter_dropped_ranges.size(), 1);
