@@ -159,11 +159,7 @@ class Subtree
    */
   StatusOr<Optional<Subtree>> try_split(BatchUpdateContext& context);
 
-  /** \brief Attempts to merge the given Subtree in place with its right sibling.
-   *
-   * If the in place merge is successful, `sibling` is completely consumed and `None` is returned.
-   *
-   * If a borrow needs to occur, `this` is modified in place and the modified sibling is returned.
+  /** \brief Merges the Subtree in place with `sibling`.
    */
   Status try_merge(BatchUpdateContext& context, Subtree&& sibling) noexcept;
 

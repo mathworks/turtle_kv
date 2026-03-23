@@ -202,8 +202,7 @@ struct InMemoryNode {
        */
       void insert_pivot(i32 pivot_i, bool is_active);
 
-      /** \brief Removes a pivot bit in this->active_pivots and this->flushed_pivots at position
-       * `pivot_i`.
+      /** \brief Removes a bit in the active pivots bit set at position `pivot_i`.
        */
       void remove_pivot(i32 pivot_i);
 
