@@ -55,6 +55,14 @@ struct InMemoryNode {
     /** \brief Captures statistics about the number of levels per node.
      */
     StatsMetric<u16> level_depth_stats;
+
+    /** \brief The total time spent on merging two Subtrees and updating parent metadata.
+     */
+    LatencyMetric merge_latency;
+
+    /** \brief The number of times a merge operation was followed by a split operation.
+     */
+    CountMetric<u64> merge_then_split_count;
   };
 
   static Metrics& metrics()
@@ -74,7 +82,12 @@ struct InMemoryNode {
   struct UpdateBuffer {
     using Self = UpdateBuffer;
 
+    struct EmptyLevel;
+    struct MergedLevel;
     struct SegmentedLevel;
+    struct HybridLevel;
+
+    using Level = std::variant<EmptyLevel, MergedLevel, SegmentedLevel, HybridLevel>;
 
     //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
     //
@@ -325,6 +338,8 @@ struct InMemoryNode {
        */
       void check_items_sorted(const InMemoryNode& node, llfs::PageLoader& page_loader) const;
 
+      /** \brief Converts the unflushed items in this level to a boxed sequence.
+       */
       BoxedSeq<EditSlice> to_boxed_seq(const InMemoryNode& node,
                                        BatchUpdateContext& update_context,
                                        Status& segment_load_status,
@@ -332,15 +347,34 @@ struct InMemoryNode {
                                        bool only_pivot,
                                        Optional<KeyView> min_key) const;
 
+      /** \brief Marks the items contained in `flush_key_crange` that are addressed to `pivot_i`
+       * as flushed within this level.
+       */
       bool set_pivot_items_flushed(const InMemoryNode& node,
                                    BatchUpdateContext& update_context,
                                    usize pivot_i,
                                    const CInterval<KeyView>& flush_key_crange,
                                    Status segment_load_status);
 
+      /** \brief Marks the pivot `pivot_i` as completely flushed within this level.
+       */
       bool set_pivot_completely_flushed(usize pivot_i);
 
+      /** \brief Calculates the number of filter cut points needed for this level when it will
+       * be serialized.
+       */
       usize segment_filter_cut_points() const;
+
+      /** \brief Merges this level with a "sibling" level from another node. 
+       * 
+       * This function is called when two nodes are being merged and their update buffers are
+       * being merged as well. In this function, this level is the "left" level (i.e., the level
+       * comes from the left node in the merge) and `sibling_level` is the "right" level. 
+       * 
+       * `node_pivot_count` is the number of pivots in the left node (i.e., the node that this
+       * level exists in).
+       */
+      Level merge(Level&& sibling_level, usize node_pivot_count);
 
       /** \brief Prints a human-readable representation of the level.
        */
@@ -428,6 +462,8 @@ struct InMemoryNode {
         return this->result_set.empty();
       }
 
+      Level merge(Level&& sibling_level);
+
       /** \brief Returns the number of segment leaf page build jobs added to the context.
        */
       StatusOr<usize> start_serialize(const InMemoryNode& node, TreeSerializeContext& context);
@@ -450,7 +486,7 @@ struct InMemoryNode {
       {
         return as_const_slice(this->levels);
       }
-      
+
       void add_new_sub_level(std::variant<MergedLevel, SegmentedLevel>&& level)
       {
         this->levels.emplace_back(std::move(level));
@@ -490,6 +526,8 @@ struct InMemoryNode {
                             llfs::PageLoader& page_loader,
                             const TreeOptions& tree_options);
 
+      Level merge(Level&& sibling_level);
+
       StatusOr<usize> start_serialize(const InMemoryNode& node, TreeSerializeContext& context);
 
       StatusOr<SegmentedLevel> finish_serialize(const InMemoryNode& node,
@@ -497,8 +535,6 @@ struct InMemoryNode {
 
       SmallFn<void(std::ostream&)> dump() const;
     };
-
-    using Level = std::variant<EmptyLevel, MergedLevel, SegmentedLevel, HybridLevel>;
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
 

@@ -178,7 +178,6 @@ class ActivePivotsSet128 : public ActivePivotsSetBase<std::array<u64, 2>>
       this->bit_set_[1] = 0;
     }
   }
-<<<<<<< HEAD
 
   BATT_ALWAYS_INLINE void pop_back_pivots(i32 count)
   {
@@ -194,8 +193,6 @@ class ActivePivotsSet128 : public ActivePivotsSetBase<std::array<u64, 2>>
       this->bit_set_[0] = 0;
     }
   }
-=======
->>>>>>> main
 };
 
 static_assert(ActivePivotsSet<ActivePivotsSet128>);

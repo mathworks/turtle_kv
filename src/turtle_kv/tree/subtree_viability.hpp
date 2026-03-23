@@ -160,6 +160,8 @@ inline bool normal_flush_might_fix_root(const SubtreeViability& viability)
       });
 }
 
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 inline bool is_root_viable(const SubtreeViability& viability)
 {
   return batt::case_of(

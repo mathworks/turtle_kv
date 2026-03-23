@@ -170,6 +170,56 @@ void verify_range_scan(LatencyMetric* scan_latency,
   }
 }
 
+void perform_range_scan(Table& expected_table,
+                        Subtree& tree,
+                        const TreeOptions& tree_options,
+                        PinningPageLoader& page_loader,
+                        const KeyView& min_key,
+                        usize scan_len,
+                        LatencyMetric* scan_latency,
+                        usize iteration)
+{
+  auto root_ptr = std::make_shared<Subtree>(tree.clone_serialized_or_panic());
+
+  std::array<std::pair<KeyView, ValueView>, kMaxScanSize> scan_items_buffer;
+
+  PageSliceStorage page_slice_storage;
+
+  KVStoreScanner kv_scanner{
+      page_loader,
+      root_ptr->page_id_slot_or_panic(),
+      BATT_OK_RESULT_OR_PANIC(root_ptr->get_height(page_loader,  //
+                                                   llfs::PageCacheOvercommit::not_allowed())),
+      min_key,
+      tree_options.trie_index_sharded_view_size(),
+      &page_slice_storage};
+
+  usize n_read = 0;
+  {
+    LatencyTimer timer{*scan_latency};
+    BATT_CHECK_OK(kv_scanner.start());
+    for (auto& kv_pair : scan_items_buffer) {
+      Optional<EditView> item = kv_scanner.next();
+      if (!item) {
+        break;
+      }
+      kv_pair.first = item->key;
+      kv_pair.second = item->value;
+      ++n_read;
+      if (n_read == scan_len) {
+        break;
+      }
+    }
+  }
+
+  ASSERT_NO_FATAL_FAILURE(verify_range_scan(nullptr,
+                                            expected_table,
+                                            as_slice(scan_items_buffer.data(), n_read),
+                                            min_key,
+                                            scan_len))
+      << BATT_INSPECT(iteration) << BATT_INSPECT_STR(min_key) << BATT_INSPECT(scan_len);
+}
+
 struct SubtreeBatchUpdateScenario {
   static std::atomic<usize>& size_tiered_count()
   {
@@ -428,46 +478,18 @@ void SubtreeBatchUpdateScenario::run()
 
       {
         auto root_ptr = std::make_shared<Subtree>(tree.clone_serialized_or_panic());
-        std::unique_ptr<llfs::PageCacheJob> scanner_page_job = page_cache->new_job();
 
         const usize scan_len = pick_scan_len(rng);
-        std::array<std::pair<KeyView, ValueView>, kMaxScanSize> scan_items_buffer;
         KeyView min_key = update.result_set.get_min_key();
 
-        PageSliceStorage page_slice_storage;
-
-        KVStoreScanner kv_scanner{
-            *page_loader,
-            root_ptr->page_id_slot_or_panic(),
-            BATT_OK_RESULT_OR_PANIC(root_ptr->get_height(*page_loader,  //
-                                                         llfs::PageCacheOvercommit::not_allowed())),
-            min_key,
-            tree_options.trie_index_sharded_view_size(),
-            &page_slice_storage};
-
-        usize n_read = 0;
-        {
-          LatencyTimer timer{scan_latency};
-          BATT_CHECK_OK(kv_scanner.start());
-          for (auto& kv_pair : scan_items_buffer) {
-            Optional<EditView> item = kv_scanner.next();
-            if (!item) {
-              break;
-            }
-            kv_pair.first = item->key;
-            kv_pair.second = item->value;
-            ++n_read;
-            if (n_read == scan_len) {
-              break;
-            }
-          }
-        }
-        ASSERT_NO_FATAL_FAILURE(verify_range_scan(nullptr,
-                                                  expected_table,
-                                                  as_slice(scan_items_buffer.data(), n_read),
-                                                  min_key,
-                                                  scan_len))
-            << BATT_INSPECT(i) << BATT_INSPECT_STR(min_key) << BATT_INSPECT(scan_len);
+        perform_range_scan(expected_table,
+                           *root_ptr,
+                           tree_options,
+                           *page_loader,
+                           min_key,
+                           scan_len,
+                           &scan_latency,
+                           i);
       }
 
       if (my_id == 0) {
@@ -487,6 +509,8 @@ void SubtreeBatchUpdateScenario::run()
 
 TEST(InMemoryNodeTest, SubtreeDeletions)
 {
+  LatencyMetric scan_latency;
+
   const usize key_size = 24;
   const usize value_size = 100;
   const usize chi = 4;
@@ -550,21 +574,19 @@ TEST(InMemoryNodeTest, SubtreeDeletions)
     std::vector<EditView> current_batch;
     current_batch.reserve(items_per_leaf);
 
-    usize per_batch = items_per_leaf / total_batches;
-    usize batch_remainder = items_per_leaf % total_batches;
-
-    usize offset = batch_number * per_batch + std::min(batch_number, batch_remainder);
-    usize total_amount_per_batch = per_batch + (batch_number < batch_remainder ? 1 : 0);
-
-    for (usize j = 0; j < total_amount_per_batch; ++j) {
-      current_batch.emplace_back(keys[offset + j], ValueView::deleted());
+    for (usize i = 0; i < items_per_leaf; ++i) {
+      usize key_i = batch_number + i * total_batches;
+      if (key_i < keys.size()) {
+         current_batch.emplace_back(keys[key_i], ValueView::deleted());
+      }
     }
+
     BATT_CHECK_LE(current_batch.size(), items_per_leaf) << BATT_INSPECT(batch_number);
 
     return current_batch;
   };
 
-  const auto apply_tree_updates = [&](auto batch_creation_func, bool perform_scan) {
+  const auto apply_tree_updates = [&](auto batch_creation_func) {
     for (usize i = 0; i < total_batches; ++i) {
       std::vector<EditView> current_batch = batch_creation_func(i);
 
@@ -643,47 +665,20 @@ TEST(InMemoryNodeTest, SubtreeDeletions)
             verify_table_point_queries(expected_table, actual_table, rng, batt::log2_ceil(i)))
             << BATT_INSPECT(i);
 
-        if (perform_scan) {
+        {
           auto root_ptr = std::make_shared<Subtree>(tree.clone_serialized_or_panic());
-          std::unique_ptr<llfs::PageCacheJob> scanner_page_job = page_cache->new_job();
 
           const usize scan_len = 20;
-          std::array<std::pair<KeyView, ValueView>, kMaxScanSize> scan_items_buffer;
           KeyView min_key = update.result_set.get_min_key();
 
-          PageSliceStorage page_slice_storage;
-
-          KVStoreScanner kv_scanner{*page_loader,
-                                    root_ptr->page_id_slot_or_panic(),
-                                    BATT_OK_RESULT_OR_PANIC(root_ptr->get_height(
-                                        *page_loader,  //
-                                        llfs::PageCacheOvercommit::not_allowed())),
-                                    min_key,
-                                    tree_options.trie_index_sharded_view_size(),
-                                    &page_slice_storage};
-
-          usize n_read = 0;
-          {
-            BATT_CHECK_OK(kv_scanner.start());
-            for (auto& kv_pair : scan_items_buffer) {
-              Optional<EditView> item = kv_scanner.next();
-              if (!item) {
-                break;
-              }
-              kv_pair.first = item->key;
-              kv_pair.second = item->value;
-              ++n_read;
-              if (n_read == scan_len) {
-                break;
-              }
-            }
-          }
-          ASSERT_NO_FATAL_FAILURE(verify_range_scan(nullptr,
-                                                    expected_table,
-                                                    as_slice(scan_items_buffer.data(), n_read),
-                                                    min_key,
-                                                    scan_len))
-              << BATT_INSPECT(i) << BATT_INSPECT_STR(min_key) << BATT_INSPECT(scan_len);
+          perform_range_scan(expected_table,
+                             *root_ptr,
+                             tree_options,
+                             *page_loader,
+                             min_key,
+                             scan_len,
+                             &scan_latency,
+                             i);
         }
 
         page_loader.emplace(*page_cache);
@@ -692,20 +687,27 @@ TEST(InMemoryNodeTest, SubtreeDeletions)
   };
 
   LOG(INFO) << "Inserting key/value pairs into tree...";
-  apply_tree_updates(create_insertion_batch, false);
+  apply_tree_updates(create_insertion_batch);
 
   LOG(INFO) << "Deleting key/value pairs from tree...";
-  for (usize i = 0; i < total_batches; ++i) {
-    bool perform_scan = i == 0 ? true : false;
-    StatusOr<i32> tree_height =
-        tree.get_height(*page_loader, llfs::PageCacheOvercommit::not_allowed());
-    ASSERT_TRUE(tree_height.ok()) << BATT_INSPECT(tree_height);
+  StatusOr<i32> tree_height =
+      tree.get_height(*page_loader, llfs::PageCacheOvercommit::not_allowed());
+  ASSERT_TRUE(tree_height.ok()) << BATT_INSPECT(tree_height);
+  for (;;) {
     if (*tree_height > 0) {
-      apply_tree_updates(create_deletion_batch, perform_scan);
+      apply_tree_updates(create_deletion_batch);
     } else {
       break;
     }
+    tree_height = tree.get_height(*page_loader, llfs::PageCacheOvercommit::not_allowed());
+    ASSERT_TRUE(tree_height.ok()) << BATT_INSPECT(tree_height);
   }
+
+  LOG(INFO) << BATT_INSPECT(InMemoryNode::metrics().merge_latency);
+
+  LOG(INFO) << BATT_INSPECT(InMemoryNode::metrics().merge_then_split_count);
+
+  LOG(INFO) << BATT_INSPECT(scan_latency);
 }
 
 }  // namespace

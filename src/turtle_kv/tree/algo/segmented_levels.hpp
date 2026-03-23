@@ -187,15 +187,21 @@ struct SegmentedLevelAlgorithms {
 
       const PackedLeafPage& leaf = PackedLeafPage::view_of(pinned_page.get_page_buffer());
 
-      auto flushed_last = leaf.lower_bound(max_key);
-      if (flushed_last != leaf.items_end() && get_key(*flushed_last) == max_key) {
-        ++flushed_last;
-      }
-
       CInterval<KeyView> flush_key_crange{pivot_lower_bound_key, max_key};
       segment.drop_key_range(flush_key_crange, leaf.items_slice());
 
-      if (flushed_last == leaf.items_end() || get_key(*flushed_last) >= pivot_upper_bound_key) {
+      auto pivot_first = leaf.lower_bound(pivot_lower_bound_key);
+      usize pivot_first_i = std::distance(leaf.items_begin(), pivot_first);
+
+      auto pivot_last = leaf.lower_bound(pivot_upper_bound_key);
+      usize pivot_last_i = std::distance(leaf.items_begin(), pivot_last);
+
+      Interval<u32> pivot_live_range =
+          segment.get_live_item_range(this->level_,
+                                      Interval<u32>{BATT_CHECKED_CAST(u32, pivot_first_i),
+                                                    BATT_CHECKED_CAST(u32, pivot_last_i)});
+
+      if (pivot_live_range.empty()) {
         segment.set_pivot_active(pivot_i, false);
       }
 

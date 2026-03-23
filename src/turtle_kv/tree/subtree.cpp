@@ -245,8 +245,6 @@ Status Subtree::apply_batch_update(const TreeOptions& tree_options,
         return OkStatus();
       },
       [&](NeedsSplit needs_split) {
-        // TODO [vsilai 2025-12-09]: revist when VLDB changes are merged in.
-        //
         if (normal_flush_might_fix_root(needs_split)) {
           Status flush_status = new_subtree.try_flush(update_context);
           if (flush_status.ok() && batt::is_case<Viable>(new_subtree.get_viability())) {
