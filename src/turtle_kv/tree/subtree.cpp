@@ -323,11 +323,6 @@ Status Subtree::flush_and_shrink(BatchUpdateContext& context) noexcept
       return flush_status;
     }
 
-    SubtreeViability current_viability = this->get_viability();
-    if (is_root_viable(current_viability)) {
-      break;
-    }
-
     // Nothing was available to flush since the node's update buffer is empty. Try collapsing one
     // level of the tree.
     //
@@ -622,7 +617,7 @@ Status Subtree::try_flush(BatchUpdateContext& context)
       },
 
       [&](const std::unique_ptr<InMemoryLeaf>& leaf [[maybe_unused]]) -> Status {
-        return {batt::StatusCode::kUnavailable};
+        return OkStatus();
       },
 
       [&](const std::unique_ptr<InMemoryNode>& node) -> Status {
