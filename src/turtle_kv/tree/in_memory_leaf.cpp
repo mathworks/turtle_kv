@@ -204,12 +204,14 @@ Status InMemoryLeaf::try_merge(BatchUpdateContext& context,
   BATT_CHECK(sibling->result_set);
 
   if (sibling->result_set->empty()) {
-    BATT_CHECK(batt::is_case<Viable>(this->get_viability()));
+    BATT_CHECK(batt::is_case<Viable>(this->get_viability()))
+        << "Sibling leaf is not viable, so this leaf must be viable!";
     return OkStatus();
   }
 
   if (this->result_set->empty()) {
-    BATT_CHECK(batt::is_case<Viable>(sibling->get_viability()));
+    BATT_CHECK(batt::is_case<Viable>(sibling->get_viability()))
+        << "This leaf is not viable, so sibling leaf must be viable!";
     this->pinned_leaf_page_ = std::move(sibling->pinned_leaf_page_);
     this->result_set = std::move(sibling->result_set);
     this->shared_edit_size_totals_ = sibling->shared_edit_size_totals_;

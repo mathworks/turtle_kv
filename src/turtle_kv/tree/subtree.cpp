@@ -323,13 +323,10 @@ Status Subtree::flush_and_shrink(BatchUpdateContext& context) noexcept
       return flush_status;
     }
 
-    // Nothing was available to flush since the node's update buffer is empty. Try collapsing one
-    // level of the tree.
+    // Nothing was available to flush since either the node's update buffer is empty or we have
+    // a leaf root. If possible and necessary, try collapsing one level of the tree.
     //
     if (flush_status == batt::StatusCode::kUnavailable) {
-      // Note: At this point, we must have a node and not a leaf, since the `is_root_viable` check
-      // above will return Viable` for a leaf and we break out of the loop in that case.
-      //
       BATT_REQUIRE_OK(this->try_shrink());
     }
   }
@@ -593,9 +590,10 @@ Status Subtree::try_merge(BatchUpdateContext& context, Subtree&& sibling) noexce
       [&](auto& in_memory) -> Status {
         using PtrT = std::decay_t<decltype(in_memory)>;
 
-        BATT_CHECK(batt::is_case<PtrT>(sibling.impl_));
+        BATT_CHECK(batt::is_case<PtrT>(sibling.impl_))
+            << "Sibling Subtree must be the same in-memory type as this Subtree!";
         auto& sibling_ptr = std::get<PtrT>(sibling.impl_);
-        BATT_CHECK(sibling_ptr);
+        BATT_CHECK_NOT_NULLPTR(sibling_ptr);
 
         BATT_REQUIRE_OK(in_memory->try_merge(context, std::move(sibling_ptr)));
 

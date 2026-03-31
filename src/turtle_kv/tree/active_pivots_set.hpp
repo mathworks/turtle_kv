@@ -158,11 +158,11 @@ class ActivePivotsSet128 : public ActivePivotsSetBase<std::array<u64, 2>>
   BATT_ALWAYS_INLINE auto printable() const
   {
     return [this](std::ostream& out) {
-      out << std::bitset<64>{this->bit_set_[1]} << "," << std::bitset<64>{this->bit_set_[1]};
+      out << std::bitset<64>{this->bit_set_[1]} << "," << std::bitset<64>{this->bit_set_[0]};
     };
   }
 
-  /** \brief Removes the specified number (`count`) pivots from the bit set.
+  /** \brief Removes the specified number (`count`) pivots from the beginning of the bit set.
    */
   BATT_ALWAYS_INLINE void pop_front_pivots(i32 count)
   {
@@ -179,6 +179,8 @@ class ActivePivotsSet128 : public ActivePivotsSetBase<std::array<u64, 2>>
     }
   }
 
+  /** \brief Removes the specified number (`count`) pivots from the end of the bit set.
+   */
   BATT_ALWAYS_INLINE void pop_back_pivots(i32 count)
   {
     if (count < 1) {
@@ -192,6 +194,16 @@ class ActivePivotsSet128 : public ActivePivotsSetBase<std::array<u64, 2>>
       this->bit_set_[1] = this->bit_set_[0] << (count - 64);
       this->bit_set_[0] = 0;
     }
+  }
+
+  /** \brief Performs a bit wise OR operation with another bit set.
+   */
+  BATT_ALWAYS_INLINE Self& operator|=(const Self& other)
+  {
+    this->bit_set_[0] |= other.bit_set_[0];
+    this->bit_set_[1] |= other.bit_set_[1];
+
+    return *this;
   }
 };
 

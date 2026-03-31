@@ -364,12 +364,12 @@ struct InMemoryNode {
        */
       usize segment_filter_cut_points() const;
 
-      /** \brief Merges this level with a "sibling" level from another node. 
-       * 
+      /** \brief Merges this level with a "sibling" level from another node.
+       *
        * This function is called when two nodes are being merged and their update buffers are
        * being merged as well. In this function, this level is the "left" level (i.e., the level
-       * comes from the left node in the merge) and `sibling_level` is the "right" level. 
-       * 
+       * comes from the left node in the merge) and `sibling_level` is the "right" level.
+       *
        * `node_pivot_count` is the number of pivots in the left node (i.e., the node that this
        * level exists in).
        */
@@ -525,6 +525,17 @@ struct InMemoryNode {
                             llfs::PageLoader& page_loader,
                             const TreeOptions& tree_options);
 
+      Status split_pivot(InMemoryNode& node,
+                         BatchUpdateContext& update_context,
+                         i32 pivot_i,
+                         const Interval<KeyView>& pivot_key_range,
+                         const KeyView& sibling_min_key);
+
+      void merge_pivots(InMemoryNode& node,
+                        BatchUpdateContext& update_context,
+                        i32 left_pivot_i,
+                        i32 right_pivot_i);
+
       Level merge(Level&& sibling_level);
 
       StatusOr<usize> start_serialize(const InMemoryNode& node, TreeSerializeContext& context);
@@ -564,7 +575,7 @@ struct InMemoryNode {
   SmallVec<Subtree, 64> children;
   SmallVec<llfs::PinnedPage, 64> child_pages;
   SmallVec<usize, 64> pending_bytes;
-  u64 pending_bytes_is_exact = 0;
+  ActivePivotsSet128 pending_bytes_is_exact = {};
   Optional<i32> latest_flush_pivot_i_;
   SmallVec<KeyView, 65> pivot_keys_;
   KeyView max_key_;
@@ -669,8 +680,8 @@ struct InMemoryNode {
 
   void add_pending_bytes(usize pivot_i, usize byte_count)
   {
-    this->pending_bytes_is_exact = set_bit(this->pending_bytes_is_exact, pivot_i, false);
-    BATT_CHECK_EQ(get_bit(this->pending_bytes_is_exact, pivot_i), false);
+    this->pending_bytes_is_exact.set(pivot_i, false);
+    BATT_CHECK_EQ(this->pending_bytes_is_exact.get(pivot_i), false);
 
     this->pending_bytes[pivot_i] += byte_count;
   }
