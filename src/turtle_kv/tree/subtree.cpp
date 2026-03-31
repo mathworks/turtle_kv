@@ -319,7 +319,7 @@ Status Subtree::flush_and_shrink(BatchUpdateContext& context) noexcept
     // First, try flushing. If flushing makes the root viable, return immediately.
     //
     Status flush_status = this->try_flush(context);
-    if (flush_status != OkStatus() && flush_status != batt::StatusCode::kUnavailable) {
+    if (!flush_status.ok() && flush_status != batt::StatusCode::kUnavailable) {
       return flush_status;
     }
 
