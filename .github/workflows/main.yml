@@ -30,6 +30,7 @@ jobs:
           CACHE_CONAN_REMOTE: ${{ vars.CACHE_CONAN_REMOTE }}
           CACHE_CONAN_LOGIN_USERNAME: ${{ vars.CACHE_CONAN_LOGIN_USERNAME }}
           CACHE_CONAN_PASSWORD: ${{ secrets.CACHE_CONAN_PASSWORD }}
+          PIP_EXTRA_INDEX_URL: ${{ vars.PIP_EXTRA_INDEX_URL }}
         run: scripts/ci-build-with-docker.sh
   #release:
   #  if: github.event_name == 'push' && contains(github.ref, 'refs/tags/')
