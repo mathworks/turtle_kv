@@ -29,6 +29,7 @@ docker run \
        --env RELEASE_CONAN_LOGIN_USERNAME \
        --env RELEASE_CONAN_PASSWORD \
        --env CI_JOB_NAME \
+       --env PIP_EXTRA_INDEX_URL \
        --volume "${HOME}/ci_conan_hosts:/etc/hosts:ro" \
        --volume "${PROJECT_DIR}:${PROJECT_DIR}" \
        ${VOLUMES} \
