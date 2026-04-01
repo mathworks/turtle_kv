@@ -315,7 +315,9 @@ Status Subtree::flush_and_shrink(BatchUpdateContext& context) noexcept
 
   BATT_CHECK(!this->is_serialized());
 
-  while (!is_root_viable(this->get_viability())) {
+  usize retries = 0;
+
+  while (!is_root_viable(this->get_viability()) && retries < kMaxPivots) {
     // First, try flushing. If flushing makes the root viable, return immediately.
     //
     Status flush_status = this->try_flush(context);
@@ -329,17 +331,14 @@ Status Subtree::flush_and_shrink(BatchUpdateContext& context) noexcept
     if (flush_status == batt::StatusCode::kUnavailable) {
       BATT_REQUIRE_OK(this->try_shrink());
     }
+
+    ++retries;
   }
 
   // If the root is a leaf and there are no items in the leaf, set the root to be an empty subtree.
   //
   if (batt::is_case<std::unique_ptr<InMemoryLeaf>>(this->impl_)) {
-    std::unique_ptr<InMemoryLeaf>& root_leaf = std::get<std::unique_ptr<InMemoryLeaf>>(this->impl_);
-    BATT_CHECK(root_leaf);
-
-    if (!root_leaf->get_item_count()) {
-      this->impl_ = llfs::PageIdSlot::from_page_id(llfs::PageId{});
-    }
+    BATT_REQUIRE_OK(this->try_shrink());
   }
 
   return OkStatus();
@@ -578,6 +577,13 @@ Status Subtree::try_merge(BatchUpdateContext& context, Subtree&& sibling) noexce
 {
   BATT_CHECK(!this->locked_.load());
 
+  BATT_ASSIGN_OK_RESULT(i32 this_height,
+                        this->get_height(context.page_loader, context.overcommit));
+  BATT_ASSIGN_OK_RESULT(i32 sibling_height,
+                        sibling.get_height(context.page_loader, context.overcommit));
+
+  BATT_CHECK_EQ(this_height, sibling_height);
+
   return batt::case_of(
       this->impl_,
 
@@ -637,7 +643,11 @@ Status Subtree::try_shrink() noexcept
       },
 
       [&](const std::unique_ptr<InMemoryLeaf>& leaf [[maybe_unused]]) -> StatusOr<Subtree> {
-        return {batt::StatusCode::kUnavailable};
+        if (!leaf->get_item_count()) {
+          return llfs::PageIdSlot::from_page_id(llfs::PageId{});
+        }
+
+        return {std::move(*this)};
       },
 
       [&](const std::unique_ptr<InMemoryNode>& node) -> StatusOr<Subtree> {
