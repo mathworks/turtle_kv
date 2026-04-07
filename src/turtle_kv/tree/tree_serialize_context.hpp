@@ -1,5 +1,7 @@
 #pragma once
+#define TURTLE_KV_TREE_TREE_SERIALIZE_CONTEXT_HPP
 
+#include <turtle_kv/tree/filter_page_write_state.hpp>
 #include <turtle_kv/tree/tree_options.hpp>
 
 #include <turtle_kv/import/int_types.hpp>
@@ -30,9 +32,14 @@ class TreeSerializeContext
       UniqueSmallFn<StatusOr<llfs::PinnedPage>(llfs::PageCacheJob& job,
                                                std::shared_ptr<llfs::PageBuffer>&& page_buffer)>;
 
-  using BuildPageFn = SmallFn<StatusOr<PinPageToJobFn>(usize task_i,
-                                                       llfs::PageCache& page_cache,
-                                                       llfs::PageBuffer& page_buffer)>;
+  struct BuildPageArgs {
+    usize task_i;
+    llfs::PageCache& page_cache;
+    llfs::PageBuffer& page_buffer;
+    const boost::intrusive_ptr<FilterPageWriteState>& filter_page_write_state;
+  };
+
+  using BuildPageFn = SmallFn<StatusOr<PinPageToJobFn>(BuildPageArgs context)>;
 
   struct BuildPageJob {
     llfs::PageSize page_size;
@@ -86,10 +93,12 @@ class TreeSerializeContext
   TreeSerializeContext(const TreeSerializeContext&) = delete;
   TreeSerializeContext& operator=(const TreeSerializeContext&) = delete;
 
-  explicit TreeSerializeContext(const TreeOptions& tree_options,
-                                llfs::PageCacheJob& page_job,
-                                batt::WorkerPool& worker_pool,
-                                llfs::PageCacheOvercommit& overcommit) noexcept;
+  explicit TreeSerializeContext(
+      const TreeOptions& tree_options,
+      llfs::PageCacheJob& page_job,
+      batt::WorkerPool& worker_pool,
+      llfs::PageCacheOvercommit& overcommit,
+      boost::intrusive_ptr<FilterPageWriteState>&& filter_page_write_state) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -111,6 +120,11 @@ class TreeSerializeContext
   llfs::PageCacheOvercommit& overcommit()
   {
     return this->overcommit_;
+  }
+
+  const boost::intrusive_ptr<FilterPageWriteState>& filter_page_write_state() const
+  {
+    return this->filter_page_write_state_;
   }
 
   const batt::CancelToken& cancel_token() const
@@ -141,6 +155,8 @@ class TreeSerializeContext
   batt::WorkerPool& worker_pool_;
 
   llfs::PageCacheOvercommit& overcommit_;
+
+  boost::intrusive_ptr<FilterPageWriteState> filter_page_write_state_;
 
   batt::CancelToken cancel_token_;
 

@@ -11,6 +11,7 @@
 #include <llfs/status_code.hpp>
 
 #include <batteries/async/cancel_token.hpp>
+#include <batteries/utility.hpp>
 
 namespace turtle_kv {
 
@@ -97,10 +98,12 @@ llfs::PageId Checkpoint::root_id() const
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<Checkpoint> Checkpoint::serialize(const TreeOptions& tree_options,
-                                           llfs::PageCacheJob& job,
-                                           llfs::PageCacheOvercommit& overcommit,
-                                           batt::WorkerPool& worker_pool) const noexcept
+StatusOr<Checkpoint> Checkpoint::serialize(
+    const TreeOptions& tree_options,
+    llfs::PageCacheJob& job,
+    llfs::PageCacheOvercommit& overcommit,
+    batt::WorkerPool& worker_pool,
+    const boost::intrusive_ptr<FilterPageWriteState>& filter_page_write_state) const noexcept
 {
   if (this->tree_->is_serialized()) {
     BATT_CHECK(this->root_id_);
@@ -112,6 +115,7 @@ StatusOr<Checkpoint> Checkpoint::serialize(const TreeOptions& tree_options,
       job,
       worker_pool,
       overcommit,
+      batt::make_copy(filter_page_write_state),
   };
 
   BATT_REQUIRE_OK(this->tree_->start_serialize(serialize_context));

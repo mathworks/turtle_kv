@@ -383,6 +383,7 @@ void SubtreeBatchUpdateScenario::run()
           *page_job,
           worker_pool,
           llfs::PageCacheOvercommit::not_allowed(),
+          turtle_kv::FilterPageWriteState::make_new(),
       };
 
       Status start_status = tree.start_serialize(context);

@@ -11,11 +11,13 @@ using BuildPageJobId = TreeSerializeContext::BuildPageJobId;
     const TreeOptions& tree_options,
     llfs::PageCacheJob& page_job,
     batt::WorkerPool& worker_pool,
-    llfs::PageCacheOvercommit& overcommit) noexcept
+    llfs::PageCacheOvercommit& overcommit,
+    boost::intrusive_ptr<FilterPageWriteState>&& filter_page_write_state) noexcept
     : tree_options_{tree_options}
     , page_job_{page_job}
     , worker_pool_{worker_pool}
     , overcommit_{overcommit}
+    , filter_page_write_state_{filter_page_write_state}
 {
 }
 
@@ -148,7 +150,12 @@ void TreeSerializeContext::build_pages_task_fn()
       continue;
     }
 
-    build.pin_page_fn = build.build_page_fn(build.task_i, this->page_job_.cache(), **page_buffer);
+    build.pin_page_fn = build.build_page_fn(BuildPageArgs{
+        .task_i = build.task_i,
+        .page_cache = this->page_job_.cache(),
+        .page_buffer = **page_buffer,
+        .filter_page_write_state = this->filter_page_write_state_,
+    });
   }
 }
 

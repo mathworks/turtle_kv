@@ -51,10 +51,11 @@ class CheckpointGenerator
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  explicit CheckpointGenerator(batt::WorkerPool& worker_pool,    //
-                               const TreeOptions& tree_options,  //
-                               llfs::PageCache& cache,           //
-                               Checkpoint&& base_checkpoint,     //
+  explicit CheckpointGenerator(batt::WorkerPool& worker_pool,
+                               const TreeOptions& tree_options,
+                               llfs::PageCache& cache,
+                               boost::intrusive_ptr<FilterPageWriteState>&& filter_page_write_state,
+                               Checkpoint&& base_checkpoint,
                                llfs::Volume& checkpoint_volume) noexcept;
 
   CheckpointGenerator(const CheckpointGenerator&) = delete;
@@ -151,6 +152,10 @@ class CheckpointGenerator
   // The cache that provides the backing store for checkpoints.
   //
   llfs::PageCache& cache_;
+
+  // Tracks the state of filter page writes.
+  //
+  boost::intrusive_ptr<FilterPageWriteState> filter_page_write_state_;
 
   // The current job.  This job is lazily created when `push_batch` is called, and is reset after
   // `finalize_checkpoint`.

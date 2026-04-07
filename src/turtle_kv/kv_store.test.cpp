@@ -182,8 +182,6 @@ TEST_F(KVStoreTest, CreateAndOpen)
       kv_store_config.initial_capacity_bytes = 512 * kMiB;
       kv_store_config.change_log_size_bytes = 64 * kMiB * 100;
 
-      LOG(INFO) << BATT_INSPECT(kv_store_config.tree_options.filter_bits_per_key());
-
       TreeOptions& tree_options = kv_store_config.tree_options;
 
       tree_options.set_node_size(4 * kKiB);
@@ -194,6 +192,9 @@ TEST_F(KVStoreTest, CreateAndOpen)
         tree_options.set_buffer_level_trim(3);
       }
       tree_options.set_size_tiered(size_tiered);
+
+      LOG(INFO) << BATT_INSPECT(tree_options.filter_bits_per_key())
+                << BATT_INSPECT(tree_options.filter_page_size());
 
       auto runtime_options = KVStore::RuntimeOptions::with_default_values();
       runtime_options.use_threaded_checkpoint_pipeline = true;

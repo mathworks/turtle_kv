@@ -1513,25 +1513,24 @@ StatusOr<usize> MergedLevel::start_serialize(const InMemoryNode& node,
              filter_bits_per_key,
              overcommit_triggered,
              filter_page_size](
-                usize task_i,
-                llfs::PageCache& page_cache,
-                llfs::PageBuffer& page_buffer) -> TreeSerializeContext::PinPageToJobFn {
+                TreeSerializeContext::BuildPageArgs args) -> TreeSerializeContext::PinPageToJobFn {
               //----- --- -- -  -  -   -
               const auto all_items_in_level = this->result_set.get();
               const auto items_in_this_page = batt::slice_range(all_items_in_level, part_extents);
 
-              if (task_i == 0) {
+              if (args.task_i == 0) {
                 return build_leaf_page_in_job(node.tree_options.trie_index_reserve_size(),
-                                              page_buffer,
+                                              args.page_buffer,
                                               items_in_this_page);
               }
-              BATT_CHECK_EQ(task_i, 1);
+              BATT_CHECK_EQ(args.task_i, 1);
 
-              return build_filter_for_leaf_in_job(page_cache,
+              return build_filter_for_leaf_in_job(batt::make_copy(args.filter_page_write_state),
+                                                  args.page_cache,
                                                   overcommit_triggered,
                                                   filter_bits_per_key,
                                                   filter_page_size,
-                                                  page_buffer.page_id(),
+                                                  args.page_buffer.page_id(),
                                                   items_in_this_page);
             }));
 

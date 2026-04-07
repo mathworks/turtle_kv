@@ -4,6 +4,7 @@
 #include <turtle_kv/delta_batch_id.hpp>
 #include <turtle_kv/packed_checkpoint.hpp>
 
+#include <turtle_kv/tree/filter_page_write_state.hpp>
 #include <turtle_kv/tree/subtree.hpp>
 
 #include <turtle_kv/util/use_counter.hpp>
@@ -79,10 +80,12 @@ class Checkpoint
 
   /** \brief Serializes all pages in the Checkpoint to prepare to write it.
    */
-  StatusOr<Checkpoint> serialize(const TreeOptions& tree_options,
-                                 llfs::PageCacheJob& job,
-                                 llfs::PageCacheOvercommit& overcommit,
-                                 batt::WorkerPool& worker_pool) const noexcept;
+  StatusOr<Checkpoint> serialize(
+      const TreeOptions& tree_options,
+      llfs::PageCacheJob& job,
+      llfs::PageCacheOvercommit& overcommit,
+      batt::WorkerPool& worker_pool,
+      const boost::intrusive_ptr<FilterPageWriteState>& filter_page_write_state) const noexcept;
 
   /** \brief Returns the in-memory view of the checkpoint tree.
    */

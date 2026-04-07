@@ -6,6 +6,8 @@
 #include <turtle_kv/tree/packed_leaf_page.hpp>
 #include <turtle_kv/tree/the_key.hpp>
 
+#include <batteries/utility.hpp>
+
 namespace turtle_kv {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -216,22 +218,22 @@ Status InMemoryLeaf::start_serialize(TreeSerializeContext& context)
           llfs::LruPriority{kNewLeafLruPriority},
           /*task_count=*/2,
           [this, filter_bits_per_key, filter_page_size, overcommit_triggered](
-              usize task_i,
-              llfs::PageCache& page_cache,
-              llfs::PageBuffer& page_buffer) -> StatusOr<TreeSerializeContext::PinPageToJobFn>  //
+              TreeSerializeContext::BuildPageArgs args)
+              -> StatusOr<TreeSerializeContext::PinPageToJobFn>  //
           {
-            if (task_i == 0) {
+            if (args.task_i == 0) {
               return build_leaf_page_in_job(this->tree_options.trie_index_reserve_size(),
-                                            page_buffer,
+                                            args.page_buffer,
                                             this->result_set->get());
             }
-            BATT_CHECK_EQ(task_i, 1);
+            BATT_CHECK_EQ(args.task_i, 1);
 
-            return build_filter_for_leaf_in_job(page_cache,
+            return build_filter_for_leaf_in_job(batt::make_copy(args.filter_page_write_state),
+                                                args.page_cache,
                                                 overcommit_triggered,
                                                 filter_bits_per_key,
                                                 filter_page_size,
-                                                page_buffer.page_id(),
+                                                args.page_buffer.page_id(),
                                                 this->result_set->get());
           }));
 
