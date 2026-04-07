@@ -181,7 +181,7 @@ class ActivePivotsSet128 : public ActivePivotsSetBase<std::array<u64, 2>>
 
   /** \brief Removes the specified number (`count`) pivots from the end of the bit set.
    */
-  BATT_ALWAYS_INLINE void pop_back_pivots(i32 count)
+  BATT_ALWAYS_INLINE void push_front_pivots(i32 count)
   {
     if (count < 1) {
       return;

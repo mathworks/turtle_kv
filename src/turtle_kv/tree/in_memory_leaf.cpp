@@ -60,7 +60,9 @@ SubtreeViability InMemoryLeaf::get_viability()
   const usize total_size = this->get_items_size();
 
   if (total_size < this->tree_options.flush_size() / 4) {
-    return NeedsMerge{};
+    NeedsMerge needs_merge;
+    needs_merge.zero_items = (total_size == 0);
+    return needs_merge;
   } else if (total_size > this->tree_options.flush_size()) {
     return NeedsSplit{};
   } else {

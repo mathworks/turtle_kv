@@ -26,6 +26,7 @@ struct NeedsMerge {
   bool single_pivot : 1 = false;
   bool too_few_pivots : 1 = false;
   bool too_few_items : 1 = false;
+  bool zero_items : 1 = false;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -40,7 +41,7 @@ inline std::ostream& operator<<(std::ostream& out, const NeedsMerge& t)
 {
   return out << "NeedsMerge{.single_pivot=" << t.single_pivot
              << ", .too_few_pivots=" << t.too_few_pivots << ", .too_few_items=" << t.too_few_items
-             << ",}";
+             << ", .zero_items=" << t.zero_items << ",}";
 }
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
@@ -173,7 +174,7 @@ inline bool is_root_viable(const SubtreeViability& viability)
         return false;
       },
       [](const NeedsMerge& needs_merge) {
-        return !needs_merge.single_pivot;
+        return !needs_merge.single_pivot && !needs_merge.zero_items;
       });
 }
 

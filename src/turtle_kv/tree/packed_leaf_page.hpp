@@ -440,10 +440,7 @@ inline usize PackedLeafLayoutPlan::compute_trie_step_size() const
   if (this->key_count <= step_size) {
     step_size = 1;
   } else if (this->key_count < 256) {
-    step_size = this->key_count / 16;
-    if (step_size == 0) {
-      step_size = 1;
-    }
+    step_size = (this->key_count + 15) / 16;
   }
 
   return step_size;

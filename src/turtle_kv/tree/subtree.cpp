@@ -318,6 +318,8 @@ Status Subtree::flush_and_shrink(BatchUpdateContext& context) noexcept
   usize retries = 0;
 
   while (!is_root_viable(this->get_viability()) && retries < kMaxPivots) {
+    ++retries;
+
     // First, try flushing. If flushing makes the root viable, return immediately.
     //
     Status flush_status = this->try_flush(context);
@@ -330,15 +332,8 @@ Status Subtree::flush_and_shrink(BatchUpdateContext& context) noexcept
     //
     if (flush_status == batt::StatusCode::kUnavailable) {
       BATT_REQUIRE_OK(this->try_shrink());
+      retries = 0;
     }
-
-    ++retries;
-  }
-
-  // If the root is a leaf and there are no items in the leaf, set the root to be an empty subtree.
-  //
-  if (batt::is_case<std::unique_ptr<InMemoryLeaf>>(this->impl_)) {
-    BATT_REQUIRE_OK(this->try_shrink());
   }
 
   return OkStatus();
@@ -621,7 +616,7 @@ Status Subtree::try_flush(BatchUpdateContext& context)
       },
 
       [&](const std::unique_ptr<InMemoryLeaf>& leaf [[maybe_unused]]) -> Status {
-        return OkStatus();
+        return {batt::StatusCode::kUnavailable};
       },
 
       [&](const std::unique_ptr<InMemoryNode>& node) -> Status {
@@ -643,6 +638,8 @@ Status Subtree::try_shrink() noexcept
       },
 
       [&](const std::unique_ptr<InMemoryLeaf>& leaf [[maybe_unused]]) -> StatusOr<Subtree> {
+        // If the root is a leaf and there are no items in the leaf, set the root to be an empty subtree.
+        //
         if (!leaf->get_item_count()) {
           return llfs::PageIdSlot::from_page_id(llfs::PageId{});
         }

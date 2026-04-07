@@ -903,7 +903,7 @@ Status InMemoryNode::try_merge(BatchUpdateContext& context,
           for (usize segment_i = 0; segment_i < right_segmented_level.segment_count();
                ++segment_i) {
             Segment& segment = right_segmented_level.get_segment(segment_i);
-            segment.active_pivots.pop_back_pivots(left_node_pivot_count);
+            segment.active_pivots.push_front_pivots(left_node_pivot_count);
           }
 
           this->update_buffer.levels.emplace_back(std::move(right_segmented_level));
@@ -922,7 +922,7 @@ Status InMemoryNode::try_merge(BatchUpdateContext& context,
                              sibling->pending_bytes.begin(),
                              sibling->pending_bytes.end());
 
-  sibling->pending_bytes_is_exact.pop_back_pivots(this->pivot_count());
+  sibling->pending_bytes_is_exact.push_front_pivots(this->pivot_count());
   this->pending_bytes_is_exact |= sibling->pending_bytes_is_exact;
 
   this->child_pages.insert(this->child_pages.end(),
@@ -2090,7 +2090,7 @@ Level InMemoryNode::UpdateBuffer::SegmentedLevel::merge(Level&& sibling_level,
         //
         for (usize segment_i = 0; segment_i < right_segmented_level.segment_count(); ++segment_i) {
           Segment& segment = right_segmented_level.get_segment(segment_i);
-          segment.active_pivots.pop_back_pivots(node_pivot_count);
+          segment.active_pivots.push_front_pivots(node_pivot_count);
         };
 
         this->segments.insert(this->segments.end(),
