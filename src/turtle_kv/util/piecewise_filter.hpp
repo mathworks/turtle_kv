@@ -1,4 +1,13 @@
+//=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
+//
+// Part of the TurtleKV Project, under Apache License v2.0.
+// See https://www.apache.org/licenses/LICENSE-2.0 for license information.
+// SPDX short identifier: Apache-2.0
+//
+//+++++++++++-+-+--+----- --- -- -  -  -   -
+
 #pragma once
+#define TURTLE_KV_UTIL_PIECEWISE_FILTER_HPP
 
 #include <turtle_kv/import/int_types.hpp>
 #include <turtle_kv/import/interval.hpp>
@@ -35,8 +44,9 @@ class PiecewiseFilter
   /** \brief Filters out the item range provided by the specified interval of item indexes.
    *
    * \param i The item index range to filter out, specified as a half open interval.
+   * \return The new dropped interval that coincides with `i`.
    */
-  void drop_index_range(Interval<OffsetT> i);
+  Interval<OffsetT> drop_index_range(Interval<OffsetT> i);
 
   /** \brief Returns whether or not the item at index `i` has been filtered out.
    *
@@ -91,17 +101,17 @@ class PiecewiseFilter
 };
 
 template <typename OffsetT, typename ItemT, typename Traits, typename OrderFn>
-inline void drop_item_range(PiecewiseFilter<OffsetT>& filter,
-                            const Slice<const ItemT>& items,
-                            const BasicInterval<Traits>& item_range,
-                            OrderFn&& order_fn)
+inline Interval<OffsetT> drop_item_range(PiecewiseFilter<OffsetT>& filter,
+                                         const Slice<const ItemT>& items,
+                                         const BasicInterval<Traits>& item_range,
+                                         OrderFn&& order_fn)
 {
   auto iters = boost::range::equal_range(items, item_range, order_fn);
 
   OffsetT start_i = BATT_CHECKED_CAST(OffsetT, std::distance(items.begin(), iters.first));
   OffsetT end_i = BATT_CHECKED_CAST(OffsetT, std::distance(items.begin(), iters.second));
 
-  filter.drop_index_range(Interval<OffsetT>{start_i, end_i});
+  return filter.drop_index_range(Interval<OffsetT>{start_i, end_i});
 }
 }  // namespace turtle_kv
 

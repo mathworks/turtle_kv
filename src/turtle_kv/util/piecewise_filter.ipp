@@ -1,4 +1,13 @@
+//=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
+//
+// Part of the TurtleKV Project, under Apache License v2.0.
+// See https://www.apache.org/licenses/LICENSE-2.0 for license information.
+// SPDX short identifier: Apache-2.0
+//
+//+++++++++++-+-+--+----- --- -- -  -  -   -
+
 #pragma once
+#define TURTLE_KV_UTIL_PIECEWISE_FILTER_IPP
 
 namespace turtle_kv {
 
@@ -54,10 +63,10 @@ bool PiecewiseFilter<OffsetT>::check_invariants() const
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename OffsetT>
-void PiecewiseFilter<OffsetT>::drop_index_range(Interval<OffsetT> i)
+Interval<OffsetT> PiecewiseFilter<OffsetT>::drop_index_range(Interval<OffsetT> i)
 {
   if (i.empty()) {
-    return;
+    return i;
   }
 
   // Find the position to insert `i` or begin merging with other intervals.
@@ -99,8 +108,13 @@ void PiecewiseFilter<OffsetT>::drop_index_range(Interval<OffsetT> i)
       *before = before->union_with(*iter);
       this->dropped_total_ += before->size();
       this->dropped_.erase(iter);
+      iter = before;
     }
   }
+
+  BATT_CHECK_NE(iter, this->dropped_.end());
+
+  return *iter;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
