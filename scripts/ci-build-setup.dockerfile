@@ -6,6 +6,7 @@
 # Install cor launcher.
 #
 RUN which cor 2>&1 >/dev/null || {{ \
+    export PIP_EXTRA_INDEX_URL=https://pypi.org/simple \
     pipx install cor-launcher --index-url https://gitlab.com/api/v4/projects/64628567/packages/pypi/simple ; \
     cor-setup ; \
 }}
