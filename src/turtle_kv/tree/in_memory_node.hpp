@@ -127,10 +127,10 @@ struct InMemoryNode {
       }
 
       template <typename Traits>
-      void drop_key_range(const BasicInterval<Traits>& key_range,
-                          const Slice<const PackedKeyValue>& items)
+      Interval<u32> drop_key_range(const BasicInterval<Traits>& key_range,
+                                   const Slice<const PackedKeyValue>& items)
       {
-        drop_item_range(this->filter, items, key_range, llfs::KeyRangeOrder{});
+        return drop_item_range(this->filter, items, key_range, llfs::KeyRangeOrder{});
       }
 
       void drop_index_range(Interval<u32> i)

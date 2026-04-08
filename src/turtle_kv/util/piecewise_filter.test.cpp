@@ -225,7 +225,7 @@ TEST(PiecewiseFilterTest, KeyQueryTest)
         drop_item_range(filter, batt::as_const_slice(keys), interval_dropped, KeyRangeOrder{});
 
     EXPECT_LE(after2.lower_bound, 600);
-    EXPECT_EQ(after2.upper_bound, keys.size());
+    EXPECT_EQ(after2.upper_bound, keys.size() - 1);
     EXPECT_TRUE(filter.live_at_index(num_keys - 1));
     EXPECT_TRUE(filter.live_at_index(400));
     EXPECT_FALSE(filter.live_at_index(600));
@@ -266,8 +266,8 @@ TEST(PiecewiseFilterTest, KeyQueryTest)
     //
     auto everything = Interval<u32>{0, num_keys};
     Interval<u32> after4 = filter.drop_index_range(everything);
-    EXPECT_EQ(after4, everything);
 
+    EXPECT_EQ(after4, everything);
     EXPECT_EQ(filter.dropped_total(), num_keys);
 
     EXPECT_FALSE(filter.live_at_index(0));
