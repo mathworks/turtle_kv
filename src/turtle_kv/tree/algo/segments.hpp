@@ -141,6 +141,18 @@ struct SegmentAlgorithms {
     return true;
   }
 
+  /** \brief Merges the two given pivots, effectively erasing `right_pivot`.
+   */
+  template <typename LevelT>
+  [[nodiscard]] void merge_pivots(i32 left_pivot, i32 right_pivot, const LevelT& level)
+  {
+    bool left_is_active = this->segment_.is_pivot_active(left_pivot);
+    bool right_is_active = this->segment_.is_pivot_active(right_pivot);
+    this->segment_.set_pivot_active(left_pivot, left_is_active || right_is_active);
+
+    this->segment_.remove_pivot(right_pivot);
+  }
+
   /** \brief Invokes the speficied `fn` for each active pivot in the specified range, passing a
    * reference to the segment and the pivot index (i32).
    */

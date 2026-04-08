@@ -192,8 +192,9 @@ struct SegmentedLevelAlgorithms {
 
       auto pivot_last = leaf.lower_bound(pivot_upper_bound_key);
       usize pivot_last_i = std::distance(leaf.items_begin(), pivot_last);
+      BATT_CHECK_GT(pivot_last_i, 0);
 
-      if (dropped_interval.contains(pivot_last_i)) {
+      if (dropped_interval.contains(pivot_last_i - 1)) {
         segment.set_pivot_active(pivot_i, false);
       }
 
@@ -279,6 +280,18 @@ struct SegmentedLevelAlgorithms {
     }
 
     return OkStatus();
+  }
+
+   /** \brief Merges the two given pivots, effectively erasing `right_pivot`.
+   */
+  void merge_pivots(i32 left_pivot, i32 right_pivot)
+  {
+    const usize segment_count = this->level_.segment_count();
+
+    for (usize segment_i = 0; segment_i < segment_count; ++segment_i) {
+      SegmentT& segment = this->level_.get_segment(segment_i);
+      in_segment(segment).merge_pivots(left_pivot, right_pivot, this->level_);
+    }
   }
 
   /** \brief Invokes `fn` for each SegmentT& selected by `pivot_selector`.
