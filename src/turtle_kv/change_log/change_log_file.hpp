@@ -210,7 +210,6 @@ class ChangeLogFile
   void update_lower_bound() noexcept;
 
   /** \brief Marks grant as in use by adding grant to this->in_use_block_tokens_.
-   * Updates this->upper_bound_ to include the new number of blocks_written.
    * Returns a ReadLock on the range block_range.
    */
   ReadLock set_block_range_in_use(batt::Grant& grant, const Interval<i64>& block_range) noexcept;
@@ -335,6 +334,9 @@ batt::Status ChangeLogFile::read_blocks(SerializeFn process_block)
     // TODO: [Gabe Bornstein 3/11/26] Eventually, call (*block)->set_read_lock and
     // this->upper_bound_.fetch_add() when we know the logical ranges of each block.
     //
+    // Interval<i64> block_range{blocks_read, blocks_read + 1};
+    // (*block)->set_read_lock(this->set_block_range_in_use((*block)->get_grant(), block_range));
+    // this->upper_bound_.fetch_add(1);
 
     // `process_block` is responsible for determining when to stop reading.
     //

@@ -130,8 +130,6 @@ class ChangeLogReader
     StackMerger<BlockIterator, BlockIteratorCompare> heap{
         Slice<BlockIterator>{as_slice(block_iterators)}};
 
-    constexpr usize kPerSlotEditOffsetDeltaOverhead = sizeof(little_i32);
-
     // Process slots in EditOffset order.
     //
     while (!heap.empty()) {
@@ -139,7 +137,7 @@ class ChangeLogReader
 
       ConstBuffer slot_buffer = current->block->get_slot(current->next_slot_i);
       EditOffset edit_offset = current->current_edit_offset();
-      ConstBuffer payload = slot_buffer + kPerSlotEditOffsetDeltaOverhead;
+      ConstBuffer payload = slot_buffer + sizeof(PackedEditOffsetDelta);
 
       Status visit_status = visitor(FirstVisitToBlock{current->next_slot_i == 0},
                                     current->block.get(),

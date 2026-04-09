@@ -146,8 +146,7 @@ auto ChangeLogFile::PackedConfig::unpack() const noexcept -> ChangeLogFile::Conf
 //
 ChangeLogFile::~ChangeLogFile() noexcept
 {
-  Interval<i64> block_range = this->active_blocks();
-  BATT_CHECK_EQ(block_range.size(), 0);
+  BATT_CHECK_EQ(this->active_block_count(), 0);
 
   VLOG(1) << BATT_INSPECT(this->write_throughput_.get());
 }
