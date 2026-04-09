@@ -1,4 +1,13 @@
+//=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
+//
+// Part of the TurtleKV Project, under Apache License v2.0.
+// See https://www.apache.org/licenses/LICENSE-2.0 for license information.
+// SPDX short identifier: Apache-2.0
+//
+//+++++++++++-+-+--+----- --- -- -  -  -   -
+
 #pragma once
+#define TURTLE_KV_UTIL_PIPELINE_CHANNEL_HPP
 
 #include <turtle_kv/import/int_types.hpp>
 #include <turtle_kv/import/optional.hpp>
@@ -15,6 +24,9 @@ template <typename T>
 class PipelineChannel
 {
  public:
+  static constexpr bool kAlwaysSpinOnWrite = true;
+  static constexpr i64 kMaxSpinCount = 4096;
+
   static constexpr u32 kStateEmpty = 0;
   static constexpr u32 kStateWriting = 1;
   static constexpr u32 kStateFull = 2;
@@ -34,6 +46,7 @@ class PipelineChannel
   template <typename... Args>
   Status write(Args&&... args)
   {
+    i64 spin_count = 0;
     u32 observed_state = this->state_.load();
 
     for (;;) {
@@ -51,7 +64,16 @@ class PipelineChannel
         case kStateReading:
           // Wait for the reader to catch up...
           //
-          batt::spin_yield();
+          if constexpr (kAlwaysSpinOnWrite) {
+            batt::spin_yield();
+          } else {
+            if (spin_count < kMaxSpinCount) {
+              batt::spin_yield();
+              ++spin_count;
+            } else {
+              BATT_REQUIRE_OK(this->wait(observed_state));
+            }
+          }
           observed_state = this->state_.load();
           break;
 
@@ -91,6 +113,9 @@ class PipelineChannel
             StatusOr<T> read_value{std::move(*this->value_)};
             this->value_ = None;
             BATT_CHECK_EQ(this->state_.exchange(kStateEmpty) & kStateMask, kStateReading);
+            if constexpr (!kAlwaysSpinOnWrite) {
+              BATT_REQUIRE_OK(this->notify());
+            }
             return read_value;
           }
           break;

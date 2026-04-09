@@ -67,8 +67,8 @@ class KVStore : public Table
     Optional<PageSliceStorage> query_result_storage;
     Optional<PageSliceStorage> scan_result_storage;
     u64 query_count = 0;
-    ChangeLogWriter& log_writer_;
-    ChangeLogWriter::Context log_writer_context_;
+    ChangeLogWriter& change_log_writer_;
+    ChangeLogWriter::Context change_log_writer_context_;
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -76,13 +76,43 @@ class KVStore : public Table
         : page_cache{kv_store->page_cache()}
         , storage_context{kv_store->storage_context_}
         , query_page_loader{this->page_cache}
-        , log_writer_{*kv_store->log_writer_}
-        , log_writer_context_{this->log_writer_}
+        , change_log_writer_{*kv_store->change_log_writer_}
+        , change_log_writer_context_{this->change_log_writer_}
     {
     }
 
     llfs::PageLoader& get_page_loader();
   };
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  /** \brief We allow 2 deltas, which are finalized MemTables, plus 1 active MemTable.
+   *
+   * This is because of the following update pipeline:
+   *
+   *```
+   * ┌───────────┐
+   * │   State   │  time ───▶
+   * │───────────│
+   * │  MemTable:│  M1─────────────────────M2──────────────────────M3───────────────────────────
+   * │    Deltas:│  []────────────────────[M1]────────────────────[M1, M2]────────────────[M2]──
+   * │Checkpoint:│  C0─────────────────────────────────────────────────────────────────────C1───
+   * └───────────┘ ┌─────────────────────┐┌───────────────────────┐┌─────────────────────── ▲
+   *               │filling MemTable M1  ││filling MemTable M2    ││filling MemTable M3     │
+   *               └─────────────────────┘└───────────────────────┘└─────────────────────── │
+   *                         finalize M1 │            finalize M2 │                         │
+   *                                     ▼                        ▼                         │
+   *                                     ┌────────────────────────┐┌─────────────────────── │
+   *                                     │building Checkpoint C1  ││building Checkpoint C2  │
+   *                                     └────────────────────────┘└─────────────────────── │
+   *                                                    commit C1 │                         │
+   *                                                              ▼            update State │
+   *                                                              ┌─────────────────────────┐
+   *                                                              │writing Checkpoint C1    │
+   *                                                              └─────────────────────────┘
+   *```
+   */
+  static constexpr usize kMaxDeltasSize = 2;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -204,9 +234,13 @@ class KVStore : public Table
                    const RuntimeOptions& runtime_options,
                    std::unique_ptr<ChangeLogWriter>&& change_log_writer,
                    std::unique_ptr<llfs::Volume>&& checkpoint_log,
-                   Checkpoint&& checkpoint) noexcept;
+                   Checkpoint&& latest_recovered_checkpoint) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  /** \brief Initializes the `State` of the KVStore.
+   */
+  void initialize_state(Checkpoint&& latest_recovered_checkpoint);
 
   /** \brief Creates and returns a new MemTable, with current checkpoint distance settings and the
    * specified EditOffset lower bound.
@@ -240,8 +274,9 @@ class KVStore : public Table
   void info_task_main() noexcept;
 
   template <typename Fn>
-  requires std::invocable<Fn, std::unique_ptr<DeltaBatch>> Status
-  scan_mem_table_to_build_batches(boost::intrusive_ptr<MemTable>&& mem_table, Fn&& consume_fn);
+    requires std::invocable<Fn, std::unique_ptr<DeltaBatch>>
+  Status scan_mem_table_to_build_batches(boost::intrusive_ptr<MemTable>&& mem_table,
+                                         Fn&& consume_fn);
 
   void mem_table_batch_scanner_thread_main();
 
@@ -287,17 +322,14 @@ class KVStore : public Table
 
   RuntimeOptions runtime_options_;
 
-  MemTablePageCacheAllocationTracker mem_table_allocation_tracker_{this->page_cache(),
-                                                                   this->metrics_.overcommit};
+  MemTablePageCacheAllocationTracker mem_table_allocation_tracker_;
 
-  std::unique_ptr<ChangeLogWriter> log_writer_;
+  std::unique_ptr<ChangeLogWriter> change_log_writer_;
 
   // How frequently we take checkpoints, where the units of distance are number of MemTables.
   // (i.e. if checkpoint_distance_ == 3, we take a checkpoint every time 3 MemTables are filled up)
   //
   std::atomic<usize> checkpoint_distance_;
-
-  absl::Mutex base_checkpoint_mutex_;
 
   std::unique_ptr<llfs::Volume> checkpoint_log_;
 
@@ -311,17 +343,15 @@ class KVStore : public Table
 
   std::shared_ptr<batt::Grant::Issuer> checkpoint_token_pool_;
 
-  batt::Watch<bool> halt_{false};
+  batt::Watch<bool> halt_;
 
-  batt::Task info_task_;
+  Optional<batt::Task> info_task_;
 
   // The EditOffset lower bound of the next finalized MemTable to be pushed to the channel.
   //
-  std::atomic<i64> next_mem_table_edit_offset_;
+  batt::Watch<i64> next_mem_table_edit_offset_;
 
   PipelineChannel<boost::intrusive_ptr<MemTable>> finalized_mem_table_channel_;
-
-  Slice<PipelineChannel<boost::intrusive_ptr<MemTable>>> memtable_compact_channels_;
 
   //----- --- -- -  -  -   -
   // Checkpoint Update State.
@@ -329,7 +359,7 @@ class KVStore : public Table
 
   PipelineChannel<std::unique_ptr<DeltaBatch>> checkpoint_update_channel_;
 
-  CheckpointGenerator checkpoint_generator_;
+  Optional<CheckpointGenerator> checkpoint_generator_;
 
   usize checkpoint_batch_count_;
 
