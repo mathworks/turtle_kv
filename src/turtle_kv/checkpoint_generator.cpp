@@ -249,8 +249,7 @@ StatusOr<std::unique_ptr<CheckpointJob>> CheckpointGenerator::finalize_checkpoin
               // @tastolfi: it is OK, because at this point, we should have applied batches that
               // cover all the slots up to the edit_offset_upper_bound of the batch group.
               //
-              .edit_offset_upper_bound =
-                  this->base_checkpoint_.edit_offset_upper_bound().value_or_panic().value(),
+              .edit_offset_upper_bound = this->base_checkpoint_.edit_offset_upper_bound().value(),
               .new_tree_root = llfs::PackedPageId::from(this->base_checkpoint_.root_id()),
           },
       });

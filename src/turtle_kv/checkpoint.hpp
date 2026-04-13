@@ -1,4 +1,13 @@
+//=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
+//
+// Part of the TurtleKV Project, under Apache License v2.0.
+// See https://www.apache.org/licenses/LICENSE-2.0 for license information.
+// SPDX short identifier: Apache-2.0
+//
+//+++++++++++-+-+--+----- --- -- -  -  -   -
+
 #pragma once
+#define TURTLE_KV_CHECKPOINT_HPP
 
 #include <turtle_kv/checkpoint_lock.hpp>
 #include <turtle_kv/delta_batch_id.hpp>
@@ -38,6 +47,9 @@ class Checkpoint
                                       llfs::SlotParse& slot,
                                       const PackedCheckpoint& checkpoint) noexcept;
 
+  /** \brief Returns the canonical, empty initial Checkpoint with invalid llfs::PageId (indicating
+   * there is no root page) and EditOffset upper bound of 0.
+   */
   static Checkpoint make_empty() noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -59,7 +71,7 @@ class Checkpoint
 
       // The upper-bound of the deltas covered by this checkpoint.
       //
-      std::variant<NoneType, EditOffset, DeltaBatchId> checkpoint_upper_bound,
+      std::variant<EditOffset, DeltaBatchId> checkpoint_upper_bound,
 
       // WAL lock covering the slot range of the checkpoint.
       //
@@ -97,23 +109,21 @@ class Checkpoint
    */
   bool is_empty() const noexcept
   {
-    return batt::is_case<NoneType>(this->checkpoint_upper_bound_);
+    return this->maybe_root_id() == Optional<llfs::PageId>(llfs::kInvalidPageId) &&
+           this->edit_offset_upper_bound() == EditOffset{0};
   }
 
   /** \brief The slot upper bound (one past the last byte) of deltas that are included in this
    * Checkpoint.
    */
-  Optional<EditOffset> edit_offset_upper_bound() const noexcept
+  EditOffset edit_offset_upper_bound() const noexcept
   {
     return batt::case_of(
         this->checkpoint_upper_bound_,
-        [](NoneType) -> Optional<EditOffset> {
-          return None;
-        },
-        [](const EditOffset& edit_offset) -> Optional<EditOffset> {
+        [](const EditOffset& edit_offset) -> EditOffset {
           return edit_offset;
         },
-        [](const DeltaBatchId& batch_id) -> Optional<EditOffset> {
+        [](const DeltaBatchId& batch_id) -> EditOffset {
           return batch_id.edit_offset_upper_bound();
         });
   }
@@ -202,7 +212,7 @@ class Checkpoint
   // When the Checkpoint is "clean" (no batches applied after the last serialize), holds the edit
   // offset upper bound for the checkpoint; otherwise, holds the most recent delta batch id applied.
   //
-  std::variant<NoneType, EditOffset, DeltaBatchId> checkpoint_upper_bound_;
+  std::variant<EditOffset, DeltaBatchId> checkpoint_upper_bound_;
 
   // Read lock that keeps this Checkpoint from being recycled by the llfs::Volume; the locked slot
   // range is from the start of the PrepareJob slot where the checkpoint tree root was introduced,
