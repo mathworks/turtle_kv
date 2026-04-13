@@ -137,6 +137,9 @@ class ChangeLogReader
 
       ConstBuffer slot_buffer = current->block->get_slot(current->next_slot_i);
       EditOffset edit_offset = current->current_edit_offset();
+
+      // Move the payload past the EditOffset.
+      //
       ConstBuffer payload = slot_buffer + sizeof(PackedEditOffsetDelta);
 
       Status visit_status = visitor(FirstVisitToBlock{current->next_slot_i == 0},

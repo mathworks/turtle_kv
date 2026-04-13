@@ -331,11 +331,11 @@ batt::Status ChangeLogFile::read_blocks(SerializeFn process_block)
       }
     }
 
-    // TODO: [Gabe Bornstein 3/11/26] Eventually, call (*block)->set_read_lock and
-    // this->upper_bound_.fetch_add() when we know the logical ranges of each block.
+    // TODO: [Gabe Bornstein 4/13/26] We're planning on removing ReadLocks. This code will need to
+    // be removed once that happens.
     //
-    // Interval<i64> block_range{blocks_read, blocks_read + 1};
-    // (*block)->set_read_lock(this->set_block_range_in_use((*block)->get_grant(), block_range));
+    Interval<i64> block_range{blocks_read, blocks_read + 1};
+    (*block)->set_read_lock(this->set_block_range_in_use((*block)->get_grant(), block_range));
     // this->upper_bound_.fetch_add(1);
 
     // `process_block` is responsible for determining when to stop reading.

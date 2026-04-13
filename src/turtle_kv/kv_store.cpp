@@ -1130,56 +1130,6 @@ using CheckpointEvent = llfs::PackedVariant<turtle_kv::PackedCheckpoint>;
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-// TODO: [Gabe Bornstein 3/25/26] Add a KVStore::recover function that recovers checkpoint,
-// mem_table, and updates KVStore.state_ to reflect the newly recovered checkpoint and mem_table.
-//
-batt::StatusOr<boost::intrusive_ptr<turtle_kv::MemTable>> KVStore::recover_latest_mem_table(
-    const std::filesystem::path& path)
-{
-  BATT_ASSIGN_OK_RESULT(std::unique_ptr<ChangeLogReader> log, ChangeLogReader::open(path));
-
-  boost::intrusive_ptr<MemTable> mem_table = nullptr;
-
-  bool first_slot = true;
-
-  batt::Status status =
-      log->visit_slots([this, &mem_table, &first_slot](FirstVisitToBlock first_visit,
-                                                       ChangeLogBlock* block,
-                                                       EditOffset edit_offset,
-                                                       ConstBuffer payload) -> batt::Status {
-        if (first_slot) {
-          mem_table = this->create_mem_table(edit_offset);
-          first_slot = false;
-        }
-
-        StatusOr<std::pair<KeyView, ValueView>> unpacked_slot = unpack_key_value_slot(payload);
-        BATT_REQUIRE_OK(unpacked_slot);
-
-        batt::Status recovered_slot_status = mem_table->put_recovered_slot(first_visit,
-                                                                           block,
-                                                                           edit_offset,
-                                                                           unpacked_slot->first,
-                                                                           unpacked_slot->second);
-        BATT_REQUIRE_OK(recovered_slot_status);
-
-        // TODO: [Gabe Bornstein 3/31/26] Need to start reading from where the last checkpoint was
-        // taken. Skip all slots that are already captured by the most recent checkpoint.
-        //
-
-        // TODO: [Gabe Bornstein 3/31/26]  Check if recovered_slot_status is ResourceExhausted,
-        // stash the current mem_table, create a new mem_table, keep going.
-        //
-
-        return batt::OkStatus();
-      });
-
-  BATT_REQUIRE_OK(status);
-  BATT_CHECK_NE(mem_table, nullptr);
-  return mem_table;
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
 void KVStore::info_task_main() noexcept
 {
   BATT_DEBUG_INFO(this->debug_info());
