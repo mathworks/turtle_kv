@@ -300,8 +300,7 @@ u64 query_page_loader_reset_every_n()
   // successful `run_recovery` could be to figure out what the correct values for the append and
   // trim points are, and create the ChangeLogWriter after we know that information.
   //
-  Optional<turtle_kv::EditOffset> checkpoint_upper_bound =
-      latest_checkpoint.edit_offset_upper_bound();
+  turtle_kv::EditOffset checkpoint_upper_bound = latest_checkpoint.edit_offset_upper_bound();
 
   std::unique_ptr<KVStore> kv_store{new KVStore{
       task_scheduler,
@@ -315,8 +314,8 @@ u64 query_page_loader_reset_every_n()
       std::move(latest_checkpoint),
   }};
 
-  BATT_REQUIRE_OK(kv_store->run_recovery(dir_path / change_log_file_name(),
-                                         checkpoint_upper_bound.value_or(EditOffset{0})));
+  BATT_REQUIRE_OK(
+      kv_store->run_recovery(dir_path / change_log_file_name(), checkpoint_upper_bound));
 
   return {std::move(kv_store)};
 }
@@ -516,8 +515,8 @@ void KVStore::initialize_state(Checkpoint&& latest_recovered_checkpoint)
 
   init_state.base_checkpoint_.emplace(std::move(latest_recovered_checkpoint));
 
-  init_state.mem_table_ = this->create_mem_table(
-      init_state.base_checkpoint_->edit_offset_upper_bound().value_or(EditOffset{0}));
+  init_state.mem_table_ =
+      this->create_mem_table(init_state.base_checkpoint_->edit_offset_upper_bound());
 
   this->next_mem_table_edit_offset_.set_value(
       init_state.mem_table_->edit_offset_lower_bound().value());

@@ -1,3 +1,11 @@
+//=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
+//
+// Part of the TurtleKV Project, under Apache License v2.0.
+// See https://www.apache.org/licenses/LICENSE-2.0 for license information.
+// SPDX short identifier: Apache-2.0
+//
+//+++++++++++-+-+--+----- --- -- -  -  -   -
+
 #include <turtle_kv/checkpoint.hpp>
 //
 
@@ -56,11 +64,7 @@ namespace turtle_kv {
 //
 /*static*/ Checkpoint Checkpoint::make_empty() noexcept
 {
-  return Checkpoint{llfs::PageId{llfs::kInvalidPageId},
-                    std::make_shared<Subtree>(Subtree::make_empty()),
-                    /*tree_height=*/0,
-                    /*checkpoint_upper_bound=*/None,
-                    CheckpointLock::make_durable_detached()};
+  return Checkpoint{};
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -79,7 +83,7 @@ Checkpoint::Checkpoint() noexcept
 Checkpoint::Checkpoint(Optional<llfs::PageId> root_id,
                        std::shared_ptr<Subtree>&& tree,
                        i32 tree_height,
-                       std::variant<NoneType, EditOffset, DeltaBatchId> checkpoint_upper_bound,
+                       std::variant<EditOffset, DeltaBatchId> checkpoint_upper_bound,
                        CheckpointLock&& checkpoint_lock) noexcept
     : root_id_{root_id}
     , tree_{std::move(tree)}
@@ -103,9 +107,6 @@ Status Checkpoint::validate_ready_to_serialize() const noexcept
 {
   BATT_REQUIRE_OK(batt::case_of(
       this->checkpoint_upper_bound_,
-      [](NoneType) -> Status {
-        return batt::StatusCode::kInternal;
-      },
       [](const EditOffset&) -> Status {
         // If tree is not serialized, we should have a DeltaBatchId here, not an EditOffset!
         //
@@ -157,7 +158,7 @@ StatusOr<Checkpoint> Checkpoint::serialize(
       new_tree_root_id,
       batt::make_copy(this->tree_),
       this->tree_height_,
-      this->edit_offset_upper_bound().value_or_panic(),
+      this->edit_offset_upper_bound(),
       batt::make_copy(this->checkpoint_lock_),
   };
 }
@@ -208,11 +209,6 @@ Status Checkpoint::validate_next_batch_id(const DeltaBatchId& new_batch_id) cons
   BATT_REQUIRE_OK(  //
       batt::case_of(
           this->checkpoint_upper_bound_,
-          [](NoneType) -> Status {
-            // Since we already checked to make sure we start new groups at index 0, return ok!
-            //
-            return OkStatus();
-          },
           [&new_batch_id](const EditOffset& old_edit_offset) -> Status {
             // If we are applying a batch over a (serialized) edit offset, make sure we are going
             // strictly forwards.
