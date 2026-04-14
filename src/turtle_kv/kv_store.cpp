@@ -285,22 +285,12 @@ u64 query_page_loader_reset_every_n()
   BATT_ASSIGN_OK_RESULT(Checkpoint latest_checkpoint,
                         KVStore::recover_latest_checkpoint(*checkpoint_log_volume));
 
-  // TODO: [Gabe Bornstein 4/8/26] I don't like that we have to mess with checkpoint_upper_bound
-  // in two places (KVStore::KVStore() is the other place). Consider how to refactor.
-  // 1. Could move everything into KVStore::KVStore. Would requiring passing `dir_path` in.
-  // 2. Could pass `checkpoint_upper_bound` as a parameter to KVStore::KVStore.
-  // 3. Could update the value of the lastest_checkpoint.edit_offset_upper_bound before passing it
-  // to KVStore::KVStore.
-  // 4. Leave it as is.
-  //
-  // TODO [tastolfi 2026-04-08] I think that the checkpoint upper bound can be retrieved inside
-  // KVStore::run_recovery, from the initial State; what I am more worried about is that we are
+  // TODO [Gabe Bornstein 4/8/26] [tastolfi 2026-04-08] What I am worried about is that we are
   // opening the ChangeLogWriter *before* doing recovery; to me this could spell trouble.  It makes
   // sense that run_recovery takes the path to the change log file; I think a good side-effect of
   // successful `run_recovery` could be to figure out what the correct values for the append and
   // trim points are, and create the ChangeLogWriter after we know that information.
   //
-  turtle_kv::EditOffset checkpoint_upper_bound = latest_checkpoint.edit_offset_upper_bound();
 
   std::unique_ptr<KVStore> kv_store{new KVStore{
       task_scheduler,
@@ -314,8 +304,7 @@ u64 query_page_loader_reset_every_n()
       std::move(latest_checkpoint),
   }};
 
-  BATT_REQUIRE_OK(
-      kv_store->run_recovery(dir_path / change_log_file_name(), checkpoint_upper_bound));
+  BATT_REQUIRE_OK(kv_store->run_recovery(dir_path / change_log_file_name()));
 
   return {std::move(kv_store)};
 }
@@ -424,7 +413,7 @@ u64 query_page_loader_reset_every_n()
       this->tree_options_,
       this->page_cache(),
       batt::make_copy(this->filter_page_write_state_),
-      batt::Toggle<State>::Reader{this->state_}->base_checkpoint_->clone(),
+      batt::Toggle<State>::Reader { this->state_ } -> base_checkpoint_->clone(),
       *this->checkpoint_log_);
 
   this->tree_options_.set_trie_index_reserve_size(this->tree_options_.trie_index_reserve_size());
@@ -1046,9 +1035,15 @@ Status KVStore::push_mem_table_to_channel(boost::intrusive_ptr<MemTable>&& mem_t
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-batt::Status KVStore::run_recovery(const std::filesystem::path& path,
-                                   EditOffset checkpoint_upper_bound)
+batt::Status KVStore::run_recovery(const std::filesystem::path& path)
+
 {
+  EditOffset checkpoint_upper_bound = EditOffset{0};
+  {
+    batt::Toggle<State>::Reader reader{this->state_};
+    checkpoint_upper_bound = reader->base_checkpoint_->edit_offset_upper_bound();
+  }
+
   // Reover MemTable's from the ChangeLog
   //
   BATT_ASSIGN_OK_RESULT(std::unique_ptr<ChangeLogReader> log, ChangeLogReader::open(path));
@@ -1164,9 +1159,9 @@ void KVStore::mem_table_batch_scanner_thread_main()
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename Fn>
-  requires std::invocable<Fn, std::unique_ptr<DeltaBatch>>
-Status KVStore::scan_mem_table_to_build_batches(boost::intrusive_ptr<MemTable>&& mem_table,
-                                                Fn&& consume_fn)
+requires std::invocable<Fn, std::unique_ptr<DeltaBatch>> Status
+KVStore::scan_mem_table_to_build_batches(boost::intrusive_ptr<MemTable>&& mem_table,
+                                         Fn&& consume_fn)
 {
   MemTable::BatchCompactor batch_compactor{*mem_table,
                                            /*byte_size_limit=*/this->tree_options_.flush_size()};

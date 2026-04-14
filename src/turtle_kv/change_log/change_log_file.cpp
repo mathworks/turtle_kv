@@ -262,7 +262,6 @@ ChangeLogFile::ReadLock ChangeLogFile::set_block_range_in_use(
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-// TODO: [Gabe Bornstein 1/20/26] Only read in blocks that are written after most recent checkpoint.
 //
 batt::StatusOr<std::vector<boost::intrusive_ptr<ChangeLogBlock>>>
 ChangeLogFile::read_blocks_into_vector()
