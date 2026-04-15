@@ -19,6 +19,7 @@
 
 #include <boost/range/algorithm/equal_range.hpp>
 
+#include <limits>
 #include <type_traits>
 
 namespace turtle_kv {
@@ -29,24 +30,37 @@ template <typename OffsetT>
 class PiecewiseFilter
 {
  public:
+  using Self = PiecewiseFilter;
+
   static_assert(std::is_integral<OffsetT>::value && std::is_unsigned<OffsetT>::value,
                 "Offset must be an unsigned integer type!");
 
-  /** \brief Creates and returns a PiecewiseFilter instance from a range of intervals that contain
-   * the filtered item indexes.
+  /** \brief The default start of the 'live' range.
    */
-  static StatusOr<PiecewiseFilter> from_dropped(const Slice<const Interval<OffsetT>>& dropped,
-                                                Optional<Interval<OffsetT>> scope = None);
+  static constexpr OffsetT kMinLowerBound = std::numeric_limits<OffsetT>::min();
+
+  /** \brief The default end of the 'live' range.
+   */
+  static constexpr OffsetT kMaxUpperBound = std::numeric_limits<OffsetT>::max();
+
+  /** \brief Creates and returns a PiecewiseFilter instance from a range of intervals that contain
+   * the live item indexes.
+   */
+  static StatusOr<PiecewiseFilter> from_live(const Slice<const Interval<OffsetT>>& live);
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   /** \brief Constructs a default instance of a PiecewiseFilter object, initialized with no item
    * range and filtered items.
    */
   PiecewiseFilter() noexcept;
 
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
   /** \brief Filters out the item range provided by the specified interval of item indexes.
    *
    * \param i The item index range to filter out, specified as a half open interval.
-   * 
+   *
    * \return The new dropped interval that coincides with `i`.
    */
   Interval<OffsetT> drop_index_range(Interval<OffsetT> i);
@@ -68,7 +82,7 @@ class PiecewiseFilter
    * unfiltered, `i` is returned. If `i` is outside of the scope of the filter, the error status
    * `kOutOfRange` is returned.
    */
-  StatusOr<OffsetT> live_lower_bound(OffsetT i) const;
+  OffsetT live_lower_bound(OffsetT i) const;
 
   /** \brief Returns a range of unfiltered items within the item index boundaries defined by `i`.
    *
@@ -79,54 +93,28 @@ class PiecewiseFilter
    * empty interval is returned. If the range `i` is is outside of the scope of the filter, the
    * error status `kOutOfRange` is returned.
    */
-  StatusOr<Interval<OffsetT>> find_live_range(Interval<OffsetT> i) const;
+  Interval<OffsetT> find_live_range(Interval<OffsetT> i) const;
 
-  /** \brief Returns a view of the filtered item intervals.
+  /** \brief Returns a view of the live item intervals.
    */
-  Slice<const Interval<OffsetT>> dropped() const;
-
-  /** \brief Returns the total number of filtered items.
-   */
-  OffsetT dropped_total() const;
-
-  /** \brief Computes and sets a new scope value for the filter based on the intersection of the
-   * current scope and `new_scope`.
-   */
-  void narrow_scope(const Interval<OffsetT>& new_scope);
-
-  /** \brief Returns the current filter scope.
-   */
-  Optional<Interval<OffsetT>> get_scope() const;
+  Slice<const Interval<OffsetT>> live() const;
 
   /** \brief Merges two filters in place, taking the union of the dropped intervals and
    * scopes.
    */
   void merge(const PiecewiseFilter& other);
 
-  /** \brief Validate the state of the dropped intervals.
+  /** \brief Validate the state of the live intervals.
    */
   bool check_invariants() const;
 
   SmallFn<void(std::ostream&)> dump() const;
 
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
   /** \brief The range of filtered out item indexes.
    */
-  SmallVec<Interval<OffsetT>, 64> dropped_;
-
-  /** \brief The interval of item indexes within which the filtering is scoped to.
-   * 
-   * If the value is `None`, then no scope is applied and all items in the range can be filtered.
-   * 
-   * If the value is set to the empty interval `{0,0}`, then all items are out of scope.
-   * 
-   * Otherwise, the value is set to some interval within the item range.
-   */
-  Optional<Interval<OffsetT>> scope_;
-
-  /** \brief The total number of filtered out items.
-   */
-  OffsetT dropped_total_;
+  SmallVec<Interval<OffsetT>, 64> live_;
 };
 
 template <typename OffsetT, typename ItemT, typename Traits, typename OrderFn>
