@@ -138,35 +138,39 @@ struct InMemoryNode {
         this->filter.drop_index_range(i);
       }
 
+      void narrow_scope(Interval<u32> i)
+      {
+        this->filter.narrow_scope(i);
+      }
+
       bool is_index_filtered(const SegmentedLevel&, u32 index) const
       {
         return !this->filter.live_at_index(index);
       }
 
-      bool is_unfiltered() const
-      {
-        return !this->filter.dropped_total();
-      }
-
-      u32 live_lower_bound(const SegmentedLevel&, u32 item_i) const
+      StatusOr<u32> live_lower_bound(const SegmentedLevel&, u32 item_i) const
       {
         return this->filter.live_lower_bound(item_i);
       }
 
-      Interval<u32> get_live_item_range(const SegmentedLevel&, Interval<u32> i) const
+      StatusOr<Interval<u32>> get_live_item_range(const SegmentedLevel&, Interval<u32> i) const
       {
         return this->filter.find_live_range(i);
       }
 
       usize num_cut_points() const
       {
+        Optional<Interval<u32>> scope = this->filter.get_scope();
+        usize scope_points = 0;
+        if (scope) {
+          scope_points = 2;
+        }
+
         Slice<const Interval<u32>> dropped_ranges = this->filter.dropped();
 
-        // There will be no filter cut points if no items are dropped.
-        //
         if (!this->filter.dropped_total()) {
           BATT_CHECK(dropped_ranges.empty());
-          return 0;
+          return scope_points;
         }
         BATT_CHECK(!dropped_ranges.empty());
 
@@ -175,7 +179,7 @@ struct InMemoryNode {
         //
         bool first_element_filtered = dropped_ranges[0].lower_bound == 0;
 
-        return dropped_ranges.size() * 2 - (first_element_filtered ? 1 : 0);
+        return scope_points + (dropped_ranges.size() * 2 - (first_element_filtered ? 1 : 0));
       }
 
       //+++++++++++-+-+--+----- --- -- -  -  -   -

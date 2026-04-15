@@ -126,14 +126,16 @@ struct SegmentAlgorithms {
 
     // Ask the segment filter whether the lower/upper ranges of the split have live items.
     //
-    const Interval<u32> lower_live_range =
+    const StatusOr<Interval<u32>> lower_live_range =
         this->segment_.get_live_item_range(level, split_indices->lower_range());
+    BATT_CHECK(lower_live_range.ok());
 
-    const Interval<u32> upper_live_range =
+    const StatusOr<Interval<u32>> upper_live_range =
         this->segment_.get_live_item_range(level, split_indices->upper_range());
+    BATT_CHECK(upper_live_range.ok());
 
-    const bool lower_pivot_active = !lower_live_range.empty();
-    const bool upper_pivot_active = !upper_live_range.empty();
+    const bool lower_pivot_active = !lower_live_range->empty();
+    const bool upper_pivot_active = !upper_live_range->empty();
 
     this->segment_.set_pivot_active(pivot_i, lower_pivot_active);
     this->segment_.insert_pivot(pivot_i + 1, upper_pivot_active);
@@ -197,18 +199,29 @@ struct SegmentAlgorithms {
     // use sharded queries to find item indexes for the lower and upper bound of the pivot range.
     //
     PageSliceStorage page_slice_storage;
+    usize key_count_out;
 
-    KeyQuery key_query{page_loader, page_slice_storage, tree_options, drop_key_range.lower_bound};
+    if (drop_i_range.lower_bound == 0) {
+      KeyQuery key_query{page_loader, page_slice_storage, tree_options, drop_key_range.upper_bound};
 
-    BATT_ASSIGN_OK_RESULT(u32 start_item_index,
-                          find_key_lower_bound_index(this->segment_.get_leaf_page_id(), key_query));
+      BATT_ASSIGN_OK_RESULT(
+          u32 scope_lower_bound,
+          find_key_lower_bound_index(this->segment_.get_leaf_page_id(), key_query, key_count_out));
 
-    key_query = KeyQuery{page_loader, page_slice_storage, tree_options, drop_key_range.upper_bound};
+      if (scope_lower_bound < key_count_out) {
+        this->segment_.narrow_scope(Interval<u32>{scope_lower_bound, BATT_CHECKED_CAST(u32, key_count_out)});
+      }
+    } else {
+      KeyQuery key_query{page_loader, page_slice_storage, tree_options, drop_key_range.lower_bound};
 
-    BATT_ASSIGN_OK_RESULT(u32 end_item_index,
-                          find_key_lower_bound_index(this->segment_.get_leaf_page_id(), key_query));
+      BATT_ASSIGN_OK_RESULT(
+          u32 scope_upper_bound,
+          find_key_lower_bound_index(this->segment_.get_leaf_page_id(), key_query, key_count_out));
 
-    this->segment_.drop_index_range(Interval<u32>{start_item_index, end_item_index});
+      if (scope_upper_bound > 0) {
+        this->segment_.narrow_scope(Interval<u32>{0, scope_upper_bound});
+      }
+    }
 
     // Then, iterate through the pivots to set the active bit per pivot to 0.
     //

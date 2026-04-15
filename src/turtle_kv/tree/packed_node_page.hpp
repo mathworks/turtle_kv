@@ -124,6 +124,7 @@ struct PackedNodePage {
     struct SegmentFilterData {
       Slice<const little_u32> values;
       bool start_is_filtered;
+      bool has_scope;
     };
 
     struct Segment {
@@ -154,9 +155,10 @@ struct PackedNodePage {
 
       bool is_index_filtered(const SegmentedLevel& level, u32 index) const;
 
-      u32 live_lower_bound(const SegmentedLevel& level, u32 item_i) const;
+      StatusOr<u32> live_lower_bound(const SegmentedLevel& level, u32 item_i) const;
 
-      Interval<u32> get_live_item_range(const SegmentedLevel& level, Interval<u32> i) const;
+      StatusOr<Interval<u32>> get_live_item_range(const SegmentedLevel& level,
+                                                  Interval<u32> i) const;
     };
 
     struct SegmentedLevel {

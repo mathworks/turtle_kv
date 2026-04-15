@@ -29,6 +29,7 @@ using namespace turtle_kv::int_types;
 
 using turtle_kv::CInterval;
 using turtle_kv::Interval;
+using turtle_kv::Optional;
 using turtle_kv::PiecewiseFilter;
 using turtle_kv::Slice;
 using turtle_kv::Status;
@@ -120,7 +121,9 @@ TEST(PiecewiseFilterTest, QueryTest)
     for (usize i = 0; i < num_items; ++i) {
       auto iter = live_items.lower_bound(i);
       usize expected = (iter != live_items.end()) ? *iter : num_items;
-      EXPECT_EQ(filter.live_lower_bound(i), expected);
+      StatusOr<usize> actual = filter.live_lower_bound(i);
+      EXPECT_TRUE(actual.ok());
+      EXPECT_EQ(*actual, expected);
     }
 
     // Test find_live_range
@@ -134,8 +137,9 @@ TEST(PiecewiseFilterTest, QueryTest)
 
       auto iter = live_items.lower_bound(start_i);
       if (iter == live_items.end() || *iter >= end_i) {
-        EXPECT_EQ(filter.find_live_range(Interval<usize>{start_i, end_i}),
-                  (Interval<usize>{end_i, end_i}));
+        StatusOr<Interval<usize>> result = filter.find_live_range(Interval<usize>{start_i, end_i});
+        EXPECT_TRUE(result.ok());
+        EXPECT_EQ(*result, (Interval<usize>{end_i, end_i}));
       } else {
         usize first = *iter;
         usize last = first;
@@ -146,8 +150,9 @@ TEST(PiecewiseFilterTest, QueryTest)
           ++next;
         }
 
-        EXPECT_EQ(filter.find_live_range(Interval<usize>{start_i, end_i}),
-                  (Interval<usize>{first, last}));
+        StatusOr<Interval<usize>> result = filter.find_live_range(Interval<usize>{start_i, end_i});
+        EXPECT_TRUE(result.ok());
+        EXPECT_EQ(*result, (Interval<usize>{first, last}));
       }
     }
   }
@@ -185,8 +190,9 @@ TEST(PiecewiseFilterTest, KeyQueryTest)
     EXPECT_EQ(filter.dropped_total(), 0);
     EXPECT_TRUE(filter.check_invariants());
 
-    Interval<u32> next_live_interval = filter.find_live_range(Interval<u32>{0, num_keys});
-    EXPECT_EQ(next_live_interval, (Interval<u32>{0, num_keys}));
+    StatusOr<Interval<u32>> next_live_interval = filter.find_live_range(Interval<u32>{0, num_keys});
+    EXPECT_TRUE(next_live_interval.ok());
+    EXPECT_EQ(*next_live_interval, (Interval<u32>{0, num_keys}));
 
     // Drop an interval in the middle of the items range, and query the filter.
     //
@@ -204,19 +210,24 @@ TEST(PiecewiseFilterTest, KeyQueryTest)
     EXPECT_FALSE(filter.live_at_index(200));
     EXPECT_FALSE(filter.live_at_index(300));
 
-    u32 next_live_index = filter.live_lower_bound(100);
-    EXPECT_EQ(next_live_index, 301);
+    StatusOr<u32> next_live_index = filter.live_lower_bound(100);
+    EXPECT_TRUE(next_live_index.ok());
+    EXPECT_EQ(*next_live_index, 301);
 
     next_live_interval = filter.find_live_range(Interval<u32>{0, num_keys});
-    EXPECT_EQ(next_live_interval, (Interval<u32>{0, 100}));
+    EXPECT_TRUE(next_live_interval.ok());
+    EXPECT_EQ(*next_live_interval, (Interval<u32>{0, 100}));
 
     next_live_interval = filter.find_live_range(Interval<u32>{301, num_keys});
-    EXPECT_EQ(next_live_interval, (Interval<u32>{301, num_keys}));
+    EXPECT_TRUE(next_live_interval.ok());
+    EXPECT_EQ(*next_live_interval, (Interval<u32>{301, num_keys}));
 
     // When find_live_range is called with a filtered starting index, the returned interval
     // starts at the next live index.
     //
-    EXPECT_EQ(filter.find_live_range(Interval<u32>{100, num_keys}), (Interval<u32>{301, num_keys}));
+    next_live_interval = filter.find_live_range(Interval<u32>{100, num_keys});
+    EXPECT_TRUE(next_live_interval.ok());
+    EXPECT_EQ(*next_live_interval, (Interval<u32>{301, num_keys}));
 
     // Drop another interval that is not adjacent to the previously dropped one.
     //
@@ -232,16 +243,20 @@ TEST(PiecewiseFilterTest, KeyQueryTest)
     EXPECT_FALSE(filter.live_at_index(num_keys - 2));
 
     next_live_index = filter.live_lower_bound(700);
-    EXPECT_EQ(next_live_index, num_keys - 1);
+    EXPECT_TRUE(next_live_index.ok());
+    EXPECT_EQ(*next_live_index, num_keys - 1);
 
     next_live_index = filter.live_lower_bound(num_keys - 1);
-    EXPECT_EQ(next_live_index, num_keys - 1);
+    EXPECT_TRUE(next_live_index.ok());
+    EXPECT_EQ(*next_live_index, num_keys - 1);
 
     next_live_interval = filter.find_live_range(Interval<u32>{num_keys - 1, num_keys});
-    EXPECT_EQ(next_live_interval, (Interval<u32>{num_keys - 1, num_keys}));
+    EXPECT_TRUE(next_live_interval.ok());
+    EXPECT_EQ(*next_live_interval, (Interval<u32>{num_keys - 1, num_keys}));
 
     next_live_interval = filter.find_live_range(Interval<u32>{301, num_keys});
-    EXPECT_EQ(next_live_interval, (Interval<u32>{301, 600}));
+    EXPECT_TRUE(next_live_interval.ok());
+    EXPECT_EQ(*next_live_interval, (Interval<u32>{301, 600}));
 
     // Drop another range in the middle, this time with overlap until the end.
     //
@@ -255,10 +270,12 @@ TEST(PiecewiseFilterTest, KeyQueryTest)
     EXPECT_TRUE(filter.live_at_index(301));
 
     next_live_index = filter.live_lower_bound(500);
-    EXPECT_EQ(next_live_index, num_keys);
+    EXPECT_TRUE(next_live_index.ok());
+    EXPECT_EQ(*next_live_index, num_keys);
 
     next_live_interval = filter.find_live_range(Interval<u32>{301, num_keys});
-    EXPECT_EQ(next_live_interval, (Interval<u32>{301, 500}));
+    EXPECT_TRUE(next_live_interval.ok());
+    EXPECT_EQ(*next_live_interval, (Interval<u32>{301, 500}));
 
     EXPECT_TRUE(filter.check_invariants());
 
@@ -272,10 +289,12 @@ TEST(PiecewiseFilterTest, KeyQueryTest)
 
     EXPECT_FALSE(filter.live_at_index(0));
     next_live_index = filter.live_lower_bound(0);
-    EXPECT_EQ(next_live_index, num_keys);
+    EXPECT_TRUE(next_live_index.ok());
+    EXPECT_EQ(*next_live_index, num_keys);
 
     next_live_interval = filter.find_live_range(Interval<u32>{0, num_keys});
-    EXPECT_TRUE(next_live_interval.empty());
+    EXPECT_TRUE(next_live_interval.ok());
+    EXPECT_TRUE(next_live_interval->empty());
 
     EXPECT_TRUE(filter.check_invariants());
   }

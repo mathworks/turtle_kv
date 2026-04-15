@@ -151,30 +151,49 @@ PackedNodePage* build_node_page(const MutableBuffer& buffer, const InMemoryNode&
         dst_segment.filter_start = BATT_CHECKED_CAST(u16, segment_filters_offset);
 
         const PiecewiseFilter<u32>& segment_filter = src_segment.filter;
-        if (!src_segment.is_unfiltered()) {
-          Slice<const Interval<u32>> dropped_ranges = segment_filter.dropped();
-          BATT_CHECK(!dropped_ranges.empty());
+        Optional<Interval<u32>> scope = segment_filter.get_scope();
 
-          // If the first item is filtered, set the most significant bit of `filter_start` to 1.
+        if (segment_filter.dropped_total() || scope) {
+          Slice<const Interval<u32>> dropped_ranges = segment_filter.dropped();
+
+          // If there is a scope for this filter, write the upper bound first. When unpacking
+          // the node, we'll know that there is a scope since the filter array won't be sorted
+          // order.
           //
-          bool start_filtered = dropped_ranges[0].lower_bound == 0;
-          if (start_filtered) {
-            dst_segment.filter_start |= PackedNodePage::kSegmentStartsFiltered;
+          if (scope) {
+            segment_filters_array->items[segment_filters_offset] = scope->upper_bound;
+            segment_filters_offset++;
           }
 
-          for (const Interval<u32>& range : dropped_ranges) {
-            // If the first item is filtered, don't store index 0. Otherwise, store both bounds.
+          if (dropped_ranges.size() > 0) {
+            // If the first item is filtered, set the most significant bit of `filter_start` to 1.
             //
-            if (range.lower_bound == 0) {
-              segment_filters_array->items[segment_filters_offset] = range.upper_bound;
-              segment_filters_offset++;
-            } else {
-              segment_filters_array->items[segment_filters_offset] = range.lower_bound;
-              segment_filters_offset++;
-
-              segment_filters_array->items[segment_filters_offset] = range.upper_bound;
-              segment_filters_offset++;
+            bool start_filtered = dropped_ranges[0].lower_bound == 0;
+            if (start_filtered) {
+              dst_segment.filter_start |= PackedNodePage::kSegmentStartsFiltered;
             }
+
+            for (const Interval<u32>& range : dropped_ranges) {
+              // If the first item is filtered, don't store index 0. Otherwise, store both bounds.
+              //
+              if (range.lower_bound == 0) {
+                segment_filters_array->items[segment_filters_offset] = range.upper_bound;
+                segment_filters_offset++;
+              } else {
+                segment_filters_array->items[segment_filters_offset] = range.lower_bound;
+                segment_filters_offset++;
+
+                segment_filters_array->items[segment_filters_offset] = range.upper_bound;
+                segment_filters_offset++;
+              }
+            }
+          }
+
+          // Finally, write the scope lower bound if it exists.
+          //
+          if (scope) {
+            segment_filters_array->items[segment_filters_offset] = scope->lower_bound;
+            segment_filters_offset++;
           }
         }
 
@@ -251,9 +270,19 @@ PackedNodePage::UpdateBuffer::SegmentFilterData PackedNodePage::get_segment_filt
   bool start_filtered =
       (segment.filter_start.value() & PackedNodePage::kSegmentStartsFiltered) != 0;
 
+  // If there are at least two elements in the filter array, check if a scope exists.
+  //
+  bool has_scope = false;
+  if (filter_end_i > filter_start_i + 1) {
+    u32 first_value = packed_filters[filter_start_i].value();
+    u32 last_value = packed_filters[filter_end_i - 1].value();
+    has_scope = (first_value >= last_value);
+  }
+
   return PackedNodePage::UpdateBuffer::SegmentFilterData{
       as_const_slice(packed_filters.data() + filter_start_i, packed_filters.data() + filter_end_i),
-      start_filtered};
+      start_filtered,
+      has_scope};
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -272,24 +301,43 @@ StatusOr<PiecewiseFilter<u32>> PackedNodePage::create_piecewise_filter(usize lev
     return PiecewiseFilter<u32>{};
   }
 
+  Optional<Interval<u32>> scope = None;
   SmallVec<Interval<u32>, 64> dropped_ranges;
-  u32 i = 0;
+
+  u32 start_offset = 0;
+  u32 end_offset = filter_data.values.size();
+
+  // If the filter has a scope, populate it.
+  //
+  if (filter_data.has_scope) {
+    BATT_CHECK_GE(filter_data.values.size(), 2);
+    u32 scope_upper = filter_data.values[0].value();
+    u32 scope_lower = filter_data.values[filter_data.values.size() - 1].value();
+    scope = Interval<u32>{scope_lower, scope_upper};
+
+    start_offset = 1;
+    end_offset = filter_data.values.size() - 1;
+  }
 
   // If the first item at index 0 is filtered, add the corresponding interval first since the
   // serialized version of the filter doesn't store index 0.
   //
-  if (filter_data.start_is_filtered) {
-    BATT_CHECK_NE(filter_data.values.size() % 2, 0);
-    dropped_ranges.emplace_back(Interval<u32>{0, filter_data.values[i].value()});
-    i++;
+  if (start_offset < end_offset) {
+    u32 i = start_offset;
+
+    if (filter_data.start_is_filtered) {
+      BATT_CHECK_NE((end_offset - start_offset) % 2, 0);
+      dropped_ranges.emplace_back(Interval<u32>{0, filter_data.values[i].value()});
+      i++;
+    }
+
+    for (; i + 1 < end_offset; i += 2) {
+      dropped_ranges.emplace_back(
+          Interval<u32>{filter_data.values[i].value(), filter_data.values[i + 1].value()});
+    }
   }
 
-  for (; i + 1 < filter_data.values.size(); i += 2) {
-    dropped_ranges.emplace_back(
-        Interval<u32>{filter_data.values[i].value(), filter_data.values[i + 1].value()});
-  }
-
-  return PiecewiseFilter<u32>::from_dropped(as_slice(dropped_ranges));
+  return PiecewiseFilter<u32>::from_dropped(as_slice(dropped_ranges), scope);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -337,11 +385,42 @@ bool PackedNodePage::UpdateBuffer::Segment::is_index_filtered(const SegmentedLev
     return false;
   }
 
+  u32 start_offset = 0;
+  u32 end_offset = filter_data.values.size();
+
+  if (filter_data.has_scope) {
+    BATT_CHECK_GE(filter_data.values.size(), 2);
+    u32 scope_upper = filter_data.values[0].value();
+    u32 scope_lower = filter_data.values[filter_data.values.size() - 1].value();
+
+    // If index is outside scope, it is considered filtered. Note that with the scope {0,0}
+    // where everything is out of scope, we will return true here.
+    //
+    if (index < scope_lower || index >= scope_upper) {
+      return true;
+    }
+
+    // Adjust offsets to skip scope.
+    //
+    start_offset = 1;
+    end_offset = filter_data.values.size() - 1;
+
+    // If no dropped ranges between scope bounds, everything in scope is live.
+    //
+    if (start_offset >= end_offset) {
+      return false;
+    }
+  }
+
+  Slice<const little_u32> dropped_values =
+      as_slice(filter_data.values.begin() + start_offset,
+               filter_data.values.begin() + end_offset - start_offset);
+
   // Compute the number of cut points that occur up to and potentially including this index.
   //
-  auto iter = std::upper_bound(filter_data.values.begin(), filter_data.values.end(), index);
+  auto iter = std::upper_bound(dropped_values.begin(), dropped_values.end(), index);
 
-  usize previous_cut_points = std::distance(filter_data.values.begin(), iter);
+  usize previous_cut_points = std::distance(dropped_values.begin(), iter);
 
   // If the start is filtered, an even number of previous cut points would mean that we are in a
   // filtered region. If the start is unfiltered, an even number of previous cut points means that
@@ -354,8 +433,8 @@ bool PackedNodePage::UpdateBuffer::Segment::is_index_filtered(const SegmentedLev
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-u32 PackedNodePage::UpdateBuffer::Segment::live_lower_bound(const SegmentedLevel& level,
-                                                            u32 item_i) const
+StatusOr<u32> PackedNodePage::UpdateBuffer::Segment::live_lower_bound(const SegmentedLevel& level,
+                                                                      u32 item_i) const
 {
   const usize segment_i = std::distance(level.segments_slice.begin(), this);
   PackedNodePage::UpdateBuffer::SegmentFilterData filter_data =
@@ -369,9 +448,37 @@ u32 PackedNodePage::UpdateBuffer::Segment::live_lower_bound(const SegmentedLevel
     return item_i;
   }
 
-  auto iter = std::upper_bound(filter_values.begin(), filter_values.end(), item_i);
+  u32 start_offset = 0;
+  u32 end_offset = filter_values.size();
 
-  usize previous_cut_points = std::distance(filter_data.values.begin(), iter);
+  if (filter_data.has_scope) {
+    BATT_CHECK_GE(filter_values.size(), 2);
+    u32 scope_upper = filter_values[0].value();
+    u32 scope_lower = filter_values[filter_values.size() - 1].value();
+
+    // Index is outside scope.
+    //
+    if (item_i < scope_lower || item_i >= scope_upper) {
+      return {batt::StatusCode::kOutOfRange};
+    }
+
+    start_offset = 1;
+    end_offset = filter_values.size() - 1;
+
+    // If no dropped ranges exist in the scope, item_i is live.
+    //
+    if (start_offset >= end_offset) {
+      return item_i;
+    }
+  }
+
+  Slice<const little_u32> dropped_values =
+      as_slice(filter_data.values.begin() + start_offset,
+               filter_data.values.begin() + end_offset - start_offset);
+
+  auto iter = std::upper_bound(dropped_values.begin(), dropped_values.end(), item_i);
+
+  usize previous_cut_points = std::distance(dropped_values.begin(), iter);
 
   bool is_filtered = (previous_cut_points % 2 == 0) == filter_data.start_is_filtered;
 
@@ -382,8 +489,19 @@ u32 PackedNodePage::UpdateBuffer::Segment::live_lower_bound(const SegmentedLevel
     return item_i;
   }
 
-  if (iter != filter_values.end()) {
-    return iter->value();
+  if (iter != dropped_values.end()) {
+    u32 next_live = iter->value();
+
+    // If scope exists, ensure that we don't go beyond it.
+    //
+    if (filter_data.has_scope) {
+      u32 scope_upper = filter_values[0].value();
+      if (next_live >= scope_upper) {
+        return {batt::StatusCode::kOutOfRange};
+      }
+    }
+
+    return next_live;
   }
 
   // If iter points to the end iterator here, the filter is in an invalid state; the last region
@@ -396,7 +514,7 @@ u32 PackedNodePage::UpdateBuffer::Segment::live_lower_bound(const SegmentedLevel
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Interval<u32> PackedNodePage::UpdateBuffer::Segment::get_live_item_range(
+StatusOr<Interval<u32>> PackedNodePage::UpdateBuffer::Segment::get_live_item_range(
     const SegmentedLevel& level,
     Interval<u32> i) const
 {
@@ -415,14 +533,47 @@ Interval<u32> PackedNodePage::UpdateBuffer::Segment::get_live_item_range(
     return i;
   }
 
-  auto iter = std::upper_bound(filter_values.begin(), filter_values.end(), start_i);
+  u32 start_offset = 0;
+  u32 end_offset = filter_values.size();
 
-  usize previous_cut_points = std::distance(filter_data.values.begin(), iter);
+  if (filter_data.has_scope) {
+    BATT_CHECK_GE(filter_values.size(), 2);
+    u32 scope_upper = filter_values[0].value();
+    u32 scope_lower = filter_values[filter_values.size() - 1].value();
+    Interval<u32> scope{scope_lower, scope_upper};
+
+    // Constrain the query interval to the scope.
+    //
+    Interval<u32> scoped_i = i.intersection_with(scope);
+    if (scoped_i.empty()) {
+      return {batt::StatusCode::kOutOfRange};
+    }
+
+    start_i = scoped_i.lower_bound;
+    end_i = scoped_i.upper_bound;
+
+    start_offset = 1;
+    end_offset = filter_values.size() - 1;
+
+    // If no dropped ranges between scope bounds, the entire scoped range is live.
+    //
+    if (start_offset >= end_offset) {
+      return scoped_i;
+    }
+  }
+
+  Slice<const little_u32> dropped_values =
+      as_slice(filter_data.values.begin() + start_offset,
+               filter_data.values.begin() + end_offset - start_offset);
+
+  auto iter = std::upper_bound(dropped_values.begin(), dropped_values.end(), start_i);
+
+  usize previous_cut_points = std::distance(dropped_values.begin(), iter);
 
   bool is_filtered = (previous_cut_points % 2 == 0) == filter_data.start_is_filtered;
 
   if (is_filtered) {
-    BATT_CHECK_NE(iter, filter_values.end()) << BATT_INSPECT(i) << BATT_INSPECT(filter_values);
+    BATT_CHECK_NE(iter, dropped_values.end()) << BATT_INSPECT(i) << BATT_INSPECT(dropped_values);
 
     start_i = iter->value();
     if (start_i >= end_i) {

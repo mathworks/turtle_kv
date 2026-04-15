@@ -126,17 +126,17 @@ struct FakeSegment {
     return !this->filter_.live_at_index(index);
   }
 
-  bool is_unfiltered() const
+  void narrow_scope(Interval<u32> i)
   {
-    return !this->filter_.dropped_total();
+    this->filter_.narrow_scope(i);
   }
 
-  u32 live_lower_bound(const FakeLevel&, u32 item_i) const
+  StatusOr<u32> live_lower_bound(const FakeLevel&, u32 item_i) const
   {
     return this->filter_.live_lower_bound(item_i);
   }
 
-  Interval<u32> get_live_item_range(const FakeLevel&, Interval<u32> i) const
+  StatusOr<Interval<u32>> get_live_item_range(const FakeLevel&, Interval<u32> i) const
   {
     return this->filter_.find_live_range(i);
   }
