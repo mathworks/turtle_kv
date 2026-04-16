@@ -102,10 +102,11 @@ struct FakeSegment {
   {
     const bool inactive = this->active_pivots_.is_empty();
     if (inactive) {
-      Slice<const Interval<u32>> filter_dropped_ranges = this->filter_.dropped();
-      BATT_CHECK_EQ(filter_dropped_ranges.size(), 1);
-      BATT_CHECK_EQ(filter_dropped_ranges[0].lower_bound, 0);
-    }
+    Slice<const Interval<u32>> live_ranges = this->filter_.live();
+    BATT_CHECK_EQ(live_ranges.size(), 1) << BATT_INSPECT(live_ranges);
+    BATT_CHECK_EQ(live_ranges[0].upper_bound, PiecewiseFilter<u32>::kMaxUpperBound)
+        << BATT_INSPECT(live_ranges);
+  }
     return inactive;
   }
 
@@ -126,17 +127,12 @@ struct FakeSegment {
     return !this->filter_.live_at_index(index);
   }
 
-  void narrow_scope(Interval<u32> i)
-  {
-    this->filter_.narrow_scope(i);
-  }
-
-  StatusOr<u32> live_lower_bound(const FakeLevel&, u32 item_i) const
+  u32 live_lower_bound(const FakeLevel&, u32 item_i) const
   {
     return this->filter_.live_lower_bound(item_i);
   }
 
-  StatusOr<Interval<u32>> get_live_item_range(const FakeLevel&, Interval<u32> i) const
+  Interval<u32> get_live_item_range(const FakeLevel&, Interval<u32> i) const
   {
     return this->filter_.find_live_range(i);
   }

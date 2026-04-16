@@ -79,8 +79,7 @@ class PiecewiseFilter
    * \param i The item index being queried.
    *
    * \return An index representing the next unfiltered item closest to index `i`. If `i` itself is
-   * unfiltered, `i` is returned. If `i` is outside of the scope of the filter, the error status
-   * `kOutOfRange` is returned.
+   * unfiltered, `i` is returned.
    */
   OffsetT live_lower_bound(OffsetT i) const;
 
@@ -90,8 +89,7 @@ class PiecewiseFilter
    *
    * \return A half open interval representing a slice of live items starting at the lower bound
    * of `i` and extending no further than the upper bound of `i`. If no such interval exists, an
-   * empty interval is returned. If the range `i` is is outside of the scope of the filter, the
-   * error status `kOutOfRange` is returned.
+   * empty interval is returned.
    */
   Interval<OffsetT> find_live_range(Interval<OffsetT> i) const;
 
@@ -99,8 +97,7 @@ class PiecewiseFilter
    */
   Slice<const Interval<OffsetT>> live() const;
 
-  /** \brief Merges two filters in place, taking the union of the dropped intervals and
-   * scopes.
+  /** \brief Merges two filters in place, taking the union of the live intervals.
    */
   void merge(const PiecewiseFilter& other);
 

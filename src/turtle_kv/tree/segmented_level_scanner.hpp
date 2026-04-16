@@ -266,23 +266,21 @@ inline auto SegmentedLevelScanner<NodeT, LevelT, PageLoaderT>::peek_next_impl(bo
                               leaf_page.items_begin() + end_i)};
   }
 
-  StatusOr<Interval<u32>> live_range = segment->get_live_item_range(
+  Interval<u32> live_range = segment->get_live_item_range(
       *this->level_,
       Interval<u32>{BATT_CHECKED_CAST(u32, begin_i), BATT_CHECKED_CAST(u32, leaf_page.key_count)});
-
-  BATT_CHECK(live_range.ok());
-  BATT_CHECK(!live_range->empty());
-  end_i = live_range->upper_bound;
+  BATT_CHECK(!live_range.empty());
+  end_i = live_range.upper_bound;
 
   if (advance) {
     if (end_i >= leaf_page.key_count) {
       this->advance_segment();
     } else {
-      StatusOr<u32> next_live_item = segment->live_lower_bound(*this->level_, end_i);
-      if (!next_live_item.ok() || *next_live_item >= leaf_page.key_count) {
+      u32 next_live_item = segment->live_lower_bound(*this->level_, end_i);
+      if (next_live_item >= leaf_page.key_count) {
         this->advance_segment();
       } else {
-        this->item_i_ = *next_live_item;
+        this->item_i_ = next_live_item;
       }
     }
   }
@@ -324,13 +322,7 @@ inline void SegmentedLevelScanner<NodeT, LevelT, PageLoaderT>::advance_to_pivot(
     return;
   }
 
-  StatusOr<u32> next_live_item =
-      segment.live_lower_bound(*this->level_, BATT_CHECKED_CAST(u32, lower_bound_i));
-  if (next_live_item.ok()) {
-    this->item_i_ = *next_live_item;
-  } else {
-    this->item_i_ = leaf_page.key_count;
-  }
+  this->item_i_ = segment.live_lower_bound(*this->level_, BATT_CHECKED_CAST(u32, lower_bound_i));
 }
 
 }  // namespace turtle_kv

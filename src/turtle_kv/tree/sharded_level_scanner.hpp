@@ -355,14 +355,13 @@ inline auto ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::continue_sharded_af
   // Compute the end item, as well as other necessary data needed for a ShardedKeyValueSlice.
   //
   BATT_CHECK_LT(this->item_i_, packed_leaf_page.key_count);
-  StatusOr<Interval<u32>> live_range = segment->get_live_item_range(
+  Interval<u32> live_range = segment->get_live_item_range(
       *this->level_,
       Interval<u32>{BATT_CHECKED_CAST(u32, this->item_i_),
                     BATT_CHECKED_CAST(u32, packed_leaf_page.key_count)});
-  BATT_CHECK(live_range.ok());
-  BATT_CHECK(!live_range->empty());
+  BATT_CHECK(!live_range.empty());
 
-  StatusOr<SliceData> slice_data = this->init_slice_data(live_range->upper_bound);
+  StatusOr<SliceData> slice_data = this->init_slice_data(live_range.upper_bound);
   if (!slice_data.ok()) {
     this->status_ = slice_data.status();
     return None;
@@ -385,15 +384,15 @@ inline auto ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::continue_sharded_af
     //
     usize prev_item_i = this->item_i_;
     if (this->hit_next_flushed_i_) {
-      if (live_range->upper_bound >= packed_leaf_page.key_count) {
+      if (live_range.upper_bound >= packed_leaf_page.key_count) {
         this->advance_segment();
       } else {
-        StatusOr<u32> next_live_item = segment->live_lower_bound(*this->level_, live_range->upper_bound);
+        u32 next_live_item = segment->live_lower_bound(*this->level_, live_range.upper_bound);
 
-        if (!next_live_item.ok() || *next_live_item >= packed_leaf_page.key_count) {
+        if (next_live_item >= packed_leaf_page.key_count) {
           this->advance_segment();
         } else {
-          this->item_i_ = *next_live_item;
+          this->item_i_ = next_live_item;
           this->update_cached_items(prev_item_i);
         }
       }
@@ -436,23 +435,21 @@ inline auto ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::continue_full_leaf_
                                 leaf_page.items_begin() + end_i};
   }
 
-  StatusOr<Interval<u32>> live_range = segment->get_live_item_range(
+  Interval<u32> live_range = segment->get_live_item_range(
       *this->level_,
       Interval<u32>{BATT_CHECKED_CAST(u32, begin_i), BATT_CHECKED_CAST(u32, leaf_page.key_count)});
-
-  BATT_CHECK(live_range.ok());
-  BATT_CHECK(!live_range->empty());
-  end_i = live_range->upper_bound;
+  BATT_CHECK(!live_range.empty());
+  end_i = live_range.upper_bound;
 
   if (advance) {
     if (end_i >= leaf_page.key_count) {
       this->advance_segment();
     } else {
-      StatusOr<u32> next_live_item = segment->live_lower_bound(*this->level_, end_i);
-      if (!next_live_item.ok() || *next_live_item >= leaf_page.key_count) {
+      u32 next_live_item = segment->live_lower_bound(*this->level_, end_i);
+      if (next_live_item >= leaf_page.key_count) {
         this->advance_segment();
       } else {
-        this->item_i_ = *next_live_item;
+        this->item_i_ = next_live_item;
       }
     }
   }
@@ -520,13 +517,7 @@ inline void ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::advance_to_pivot_fu
     return;
   }
 
-  StatusOr<u32> next_live_item =
-      segment.live_lower_bound(*this->level_, BATT_CHECKED_CAST(u32, lower_bound_i));
-  if (next_live_item.ok()) {
-    this->item_i_ = *next_live_item;
-  } else {
-    this->item_i_ = leaf_page.key_count;
-  }
+  this->item_i_ = segment.live_lower_bound(*this->level_, BATT_CHECKED_CAST(u32, lower_bound_i));
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -780,14 +771,10 @@ inline Status ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::set_start_item(
     usize lower_bound_key_i = search_range.lower_bound + std::distance(items_begin, found_item);
     BATT_CHECK_LT(lower_bound_key_i, packed_leaf_page.key_count);
 
-    StatusOr<u32> next_live_item =
+    u32 next_live_item =
         segment.live_lower_bound(*this->level_, BATT_CHECKED_CAST(u32, lower_bound_key_i));
 
-    if (!next_live_item.ok()) {
-      this->item_i_ = packed_leaf_page.key_count;
-    } else {
-      this->item_i_ = *next_live_item;
-    }
+    this->item_i_ = next_live_item;
   }
 
   return OkStatus();

@@ -147,8 +147,7 @@ StatusOr<ValueView> find_key_in_leaf(const llfs::PageIdSlot& leaf_page_id_slot,
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 StatusOr<u32> find_key_lower_bound_index(llfs::PageId leaf_page_id,
-                                         KeyQuery& query,
-                                         usize& key_count_out)
+                                         KeyQuery& query)
 {
   const auto default_shard_size = llfs::PageSize{kDefaultLeafShardedViewSize};
 
@@ -169,8 +168,6 @@ StatusOr<u32> find_key_lower_bound_index(llfs::PageId leaf_page_id,
   const auto& packed_leaf_page = *static_cast<const PackedLeafPage*>(payload_start);
 
   packed_leaf_page.check_magic();
-
-  key_count_out = packed_leaf_page.key_count;
 
   const void* trie_begin = packed_leaf_page.trie_index.get();
   const void* trie_end = advance_pointer(trie_begin, packed_leaf_page.trie_index_size);

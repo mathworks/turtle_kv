@@ -22,14 +22,9 @@ template <typename OffsetT>
     const Slice<const Interval<OffsetT>>& live)
 {
   PiecewiseFilter<OffsetT> filter;
+  filter.live_.clear();
 
   filter.live_.insert(filter.live_.end(), live.begin(), live.end());
-  filter.live_total_ = std::accumulate(filter.live_.begin(),
-                                       filter.live_.end(),
-                                       0,
-                                       [](OffsetT total, const Interval<OffsetT>& i) {
-                                         return total += i.size();
-                                       });
 
   if (!filter.check_invariants()) {
     return Status{::batt::StatusCode::kInvalidArgument};
@@ -41,7 +36,8 @@ template <typename OffsetT>
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename OffsetT>
-PiecewiseFilter<OffsetT>::PiecewiseFilter() noexcept : live_{}
+PiecewiseFilter<OffsetT>::PiecewiseFilter() noexcept
+    : live_{{Interval<OffsetT>{Self::kMinLowerBound, Self::kMaxUpperBound}}}
 {
 }
 
@@ -91,8 +87,6 @@ Interval<OffsetT> PiecewiseFilter<OffsetT>::drop_index_range(Interval<OffsetT> t
     return to_drop;
   }
 
-  // Find the position to insert `i` or begin merging with other intervals.
-  //
   auto [first, last] = std::equal_range(this->live_.begin(),
                                         this->live_.end(),
                                         to_drop,
@@ -115,131 +109,106 @@ Interval<OffsetT> PiecewiseFilter<OffsetT>::drop_index_range(Interval<OffsetT> t
     return dropped;
   }
 
-  while (first != last) {
-    // We must handle:
+  // We must handle:
+  //
+  //         ┌────────────────┐
+  // Case 1: │    to_drop     │
+  //         └────────────────┘
+  //             ┌─────┐
+  //             │*iter│
+  //             └─────┘
+  //
+  //            ┌─────────┐
+  // Case 2a:   │ to_drop │
+  //            └─────────┘
+  //         ┌────────────────┐
+  //         │     *iter      │
+  //         └────────────────┘
+  //
+  //              ┌───────────┐
+  // Case 2b:     │  to_drop  │
+  //              └───────────┘
+  //         ┌────────────────┐
+  //         │     *iter      │
+  //         └────────────────┘
+  //
+  //         ┌─────────┐
+  // Case 3: │ to_drop │
+  //         └─────────┘
+  //               ┌──────────┐
+  //               │  *iter   │
+  //               └──────────┘
+  //
+  //                ┌─────────┐
+  // Case 4:        │ to_drop │
+  //                └─────────┘
+  //         ┌──────────┐
+  //         │  *iter   │
+  //         └──────────┘
+  //
+
+  Interval<OffsetT> dropped = to_drop;
+
+  // Extend lower and upper bounds if we need to merge with a previously dropped region to set
+  // the return value bounds correctly.
+  //
+  if (first != this->live_.begin() && to_drop.lower_bound < first->lower_bound) {
+    // We are starting in a live interval gap (dropped region), so we extend to the previous live
+    // interval's upper bound.
     //
-    //         ┌────────────────┐
-    // Case 1: │    to_drop     │
-    //         └────────────────┘
-    //             ┌─────┐
-    //             │*iter│
-    //             └─────┘
+    dropped.lower_bound = std::prev(first)->upper_bound;
+  }
+
+  if (last != this->live_.end() && to_drop.upper_bound > last->lower_bound) {
+    // We are ending in a live interval gap, so we extend to the next live interval's start.
     //
-    //            ┌─────────┐
-    // Case 2a:   │ to_drop │
-    //            └─────────┘
-    //         ┌────────────────┐
-    //         │     *iter      │
-    //         └────────────────┘
-    //
-    //              ┌───────────┐
-    // Case 2b:     │  to_drop  │
-    //              └───────────┘
-    //         ┌────────────────┐
-    //         │     *iter      │
-    //         └────────────────┘
-    //
-    //         ┌─────────┐
-    // Case 3: │ to_drop │
-    //         └─────────┘
-    //               ┌──────────┐
-    //               │  *iter   │
-    //               └──────────┘
-    //
-    //                ┌─────────┐
-    // Case 4:        │ to_drop │
-    //                └─────────┘
-    //         ┌──────────┐
-    //         │  *iter   │
-    //         └──────────┘
-    //
-    if (first->upper_bound >= to_drop.upper_bound) {
-      // We are in case 2 or 3.
+    dropped.upper_bound = last->lower_bound;
+  }
+
+  // Process all overlapping intervals with `to_drop`.
+  //
+  while (first != this->live_.end()) {
+    if (first->lower_bound >= to_drop.upper_bound) {
+      // Interval is entirely after `to_drop`, so there is nothing left to process.
       //
-      if (first->lower_bound < to_drop.lower_bound) {
-        // case 2a or 2b.
-        //
-        if (first->upper_bound == to_drop.upper_bound) {
-          // case 2b
-          //
-          first->upper_bound = to_drop.lower_bound;
-          if (std::next(first) == this->live_.end()) {
-            return {to_drop.lower_bound, Self::kMaxUpperBound};
-          }
-          return {to_drop.lower_bound, std::next(first).lower_bound};
-        }
-        // case 2a
-        //
-      }
       break;
+    }
+
+    if (first->lower_bound < to_drop.lower_bound) {
+      if (first->upper_bound > to_drop.upper_bound) {
+        // Case 2a.
+        //
+        Interval<OffsetT> right_half{to_drop.upper_bound, first->upper_bound};
+        first->upper_bound = to_drop.lower_bound;
+        this->live_.insert(std::next(first), right_half);
+        return dropped;
+      } else {
+        // Cases 2b and 4.
+        //
+        first->upper_bound = to_drop.lower_bound;
+        ++first;
+      }
+    } else if (first->upper_bound > to_drop.upper_bound) {
+      // Case 3.
+      //
+      first->lower_bound = to_drop.upper_bound;
+      return dropped;
+    } else {
+      // Case 1.
+      //
+      first = this->live_.erase(first);
     }
   }
 
-  for (Interval<OffsetT>& range : std::ranges::subrange(first, last)) {
-  }
-
-#if 0
-          || !to_drop.adjacent_to(*iter))
-          {
-            // No adjacent range to merge with was found, insert into the back of the dropped
-            // ranges.
-            //
-            iter = this->live_.insert(iter, to_drop);
-            this->live_total_ += to_drop.size();
-          }
-          else
-          {
-            // Merge with lower bound adjacent range.
-            //
-            this->live_total_ -= iter->size();
-            *iter = iter->union_with(to_drop);
-            this->live_total_ += iter->size();
-
-            // Merge with all subsequent adjacent ranges.
-            //
-            for (auto after = std::next(iter);
-                 after != this->live_.end() && iter->adjacent_to(*after);) {
-              this->live_total_ -= after->size() + iter->size();
-              *after = after->union_with(*iter);
-              this->live_total_ += after->size();
-              iter = this->live_.erase(iter);
-            }
-          }
-
-          // If necessary, merge with the previous range.
-          //
-          if (iter != this->live_.begin()) {
-            auto before = std::prev(iter);
-            if (iter->adjacent_to(*before)) {
-              this->live_total_ -= before->size() + iter->size();
-              *before = before->union_with(*iter);
-              this->live_total_ += before->size();
-              this->live_.erase(iter);
-              iter = before;
-            }
-          }
-
-          BATT_CHECK_NE(iter, this->live_.end());
-
-
-  return *iter;
-#endif
+  return dropped;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename OffsetT>
-OffsetT PiecewiseFilter<OffsetT>::dropped_total() const
+Slice<const Interval<OffsetT>> PiecewiseFilter<OffsetT>::live() const
 {
-  return this->dropped_total_;
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-template <typename OffsetT>
-Slice<const Interval<OffsetT>> PiecewiseFilter<OffsetT>::dropped() const
-{
-  return as_const_slice(this->dropped_);
+  return as_const_slice(this->live_);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -247,139 +216,94 @@ Slice<const Interval<OffsetT>> PiecewiseFilter<OffsetT>::dropped() const
 template <typename OffsetT>
 bool PiecewiseFilter<OffsetT>::live_at_index(OffsetT i) const
 {
-  if (this->scope_ && !this->scope_->contains(i)) {
-    return false;
-  }
-
-  StatusOr<OffsetT> live_lower_bound = this->live_lower_bound(i);
-  if (live_lower_bound.status() == batt::StatusCode::kOutOfRange) {
-    return false;
-  }
-  BATT_CHECK(live_lower_bound.ok());
-
-  return *live_lower_bound == i;
+  return this->live_lower_bound(i) == i;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename OffsetT>
-StatusOr<OffsetT> PiecewiseFilter<OffsetT>::live_lower_bound(OffsetT i) const
+OffsetT PiecewiseFilter<OffsetT>::live_lower_bound(OffsetT i) const
 {
-  if (this->scope_ && !this->scope_->contains(i)) {
-    return {batt::StatusCode::kOutOfRange};
-  }
-
-  // Compute the dropped interval which could contain `i`.
+  // Compute the live interval which could contain `i`.
   //
-  auto iter = std::lower_bound(this->dropped_.begin(),
-                               this->dropped_.end(),
+  auto iter = std::lower_bound(this->live_.begin(),
+                               this->live_.end(),
                                i,
                                typename Interval<OffsetT>::LinearOrder{});
 
-  if (iter != this->dropped_.end() && iter->contains(i)) {
-    OffsetT next_live = iter->upper_bound;
-    if (this->scope_ && next_live >= this->scope_->upper_bound) {
-      return {batt::StatusCode::kOutOfRange};
+  // Check if the previous interval contains `i`.
+  //
+  if (iter != this->live_.begin()) {
+    auto prev = std::prev(iter);
+    if (prev->contains(i)) {
+      return i;
     }
-
-    return next_live;
   }
 
-  return i;
+  // Check if current interval contains `i`.
+  //
+  if (iter != this->live_.end() && iter->contains(i)) {
+    return i;
+  }
+
+  // `i` is in a dropped range, so we return the start of the next live interval.
+  //
+  if (iter != this->live_.end()) {
+    return iter->lower_bound;
+  }
+
+  // No live intervals exist after `i`, return kMaxUpperBound.
+  //
+  return Self::kMaxUpperBound;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename OffsetT>
-StatusOr<Interval<OffsetT>> PiecewiseFilter<OffsetT>::find_live_range(Interval<OffsetT> i) const
+Interval<OffsetT> PiecewiseFilter<OffsetT>::find_live_range(Interval<OffsetT> i) const
 {
-  if (this->scope_) {
-    i = i.intersection_with(*this->scope_);
-    if (i.empty()) {
-      return {batt::StatusCode::kOutOfRange};
-    }
-  }
-
   OffsetT start_i = i.lower_bound;
   OffsetT end_i = i.upper_bound;
 
   BATT_CHECK_LE(start_i, end_i);
 
-  auto iter = std::lower_bound(this->dropped_.begin(),
-                               this->dropped_.end(),
+  auto iter = std::lower_bound(this->live_.begin(),
+                               this->live_.end(),
                                start_i,
                                typename Interval<OffsetT>::LinearOrder{});
 
-  // Start by finding the live lower bound of start_i. If start_i is filtered, adjust it to be the
-  // live lower bound.
+  // Check if the previous interval contains `start_i`.
   //
-  if (iter != this->dropped_.end() && iter->contains(start_i)) {
-    start_i = iter->upper_bound;
-    if (start_i >= end_i) {
-      // If this adjustment causes start_i to exceed end_i, no live range exists to return, so
-      // return an empty interval.
+  if (iter != this->live_.begin()) {
+    auto prev = std::prev(iter);
+    if (prev->contains(start_i)) {
+      // `start_i` is in the previous interval, so we return the intersection of `i`
+      // and this current live interval.
       //
-      return Interval<OffsetT>{end_i, end_i};
+      OffsetT live_end = std::min(end_i, prev->upper_bound);
+      return Interval<OffsetT>{start_i, live_end};
     }
-
-    ++iter;
   }
 
-  // If another dropped range exists after the range pointed to by iter, use its lower bound to
-  // adjust the value of end_i so that we don't cross over into another filtered range.
+  // Check if current interval contains or starts at `start_i`.
   //
-  if (iter != this->dropped_.end()) {
-    end_i = std::min(end_i, iter->lower_bound);
-  }
-
-  BATT_CHECK_LE(start_i, end_i) << BATT_INSPECT(i);
-
-  return Interval<OffsetT>{start_i, end_i};
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-template <typename OffsetT>
-void PiecewiseFilter<OffsetT>::narrow_scope(const Interval<OffsetT>& new_scope)
-{
-  if (!this->scope_) {
-    this->scope_ = new_scope;
-  } else {
-    this->scope_ = this->scope_->intersection_with(new_scope);
-    if (this->scope_->empty()) {
-      this->scope_ = Interval<OffsetT>{0, 0};
+  if (iter != this->live_.end()) {
+    if (iter->contains(start_i)) {
+      OffsetT live_end = std::min(end_i, iter->upper_bound);
+      return Interval<OffsetT>{start_i, live_end};
+    } else if (iter->lower_bound < end_i) {
+      // `start_i` is before this interval, but the interval starts before end_i. Now, the start
+      // of the live range is the start of the current interval.
+      //
+      OffsetT live_start = iter->lower_bound;
+      OffsetT live_end = std::min(end_i, iter->upper_bound);
+      return Interval<OffsetT>{live_start, live_end};
     }
   }
 
-  usize i = 0;
-  OffsetT new_dropped_total = 0;
-
-  for (usize j = 0; j < this->dropped_.size(); ++j) {
-    // Truncate the interval to fit within the new scope.
-    //
-    Interval<OffsetT> truncated = this->dropped_[j].intersection_with(*this->scope_);
-
-    // Only keep non-empty intervals.
-    //
-    if (!truncated.empty()) {
-      this->dropped_[i] = truncated;
-      new_dropped_total += truncated.size();
-      ++i;
-    }
-  }
-
-  // Remove intervals that were filtered out.
+  // No live range found within [start_i, end_i), return empty interval.
   //
-  this->dropped_.resize(i);
-  this->dropped_total_ = new_dropped_total;
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-template <typename OffsetT>
-Optional<Interval<OffsetT>> PiecewiseFilter<OffsetT>::get_scope() const
-{
-  return this->scope_;
+  return Interval<OffsetT>{end_i, end_i};
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -387,49 +311,29 @@ Optional<Interval<OffsetT>> PiecewiseFilter<OffsetT>::get_scope() const
 template <typename OffsetT>
 void PiecewiseFilter<OffsetT>::merge(const PiecewiseFilter& other)
 {
-  if (this->scope_ && other.scope_) {
-    bool this_empty = this->scope_->empty();
-    bool other_empty = other.scope_->empty();
-
-    if (!this_empty && !other_empty) {
-      // If both are non-empty, take the union.
-      //
-      this->scope_ = this->scope_->union_with(*other.scope_);
-    } else if (this_empty && !other_empty) {
-      this->scope_ = other.scope_;
-    }
-  } else if (!this->scope_ && other.scope_) {
-    this->scope_ = other.scope_;
-  }
-
-  // If other has no dropped intervals, we are done.
+  // If other has no live intervals, we are done.
   //
-  if (other.dropped_.empty()) {
-    BATT_CHECK(this->check_invariants());
+  if (other.live_.empty()) {
     return;
   }
 
-  // If this has no dropped intervals, copy from other.
+  // If this has no live intervals, copy from other.
   //
-  if (this->dropped_.empty()) {
-    this->dropped_.insert(this->dropped_.end(), other.dropped_.begin(), other.dropped_.end());
-    this->dropped_total_ = other.dropped_total_;
+  if (this->live_.empty()) {
+    this->live_.insert(this->live_.end(), other.live_.begin(), other.live_.end());
     BATT_CHECK(this->check_invariants());
     return;
   }
 
   SmallVec<Interval<OffsetT>, 64> merged_intervals;
-  merged_intervals.reserve(this->dropped_.size() + other.dropped_.size());
-
-  OffsetT new_dropped_total = 0;
+  merged_intervals.reserve(this->live_.size() + other.live_.size());
 
   usize i = 0;
   usize j = 0;
 
-  auto add_interval = [&merged_intervals, &new_dropped_total](const Interval<OffsetT>& interval) {
+  auto add_interval = [&merged_intervals](const Interval<OffsetT>& interval) {
     if (merged_intervals.empty()) {
       merged_intervals.push_back(interval);
-      new_dropped_total += interval.size();
     } else {
       Interval<OffsetT>& last = merged_intervals.back();
       // Check if interval overlaps or is adjacent to last.
@@ -438,47 +342,43 @@ void PiecewiseFilter<OffsetT>::merge(const PiecewiseFilter& other)
         // Merge.
         //
         if (interval.upper_bound > last.upper_bound) {
-          new_dropped_total -= last.size();
           last = Interval<OffsetT>{last.lower_bound, interval.upper_bound};
-          new_dropped_total += last.size();
         }
       } else {
         // No overlap, add interval.
         //
         merged_intervals.push_back(interval);
-        new_dropped_total += interval.size();
       }
     }
   };
 
-  // Merge the dropped intervals arrays.
+  // Merge the live intervals arrays.
   //
-  while (i < this->dropped_.size() && j < other.dropped_.size()) {
-    if (this->dropped_[i].lower_bound <= other.dropped_[j].lower_bound) {
-      add_interval(this->dropped_[i]);
+  while (i < this->live_.size() && j < other.live_.size()) {
+    if (this->live_[i].lower_bound <= other.live_[j].lower_bound) {
+      add_interval(this->live_[i]);
       ++i;
     } else {
-      add_interval(other.dropped_[j]);
+      add_interval(other.live_[j]);
       ++j;
     }
   }
 
-  // Add remaining intervals from this->dropped_.
+  // Add remaining intervals from this->live_.
   //
-  while (i < this->dropped_.size()) {
-    add_interval(this->dropped_[i]);
+  while (i < this->live_.size()) {
+    add_interval(this->live_[i]);
     ++i;
   }
 
-  // Add remaining intervals from other.dropped_.
+  // Add remaining intervals from other.live_.
   //
-  while (j < other.dropped_.size()) {
-    add_interval(other.dropped_[j]);
+  while (j < other.live_.size()) {
+    add_interval(other.live_[j]);
     ++j;
   }
 
-  this->dropped_ = std::move(merged_intervals);
-  this->dropped_total_ = new_dropped_total;
+  this->live_ = std::move(merged_intervals);
 
   BATT_CHECK(this->check_invariants());
 }
@@ -489,7 +389,7 @@ template <typename OffsetT>
 SmallFn<void(std::ostream&)> PiecewiseFilter<OffsetT>::dump() const
 {
   return [this](std::ostream& out) {
-    out << batt::dump_range(this->dropped_);
+    out << batt::dump_range(this->live_);
   };
 }
 }  // namespace turtle_kv
