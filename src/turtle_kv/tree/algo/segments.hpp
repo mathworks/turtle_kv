@@ -197,8 +197,8 @@ struct SegmentAlgorithms {
     // use sharded queries to find item indexes for the lower and upper bound of the pivot range.
     //
     PageSliceStorage page_slice_storage;
-    
-     KeyQuery key_query{page_loader, page_slice_storage, tree_options, drop_key_range.lower_bound};
+
+    KeyQuery key_query{page_loader, page_slice_storage, tree_options, drop_key_range.lower_bound};
 
     BATT_ASSIGN_OK_RESULT(u32 start_item_index,
                           find_key_lower_bound_index(this->segment_.get_leaf_page_id(), key_query));
