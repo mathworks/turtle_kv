@@ -413,7 +413,7 @@ u64 query_page_loader_reset_every_n()
       this->tree_options_,
       this->page_cache(),
       batt::make_copy(this->filter_page_write_state_),
-      batt::Toggle<State>::Reader { this->state_ } -> base_checkpoint_->clone(),
+      batt::Toggle<State>::Reader{this->state_}->base_checkpoint_->clone(),
       *this->checkpoint_log_);
 
   this->tree_options_.set_trie_index_reserve_size(this->tree_options_.trie_index_reserve_size());
@@ -461,26 +461,30 @@ u64 query_page_loader_reset_every_n()
 //
 KVStore::~KVStore() noexcept
 {
+  const bool show_metrics = getenv_as<bool>("TURTLE_KV_SHOW_METRICS_ON_CLOSE").value_or(false);
   {
     auto& merge_compactor = MergeCompactor::metrics();
-    LOG(INFO) << BATT_INSPECT(merge_compactor.output_buffer_waste);
-    LOG(INFO) << BATT_INSPECT(merge_compactor.result_set_waste);
-    LOG(INFO) << BATT_INSPECT(merge_compactor.result_set_compact_count);
-    LOG(INFO) << BATT_INSPECT(merge_compactor.result_set_compact_byte_count);
-    LOG(INFO) << BATT_INSPECT(merge_compactor.average_bytes_per_compaction());
+    LOG_IF(INFO, show_metrics) << BATT_INSPECT(merge_compactor.output_buffer_waste);
+    LOG_IF(INFO, show_metrics) << BATT_INSPECT(merge_compactor.result_set_waste);
+    LOG_IF(INFO, show_metrics) << BATT_INSPECT(merge_compactor.result_set_compact_count);
+    LOG_IF(INFO, show_metrics) << BATT_INSPECT(merge_compactor.result_set_compact_byte_count);
+    LOG_IF(INFO, show_metrics) << BATT_INSPECT(merge_compactor.average_bytes_per_compaction());
   }
   {
     auto& art = ARTBase::default_metrics();
-    LOG(INFO) << BATT_INSPECT(art.byte_alloc_count) << BATT_INSPECT(art.construct_count)
-              << BATT_INSPECT(art.destruct_count) << BATT_INSPECT(art.bytes_per_instance())
-              << BATT_INSPECT(art.insert_count) << BATT_INSPECT(art.average_item_count())
-              << BATT_INSPECT(art.bytes_per_insert());
+    LOG_IF(INFO, show_metrics) << BATT_INSPECT(art.byte_alloc_count)
+                               << BATT_INSPECT(art.construct_count)
+                               << BATT_INSPECT(art.destruct_count)
+                               << BATT_INSPECT(art.bytes_per_instance())
+                               << BATT_INSPECT(art.insert_count)
+                               << BATT_INSPECT(art.average_item_count())
+                               << BATT_INSPECT(art.bytes_per_insert());
   }
   {
     auto& leaf = PackedLeafPage::metrics();
-    LOG(INFO) << BATT_INSPECT(leaf.page_utilization_pct_stats)
-              << BATT_INSPECT(leaf.packed_size_stats)
-              << BATT_INSPECT(leaf.packed_trie_wasted_stats);
+    LOG_IF(INFO, show_metrics) << BATT_INSPECT(leaf.page_utilization_pct_stats)
+                               << BATT_INSPECT(leaf.packed_size_stats)
+                               << BATT_INSPECT(leaf.packed_trie_wasted_stats);
   }
 
   this->halt();
@@ -490,7 +494,8 @@ KVStore::~KVStore() noexcept
 
   {
     auto& mem_table = this->metrics_.mem_table;
-    LOG(INFO) << BATT_INSPECT(mem_table.alloc_count) << BATT_INSPECT(mem_table.free_count);
+    LOG_IF(INFO, show_metrics) << BATT_INSPECT(mem_table.alloc_count)
+                               << BATT_INSPECT(mem_table.free_count);
   }
 }
 
@@ -708,29 +713,79 @@ Status KVStore::recover_put(FirstVisitToBlock first_visit,
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status KVStore::force_checkpoint()
+StatusOr<EditOffset> KVStore::force_checkpoint() noexcept
 {
-  const usize saved_checkpoint_distance = this->checkpoint_distance_.exchange(1);
-  auto on_scope_exit = batt::finally([&] {
-    usize expected = 1;
-    this->checkpoint_distance_.compare_exchange_strong(expected, saved_checkpoint_distance);
-  });
+  EditOffset observed_edit_bound{0};
 
-  boost::intrusive_ptr<MemTable> old_mem_table = [this]() -> boost::intrusive_ptr<MemTable> {
+  // Observe the current active MemTable.  If it is empty, save its EditOffset lower bound so we can
+  // return it.
+  //
+  boost::intrusive_ptr<MemTable> old_mem_table =
+      [this, &observed_edit_bound]() -> boost::intrusive_ptr<MemTable> {
     batt::Toggle<State>::Reader state_reader{this->state_};
     if (state_reader->mem_table_->empty()) {
+      observed_edit_bound = state_reader->mem_table_->edit_offset_lower_bound();
       return nullptr;
     }
     return state_reader->mem_table_;
   }();
 
-  if (old_mem_table) {
-    BATT_REQUIRE_OK(this->finalize_mem_table(std::move(old_mem_table)));
-    BATT_REQUIRE_OK(this->deltas_size_->await_true([this](usize n) {
-      return n < 2;
-    }));
+  // If the active MemTable is empty, then the next checkpoint bound is its lower bound.
+  //
+  if (old_mem_table == nullptr) {
+    return {observed_edit_bound};
   }
 
+  // Finalize the active MemTable, forcing a checkpoint.
+  //
+  BATT_REQUIRE_OK(this->finalize_mem_table(batt::make_copy(old_mem_table)));
+
+  // The next checkpoint will be at the upper bound of the MemTable we just finalized.
+  //
+  return old_mem_table->edit_offset_upper_bound();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Status KVStore::wait_for_checkpoint(EditOffset target) noexcept
+{
+  for (;;) {
+    // If the KVStore has been closed, return kClosed status.
+    //
+    if (this->halt_.get_value()) {
+      // TODO [tastolfi 2026-04-17] When this->halt_ is set to true, we should make sure to change
+      // the state so that `wait_for_checkpoint` doesn't hang below in Toggle::wait.
+      //
+      return batt::StatusCode::kClosed;
+    }
+
+    // Observe the current state; if there are no deltas below the target bound, then we are done;
+    // otherwise, save the state's seq number so we can wait for change notification.
+    //
+    u64 observed_seq;
+    {
+      batt::Toggle<State>::Reader state_reader{this->state_};
+      bool found_pending_deltas = false;
+      for (const boost::intrusive_ptr<MemTable>& p_delta : state_reader->deltas_) {
+        VLOG(1) << "found delta; " << BATT_INSPECT(p_delta->edit_offset_upper_bound())
+                << BATT_INSPECT(target);
+        if (p_delta->edit_offset_upper_bound() <= target) {
+          found_pending_deltas = true;
+          break;
+        }
+      }
+      if (!found_pending_deltas) {
+        break;
+      }
+      observed_seq = state_reader.seq();
+      VLOG(1) << BATT_INSPECT(observed_seq);
+    }
+
+    // Wait for the state to update.
+    //
+    this->state_.wait(observed_seq);
+    VLOG(1) << "state changed";
+  }
   return OkStatus();
 }
 
@@ -1159,9 +1214,9 @@ void KVStore::mem_table_batch_scanner_thread_main()
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename Fn>
-requires std::invocable<Fn, std::unique_ptr<DeltaBatch>> Status
-KVStore::scan_mem_table_to_build_batches(boost::intrusive_ptr<MemTable>&& mem_table,
-                                         Fn&& consume_fn)
+  requires std::invocable<Fn, std::unique_ptr<DeltaBatch>>
+Status KVStore::scan_mem_table_to_build_batches(boost::intrusive_ptr<MemTable>&& mem_table,
+                                                Fn&& consume_fn)
 {
   MemTable::BatchCompactor batch_compactor{*mem_table,
                                            /*byte_size_limit=*/this->tree_options_.flush_size()};
@@ -1406,7 +1461,7 @@ Status KVStore::commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_jo
     // Find the first delta MemTable on the stack that is *not* covered by the checkpoint.
     //  (deltas_ is in oldest-to-newest order)
     //
-    auto iter = std::lower_bound(old_state.deltas_.begin(),
+    auto iter = std::upper_bound(old_state.deltas_.begin(),
                                  old_state.deltas_.end(),
                                  checkpoint_job,
                                  OrderByEditOffsetUpperBound{});
@@ -1580,6 +1635,23 @@ void KVStore::collect_stats(
   fn("kv_store.footprint.log_bytes", change_log_file.size());
   fn("kv_store.footprint.total_bytes", on_disk_footprint);
   fn("kv_store.log.user_bytes", change_log_writer.received_user_byte_count.get());
+  fn("kv_store.log.block_bytes", change_log_writer.received_block_byte_count.get());
+
+  fn("kv_store.log.in_use_tokens", change_log_file.in_use_block_tokens());
+  fn("kv_store.log.avail_tokens", change_log_file.available_block_tokens());
+  fn("kv_store.log.reserved_tokens", change_log_file.reserved_block_tokens());
+  fn("kv_store.log.max_blocks", change_log_file.max_block_count());
+  fn("kv_store.log.block_size", change_log_file.block_size());
+  fn("kv_store.log.poll_count", change_log_writer.poll_count.get());
+  fn("kv_store.log.sleep_count", change_log_writer.sleep_count.get());
+
+  auto& log_block = ChangeLogBlock::metrics();
+
+  fn("kv_store.log.blocks_allocated", log_block.block_alloc_count.get());
+  fn("kv_store.log.blocks_freed", log_block.block_free_count.get());
+
+  fn("kv_store.mem_table.alloc_count", kv_store.mem_table.alloc_count.get());
+  fn("kv_store.mem_table.free_count", kv_store.mem_table.free_count.get());
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
   // Query profiling metrics.
@@ -1816,7 +1888,6 @@ void KVStore::collect_stats(
   << BATT_INSPECT(change_log_writer.written_block_byte_count) << "\n"            //
   << BATT_INSPECT(change_log_writer.sleep_count) << "\n"                         //
   << BATT_INSPECT(change_log_writer.write_count) << "\n"                         //
-  << BATT_INSPECT(change_log_writer.block_alloc_count) << "\n"                   //
   << BATT_INSPECT(change_log_writer.block_utilization_rate()) << "\n"            //
   << "\n"                                                                        //
   << BATT_INSPECT(cache_slot_pool.construct_count) << "\n"                       //
@@ -1845,9 +1916,37 @@ void KVStore::collect_stats(
 std::function<void(std::ostream&)> KVStore::debug_info() const noexcept
 {
   return [this](std::ostream& out) {
-    this->collect_stats([&out](std::string_view name, double value) {
-      out << " " << name << " == " << value << "\n";
+    std::vector<std::string> lines;
+
+    this->collect_stats([&lines](std::string_view name, double value) {
+      std::ostringstream oss;
+      oss << " " << name << " == " << value << "\n";
+      lines.emplace_back(std::move(oss).str());
     });
+
+    std::sort(lines.begin(), lines.end());
+    for (const std::string& l : lines) {
+      out << l;
+    }
+
+    {
+      batt::Toggle<State>::Reader state_reader{const_cast<KVStore*>(this)->state_};
+
+      out << " active_memtable: " << state_reader->mem_table_->edit_offset_lower_bound() << "..\n";
+
+      usize delta_i = 0;
+      for (const auto& p_delta : state_reader->deltas_) {
+        out << " delta[" << delta_i << "]: " << p_delta->edit_offset_lower_bound() << ".."
+            << p_delta->edit_offset_upper_bound() << "\n";
+      }
+
+      out << " checkpoint: ";
+      if (state_reader->base_checkpoint_) {
+        out << ".." << state_reader->base_checkpoint_->edit_offset_upper_bound() << "\n";
+      } else {
+        out << "(None)\n";
+      }
+    }
   };
 }
 

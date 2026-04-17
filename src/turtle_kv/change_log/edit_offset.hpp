@@ -151,6 +151,46 @@ inline EditOffset& operator+=(EditOffset& left, T&& right)
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 
+//+++++++++++-+-+--+----- --- -- -  -  -   -
+
+/** \brief Returns the passed offset.
+ */
+inline EditOffset get_edit_offset_lower_bound(EditOffset edit_offset)
+{
+  return edit_offset;
+}
+
+/** \brief Returns the editoffset lower bound of the object pointed to by ptr.
+ */
+template <typename T>
+inline EditOffset get_edit_offset_lower_bound(const std::unique_ptr<T>& ptr)
+{
+  return get_edit_offset_lower_bound(*ptr);
+}
+
+/** \brief Returns the edit offset lower bound of the object pointed to by ptr.
+ */
+template <typename T>
+inline EditOffset get_edit_offset_lower_bound(const boost::intrusive_ptr<T>& ptr)
+{
+  return get_edit_offset_lower_bound(*ptr);
+}
+
+/** \brief Comparison function (i.e. "less-than") that compares objects by their edit_offset lower
+ * bound.
+ */
+struct OrderByEditOffsetLowerBound {
+  template <typename L, typename R>
+  bool operator()(const L& l, const R& r) const
+  {
+    return get_edit_offset_lower_bound(l) < get_edit_offset_lower_bound(r);
+  }
+};
+
+//+++++++++++-+-+--+----- --- -- -  -  -   -
+
+/** \brief Returns the passed offset.
+ */
 inline EditOffset get_edit_offset_upper_bound(EditOffset edit_offset)
 {
   return edit_offset;

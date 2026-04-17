@@ -100,8 +100,6 @@ class MemTableTest : public ::testing::Test
 
     EXPECT_CALL(this->block_buffer, ref_count())
         .WillRepeatedly(Return(this->block_buffer.fake_ref_count_));
-
-    this->min_edit_offset_lower_bound = this->mem_table->edit_offset_lower_bound();
   }
 
   /** \brief Destructs the MemTable object-under-test.
@@ -156,47 +154,38 @@ class MemTableTest : public ::testing::Test
 
     if (!expect_overflow) {
       EXPECT_CALL(this->storage_writer_context,
-                  append_slot(/*min_edit_offset_lower_bound*/ AnyOf(
-                                  Eq(this->min_edit_offset_lower_bound),
-                                  Ge(this->min_edit_offset_lower_bound +
-                                     EditOffsetDelta{MemTableWithMocks::kStorageBlockRebaseDelta})),
-                              /*byte_count*/ Ge(key.size() + value.size()),
+                  append_slot(/*byte_count*/ Ge(key.size() + value.size()),
                               /*callback=*/::testing::_))
-          .WillOnce(Invoke([this, dst_block_buffer](EditOffset min_edit_offset_lower_bound,
-                                                    usize byte_count,
-                                                    auto&& callback_fn) -> Status {
-            // Update the min block offset.
-            //
-            this->min_edit_offset_lower_bound = min_edit_offset_lower_bound;
+          .WillOnce(
+              Invoke([this, dst_block_buffer](usize byte_count, auto&& callback_fn) -> Status {
+                // Determine whether this is the first visit, and if so, set expectations that the
+                // MemTable will add/remove a ref count.
+                //
+                auto first_visit = FirstVisitToBlock{this->next_edit_offset == 0};
+                if (first_visit) {
+                  EXPECT_CALL(*dst_block_buffer, add_ref(1))  //
+                      .WillOnce(Return());
 
-            // Determine whether this is the first visit, and if so, set expectations that the
-            // MemTable will add/remove a ref count.
-            //
-            auto first_visit = FirstVisitToBlock{this->next_edit_offset == 0};
-            if (first_visit) {
-              EXPECT_CALL(*dst_block_buffer, add_ref(1))  //
-                  .WillOnce(Return());
+                  EXPECT_CALL(*dst_block_buffer, block_size())  //
+                      .WillRepeatedly(Return(0));
 
-              EXPECT_CALL(*dst_block_buffer, block_size())  //
-                  .WillRepeatedly(Return(0));
+                  EXPECT_CALL(*dst_block_buffer, remove_ref(1))  //
+                      .WillOnce(Return());
+                }
 
-              EXPECT_CALL(*dst_block_buffer, remove_ref(1))  //
-                  .WillOnce(Return());
-            }
+                // Invoke MemTable's callback.
+                //
+                callback_fn(first_visit,
+                            dst_block_buffer,
+                            this->stable_string_store.allocate(byte_count),
+                            EditOffset{this->next_edit_offset});
 
-            // Invoke MemTable's callback.
-            //
-            callback_fn(first_visit,
-                        dst_block_buffer,
-                        this->stable_string_store.allocate(byte_count),
-                        EditOffset{this->next_edit_offset});
+                // Update the fake EditOffset.
+                //
+                this->next_edit_offset += byte_count;
 
-            // Update the fake EditOffset.
-            //
-            this->next_edit_offset += byte_count;
-
-            return OkStatus();
-          }));
+                return OkStatus();
+              }));
     }
 
     Status status = this->mem_table->put(this->storage_writer_context, key, value);
@@ -308,10 +297,6 @@ class MemTableTest : public ::testing::Test
    */
   i64 next_edit_offset = 0;
 
-  /** \brief The expected constraint for storage block lower bounds.
-   */
-  EditOffset min_edit_offset_lower_bound{0};
-
   /** \brief Tracks the maximum item size (packed key + value)
    */
   usize max_item_size = 0;
@@ -406,10 +391,6 @@ TEST_F(MemTableTest, PutUntilFull)
     total_value_bytes += value.size();
     ++put_count;
   }
-
-  // Assert that the block offset was rebased at least once.
-  //
-  EXPECT_GT(this->min_edit_offset_lower_bound, this->mem_table->edit_offset_lower_bound());
 }
 
 }  // namespace

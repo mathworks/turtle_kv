@@ -200,7 +200,14 @@ class KVStore : public Table
     return this->checkpoint_distance_.load();
   }
 
-  Status force_checkpoint();
+  /** \brief Finalizes the current active MemTable (if non-empty) and returns an EditOffset
+   * corresponding to the upper bound of all edits up to that point.
+   */
+  StatusOr<EditOffset> force_checkpoint() noexcept;
+
+  /** \brief Waits for the current checkpoint to reach the given EditOffset upper bound.
+   */
+  Status wait_for_checkpoint(EditOffset target) noexcept;
 
   std::function<void(std::ostream&)> debug_info() const noexcept;
 
@@ -274,8 +281,9 @@ class KVStore : public Table
   void info_task_main() noexcept;
 
   template <typename Fn>
-  requires std::invocable<Fn, std::unique_ptr<DeltaBatch>> Status
-  scan_mem_table_to_build_batches(boost::intrusive_ptr<MemTable>&& mem_table, Fn&& consume_fn);
+    requires std::invocable<Fn, std::unique_ptr<DeltaBatch>>
+  Status scan_mem_table_to_build_batches(boost::intrusive_ptr<MemTable>&& mem_table,
+                                         Fn&& consume_fn);
 
   void mem_table_batch_scanner_thread_main();
 

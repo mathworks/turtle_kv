@@ -6,6 +6,7 @@
 #include <turtle_kv/import/buffer.hpp>
 #include <turtle_kv/import/int_types.hpp>
 #include <turtle_kv/import/interval.hpp>
+#include <turtle_kv/import/metrics.hpp>
 #include <turtle_kv/import/optional.hpp>
 #include <turtle_kv/import/status.hpp>
 
@@ -43,6 +44,17 @@ class ChangeLogBlock
    * called.
    */
   static constexpr u64 kExpired = 0xfdc038ae91507827ull;
+
+  struct Metrics {
+    FastCountMetric<i64> block_alloc_count{0};
+    FastCountMetric<i64> block_free_count{0};
+  };
+
+  static Metrics& metrics() noexcept
+  {
+    static Metrics m_;
+    return m_;
+  }
 
   /** \brief Internal structure used to delineate chunks of formatted slot data within the buffer.
    */

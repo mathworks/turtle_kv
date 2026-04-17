@@ -31,6 +31,7 @@
 #include <batteries/async/task.hpp>
 #include <batteries/async/watch.hpp>
 #include <batteries/checked_cast.hpp>
+#include <batteries/config.hpp>
 #include <batteries/cpu_align.hpp>
 #include <batteries/interval.hpp>
 #include <batteries/metrics/metric_collectors.hpp>
@@ -44,6 +45,10 @@
 #include <filesystem>
 #include <memory>
 #include <unordered_set>
+
+#if BATT_PLATFORM_IS_LINUX
+#include <limits.h>
+#endif
 
 namespace turtle_kv {
 
@@ -172,6 +177,16 @@ class ChangeLogFile
     return this->config_.block_count * this->config_.block_size;
   }
 
+  i64 max_block_count() const
+  {
+    return this->config_.block_count;
+  }
+
+  i64 block_size() const
+  {
+    return this->config_.block_size;
+  }
+
   i64 space() const
   {
     return this->capacity() - this->size();
@@ -226,7 +241,12 @@ class ChangeLogFile
 
   const i64 last_block_offset_ = this->config_.block_offset_end();
 
-  const usize max_batch_size_ = (16 * 1024 * 1024) / this->config_.block_size;
+  const usize max_batch_size_ =
+#if BATT_PLATFORM_IS_LINUX
+      IOV_MAX;
+#else
+      2 * kMiB / this->config_.block_size;
+#endif
 
   batt::Grant::Issuer free_block_tokens_{BATT_CHECKED_CAST(u64, this->config_.block_count.value())};
 

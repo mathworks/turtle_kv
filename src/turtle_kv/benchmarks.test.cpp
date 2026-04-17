@@ -1,0 +1,168 @@
+//=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
+//
+// Part of the TurtleKV Project, under Apache License v2.0.
+// See https://www.apache.org/licenses/LICENSE-2.0 for license information.
+// SPDX short identifier: Apache-2.0
+//
+//+++++++++++-+-+--+----- --- -- -  -  -   -
+
+#include <turtle_kv/kv_store.hpp>
+//
+
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
+#include <batteries/constants.hpp>
+#include <batteries/env.hpp>
+#include <batteries/int_types.hpp>
+
+#include <chrono>
+#include <filesystem>
+#include <fstream>
+
+namespace {
+
+using namespace batt::int_types;
+using namespace batt::constants;
+
+using batt::getenv_as;
+using batt::Status;
+using batt::StatusOr;
+
+using turtle_kv::EditOffset;
+using turtle_kv::KeyView;
+using turtle_kv::KVStore;
+using turtle_kv::ValueView;
+
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+//
+class BenchmarksTest : public ::testing::Test
+{
+ public:
+  void SetUp() override
+  {
+    this->load_data_file();
+    this->read_params();
+    this->create_kv_store();
+    this->open_kv_store();
+    this->insert_data();
+  }
+
+  void load_data_file()
+  {
+    LOG(INFO) << "loading data file...";
+    data_str = [&] {
+      std::ifstream ifs{data_file};
+      std::ostringstream oss;
+      oss << ifs.rdbuf();
+      return std::move(oss).str();
+    }();
+    EXPECT_EQ(data_str.size(), 1 * kGiB);
+    LOG(INFO) << "data file loaded;" << BATT_INSPECT(data_str.size());
+  }
+
+  void read_params()
+  {
+    n_keys = getenv_as<usize>("N").value_or(1 * 1000 * 1000);
+    key_len = getenv_as<usize>("KL").value_or(24);
+    value_len = getenv_as<usize>("VL").value_or(100);
+    step_size = std::max(key_len, value_len);
+
+    config.change_log_size_bytes =
+        getenv_as<usize>("WAL_MB").value_or(default_config.change_log_size_bytes / kMiB) * kMiB;
+
+    options.cache_size_bytes =
+        getenv_as<usize>("CACHE_MB").value_or(default_options.cache_size_bytes / kMiB) * kMiB;
+
+    options.initial_checkpoint_distance =
+        getenv_as<usize>("CHI").value_or(default_options.initial_checkpoint_distance);
+
+    LOG(INFO) << "wal=" << batt::dump_size(config.change_log_size_bytes)
+              << " cache=" << batt::dump_size(options.cache_size_bytes)
+              << " chi=" << options.initial_checkpoint_distance;
+  }
+
+  void create_kv_store()
+  {
+    Status status = KVStore::create(kv_store_dir, config, turtle_kv::RemoveExisting{true});
+    ASSERT_TRUE(status.ok()) << BATT_INSPECT(status);
+  }
+
+  void open_kv_store()
+  {
+    this->kv_store = BATT_OK_RESULT_OR_PANIC(
+        KVStore::open(this->kv_store_dir, this->config.tree_options, this->options));
+
+    this->kv_store->set_checkpoint_distance(64);
+  }
+
+  void insert_data()
+  {
+    LOG(INFO) << "Inserting" << BATT_INSPECT(n_keys);
+
+    max_inserted_pos = 0;
+    auto load_start_time = std::chrono::steady_clock::now();
+    usize data_pos = 0;
+    u64 bytes_inserted = 0;
+
+    LOG(INFO) << BATT_INSPECT(key_len) << BATT_INSPECT(value_len);
+
+    for (usize i = 0; i < n_keys; ++i) {
+      if (data_pos + step_size > data_str.size()) {
+        BATT_CHECK_NE(data_pos, 0);
+        data_pos = 0;
+      }
+      const char* p_data = &data_str[data_pos];
+      Status status = kv_store->put(KeyView{p_data, key_len},
+                                    ValueView::from_str(std::string_view{p_data, value_len}));
+
+      ASSERT_TRUE(status.ok()) << BATT_INSPECT(status);
+
+      max_inserted_pos = std::max(max_inserted_pos, data_pos);
+      bytes_inserted += (key_len + value_len);
+      ++data_pos;
+    }
+
+    auto load_finish_time = std::chrono::steady_clock::now();
+    double load_time_nanos =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(load_finish_time - load_start_time)
+            .count();
+
+    LOG(INFO) << "Insert finished in " << (load_time_nanos / 1e6) << " ms -- "
+              << ((double)n_keys) / load_time_nanos * 1e6 << " kops/sec"
+              << BATT_INSPECT(batt::dump_size(bytes_inserted));
+  }
+
+  void checkpoint()
+  {
+    LOG(INFO) << "Forcing checkpoint...";
+    EditOffset checkpoint_offset = BATT_OK_RESULT_OR_PANIC(kv_store->force_checkpoint());
+    BATT_CHECK_OK(kv_store->wait_for_checkpoint(checkpoint_offset));
+    LOG(INFO) << "Checkpoint committed at " << checkpoint_offset;
+  }
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  std::filesystem::path data_file = "/mnt/kv-bakeoff/random_bytes.bin";
+  std::filesystem::path kv_store_dir = "/mnt/kv-bakeoff/turtle_kv_benchmark";
+  std::string data_str;
+  const KVStore::Config default_config = KVStore::Config::with_default_values();
+  const KVStore::RuntimeOptions default_options = KVStore::RuntimeOptions::with_default_values();
+  KVStore::Config config = default_config;
+  KVStore::RuntimeOptions options = default_options;
+  usize n_keys = 0;
+  usize key_len = 0;
+  usize value_len = 0;
+  usize step_size = 0;
+  usize max_inserted_pos = 0;
+  std::unique_ptr<KVStore> kv_store;
+};
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+TEST_F(BenchmarksTest, ThreadScalingCacheBound)
+{
+  this->checkpoint();
+}
+
+}  // namespace

@@ -29,6 +29,8 @@ namespace turtle_kv {
                                                     batt::Grant&& grant,
                                                     usize n_bytes) noexcept
 {
+  Self::metrics().block_alloc_count.add(1);
+
   ChangeLogBlock::ScopedMemory memory = ChangeLogBlock::allocate_aligned(n_bytes);
 
   void* data = memory.release_ownership();
@@ -75,6 +77,8 @@ namespace turtle_kv {
   //
   block->set_ref_count(1);
 
+  Self::metrics().block_alloc_count.add(1);
+
   return boost::intrusive_ptr<ChangeLogBlock>{
       reinterpret_cast<ChangeLogBlock*>(memory.release_ownership()),
       false};
@@ -109,6 +113,8 @@ ChangeLogBlock::~ChangeLogBlock() noexcept
 {
   this->magic_ = ChangeLogBlock::kExpired;
   this->ephemeral_state_ptr().~EphemeralStatePtr();
+
+  Self::metrics().block_free_count.add(1);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

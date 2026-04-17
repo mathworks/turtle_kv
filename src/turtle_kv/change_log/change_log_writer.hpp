@@ -43,6 +43,16 @@ class ChangeLogWriter
    */
   static constexpr i64 kDefaultMaxDelayUsec = 2250;
 
+  /** \brief The log2 of the number of bytes (in EditOffset) between block cluster breaks.
+   */
+  static constexpr i32 kBlockClusterLimitBits = 24;  // 2^24 bytes == 16MB
+
+  /** \brief When the writer thread wakes, if it collects blocks which are *less* full than this
+   * percentage, it will go back to sleep after writing them; otherwise, it will poll immediately
+   * with no sleep.
+   */
+  static constexpr usize kMinBlockDensityTargetPct = 75;
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   using Self = ChangeLogWriter;
@@ -88,9 +98,10 @@ class ChangeLogWriter
     FastCountMetric<u64> received_user_byte_count{0};
     FastCountMetric<u64> written_block_byte_count{0};
     FastCountMetric<u64> written_user_byte_count{0};
+    FastCountMetric<u64> poll_count{0};
     FastCountMetric<u64> sleep_count{0};
     FastCountMetric<u64> write_count{0};
-    FastCountMetric<u64> block_alloc_count{0};
+    FastCountMetric<u64> block_rebase_count{0};
     DerivedMetric<double> block_utilization_rate{[this] {
       return (double)this->received_user_byte_count.load() /
              ((double)this->received_block_byte_count.load() + 1e-6);
@@ -152,9 +163,7 @@ class ChangeLogWriter
     template <typename SerializeFn>
       requires std::
           invocable<const SerializeFn&, FirstVisitToBlock, BlockBuffer*, MutableBuffer, EditOffset>
-        Status append_slot(EditOffset min_edit_offset_lower_bound,
-                           usize byte_size,
-                           const SerializeFn& fn) noexcept;
+        Status append_slot(usize byte_size, const SerializeFn& fn) noexcept;
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
    private:
@@ -279,6 +288,11 @@ class ChangeLogWriter
     }
   };
 
+  struct WriteOpStats {
+    u64 user_bytes_written = 0;
+    u64 total_bytes_written = 0;
+  };
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   /** \brief Removes the same count of references (`delta`) from each of the BlockBuffers in the
@@ -322,7 +336,8 @@ class ChangeLogWriter
 
   /** \brief Writes all passed BlockBuffers to the log.
    */
-  Status write_buffers(const batt::SmallVecBase<BlockBuffer*>& update_buffers) noexcept;
+  StatusOr<WriteOpStats> write_buffers(
+      const batt::SmallVecBase<BlockBuffer*>& update_buffers) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -359,13 +374,23 @@ class ChangeLogWriter
 template <typename SerializeFn>
   requires std::
       invocable<const SerializeFn&, FirstVisitToBlock, ChangeLogBlock*, MutableBuffer, EditOffset>
-    inline Status ChangeLogWriter::Context::append_slot(EditOffset min_edit_offset_lower_bound,
-                                                        usize byte_size,
+    inline Status ChangeLogWriter::Context::append_slot(usize byte_size,
                                                         const SerializeFn& serialize_fn) noexcept
 {
   Context& context = *this;
   ChangeLogWriter& writer = this->writer_;
   auto first_visit_to_block = FirstVisitToBlock{false};
+
+  static constexpr i64 kBlockClusterMask =
+      ~((i64{1} << ChangeLogWriter::kBlockClusterLimitBits) - 1);
+
+  // Assign the EditOffset of the new slot.
+  //
+  const EditOffset slot_edit_offset{writer.next_edit_offset_.fetch_add(byte_size)};
+
+  // Make sure there is a clean break between blocks every 2^kBlockClusterLimitBits.
+  //
+  const EditOffset min_edit_offset_lower_bound{slot_edit_offset.value() & kBlockClusterMask};
 
   // Grab a private buffer.
   //
@@ -378,6 +403,7 @@ template <typename SerializeFn>
     if (block_buffer && block_buffer->edit_offset_lower_bound() < min_edit_offset_lower_bound) {
       context.push_buffer(block_buffer, observed_head);
       block_buffer = nullptr;
+      writer.metrics_.block_rebase_count.add(1);
     }
 
     const bool no_buffer = (block_buffer == nullptr);
@@ -387,15 +413,11 @@ template <typename SerializeFn>
     //
     const bool no_retry = no_buffer;
 
-    // Assign the EditOffset of the new slot.
-    //
-    const EditOffset slot_edit_offset = EditOffset{writer.next_edit_offset_.fetch_add(byte_size)};
-
     // If no buffer, allocate one.
     //
     if (no_buffer) {
+      BATT_CHECK_GE(slot_edit_offset, min_edit_offset_lower_bound);
       BATT_ASSIGN_OK_RESULT(block_buffer, writer.allocate_buffer(slot_edit_offset));
-      writer.metrics_.block_alloc_count.add(1);
       first_visit_to_block = FirstVisitToBlock{true};
     }
     BATT_CHECK_NOT_NULLPTR(block_buffer);
