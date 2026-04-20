@@ -643,6 +643,62 @@ auto ChangeLogWriter::write_buffers(const batt::SmallVecBase<BlockBuffer*>& upda
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+Status ChangeLogWriter::collect_blocks(CollectedBlocksState& output) noexcept
+{
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+auto ChangeLogWriter::prepare_blocks(CollectedBlocksState& input,
+                                     PreparedBlocksState& output) noexcept
+    -> StatusOr<BlockBufferStats>
+{
+  BlockBufferStats stats;
+
+  if (input.blocks.empty()) {
+    return {stats};
+  }
+
+  // Sanity checks.
+  //
+  output.check_invariants(this->config());
+
+  auto on_scope_exit = batt::finally([&] {
+    output.check_invariants(this->config());
+  });
+
+  // Keep track of how much space there is at the current write offset (output.file_offset), so we
+  // don't run past the end of the last block.
+  //
+  i64 space_in_file = this->config().last_block_end_offset() - output.file_offset;
+
+  // Add as many blocks as we can.
+  //
+  while (!input.blocks.empty() && space_in_file >= this->config().block_size &&
+         output.block_chunks.size() < this->max_batch_size_) {
+    //----- --- -- -  -  -   -
+    BlockBuffer* const next_block = input.blocks.front();
+
+    BATT_CHECK_EQ(next_block->block_size(), (usize)this->config().block_size);
+
+    space_in_file -= this->config().block_size;
+
+    stats.user_bytes += next_block->slots_total_size();
+    stats.total_bytes += next_block->block_size();
+
+    output.blocks.push_back(next_block);
+    output.block_chunks.push_back(next_block->prepare_to_flush());
+    input.blocks.pop_front();
+  }
+
+  this->metrics_.received_user_byte_count.add(stats.user_bytes);
+  this->metrics_.received_block_byte_count.add(stats.total_bytes);
+
+  return {stats};
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 auto ChangeLogWriter::write_blocks(PreparedBlocksState& input, WrittenBlocksState& output) noexcept
     -> StatusOr<BlockBufferStats>
 {
