@@ -47,6 +47,11 @@ struct ChangeLogWriter::CollectedBlocksState {
   {
     release_blocks(&this->blocks);
   }
+
+  bool empty() const noexcept
+  {
+    return this->blocks.empty();
+  }
 };
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -70,6 +75,12 @@ struct ChangeLogWriter::PreparedBlocksState {
   ~PreparedBlocksState() noexcept
   {
     release_blocks(&this->blocks);
+  }
+
+  bool empty() const noexcept
+  {
+    BATT_CHECK_EQ(this->block_chunks.empty(), this->blocks.empty());
+    return this->block_chunks.empty();
   }
 
   void check_invariants(const ChangeLogFile::Config& config) const noexcept
@@ -103,6 +114,11 @@ struct ChangeLogWriter::WrittenBlocksState {
   ~WrittenBlocksState() noexcept
   {
     release_blocks(&this->blocks);
+  }
+
+  bool empty() const noexcept
+  {
+    return this->blocks.empty();
   }
 
   void check_invariants(const ChangeLogFile::Config& config) const noexcept
@@ -434,12 +450,106 @@ auto ChangeLogWriter::allocate_buffer(EditOffset offset) noexcept -> StatusOr<Bl
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-auto ChangeLogWriter::poll_updates() noexcept -> batt::SmallVec<BlockBuffer*, 8>
+void ChangeLogWriter::writer_task_main() noexcept
+{
+  VLOG(1) << "entered ChangeLogWriter::writer_task_main";
+
+  Status status = [this]() -> Status {
+    // Use an RNG to select delay (with jitter) for polling.
+    //
+    std::default_random_engine rng{std::random_device{}()};
+
+    BATT_CHECK_LE(this->options_.min_delay_usec, this->options_.max_delay_usec);
+
+    std::uniform_int_distribution<i64> pick_delay_usec{this->options_.min_delay_usec,
+                                                       this->options_.max_delay_usec};
+
+    // The number of consecutive times `poll_updates()` has been called without returning any data
+    // to write.
+    //
+    usize inactive_count = 0;
+
+    // Set after each write to force a longer polling delay when collected buffers don't contain
+    // enough data (see ChangeLogWriter::kMinBlockDensityTargetPct).
+    //
+    bool force_sleep = false;
+
+    CollectedBlocksState collected;
+    PreparedBlocksState prepared;
+    WrittenBlocksState written;
+
+    for (;;) {
+      // Collect BlockBuffers from writer contexts.
+      //
+      if (!force_sleep) {
+        BATT_REQUIRE_OK(this->collect_blocks(collected));
+      }
+
+      BATT_ASSIGN_OK_RESULT(BlockBufferStats prepare_stats,
+                            this->prepare_blocks(collected, prepared));
+
+      // If there are no updates, then sleep before polling again (unless halt requested).
+      //
+      if ((force_sleep || prepared.empty()) && this->halt_requested_.load() == false) {
+        force_sleep = false;
+        inactive_count += 1;
+        this->metrics_.sleep_count.add(1);
+
+        // If we get in here, then we have no indication that there is any data available for
+        // appending; in this case, enter our timed polling loop.
+        //
+        const i64 delay_usec = pick_delay_usec(rng);
+        batt::Task::sleep(std::chrono::microseconds(delay_usec));
+
+        // After allowing other tasks to run, we should immediately poll updates again to see if we
+        // have more data.
+        //
+        continue;
+      }
+
+      VLOG(2) << "writer_task awakes!" << BATT_INSPECT(inactive_count);
+      inactive_count = 0;
+
+      BATT_ASSIGN_OK_RESULT(BlockBufferStats write_stats, this->write_blocks(prepared, written));
+
+      const BlockBufferStats block_stats = prepare_stats + write_stats;
+
+      // Force a sleep if the collected buffers weren't full enough to hit the target density.
+      //
+      force_sleep = block_stats.is_under_target();
+
+      // "Activate" the written blocks by adding them to the active blocks state; this allows
+      // accurate trimming and reclamation of storage resources.
+      {
+        batt::ScopedLock<State> locked_state{this->state_};
+        BATT_REQUIRE_OK(this->activate_blocks(written, *locked_state->active_blocks_state_));
+      }
+
+      // If halt is requested and we don't appear to be making any progress, then return.
+      //
+      if (this->halt_requested_.load()     //
+          && block_stats.total_bytes == 0  //
+          && collected.empty()             //
+          && prepared.empty()) {
+        return OkStatus();
+      }
+
+      VLOG(2) << "done writing!  polling for more";
+    }
+  }();
+
+  if (VLOG_IS_ON(1) || (!status.ok() && !this->halt_requested_.load())) {
+    LOG(INFO) << "ChangeLogWriter::writer_task exiting with status=" << status;
+  }
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Status ChangeLogWriter::collect_blocks(CollectedBlocksState& output) noexcept
 {
   this->metrics_.poll_count.add(1);
 
-  batt::SmallVec<BlockBuffer*, 8> update_buffers;
-  batt::SmallVec<BlockBuffer*, 8> buffer_stacks;
+  batt::SmallVec<BlockBuffer*, kStaticQueueSize> buffer_stacks;
   {
     batt::ScopedLock<State> locked_state{this->state_};
 
@@ -470,181 +580,12 @@ auto ChangeLogWriter::poll_updates() noexcept -> batt::SmallVec<BlockBuffer*, 8>
     //
     for (BlockBuffer* current = head; current != nullptr;) {
       BlockBuffer* const next = current->swap_next(nullptr);
-      update_buffers.emplace_back(current);
+      output.blocks.push_back(current);
       current = next;
     }
   }
 
-  return update_buffers;
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-void ChangeLogWriter::writer_task_main() noexcept
-{
-  VLOG(1) << "entered ChangeLogWriter::writer_task_main";
-
-  Status status = [this]() -> Status {
-    // Use an RNG to select delay (with jitter) for polling.
-    //
-    std::default_random_engine rng{std::random_device{}()};
-
-    BATT_CHECK_LE(this->options_.min_delay_usec, this->options_.max_delay_usec);
-
-    std::uniform_int_distribution<i64> pick_delay_usec{this->options_.min_delay_usec,
-                                                       this->options_.max_delay_usec};
-
-    // The number of consecutive times `poll_updates()` has been called without returning any data
-    // to write.
-    //
-    usize inactive_count = 0;
-
-    // Set after each write to force a longer polling delay when collected buffers don't contain
-    // enough data (see ChangeLogWriter::kMinBlockDensityTargetPct).
-    //
-    bool force_sleep = false;
-
-    /*
-      Writer task main loop (new; not yet implemented):
-
-      Pipeline:
-
-      State -> action -> State -> action -> ...
-
-      Init:
-       - batch <- empty batch
-       - file_offset <- recovery upper bound
-
-      1. poll per-thread Contexts to gather any writable blocks
-      2. if we didn't get any (and there's no other queued data), sleep and goto 1
-      3. move as much data as we can from collected blocks to the "to-write" batch
-         - batch is limited by: a. end of file and b. max batch size (IOV_MAX)
-      4. write as much of the batch as possible (async_write_some) -> (could result in short write)
-      5. for all full written blocks, update the "edit_offset_upper_bound" table
-         - this will allow the trim position (i.e. the active lower bound) to advance
-      6. update file_offset + batch
-         - apply wrap-around if needed
-      7. loop back around to 1
-     */
-
-    for (;;) {
-      batt::SmallVec<BlockBuffer*, 8> update_buffers =
-          !force_sleep ? this->poll_updates() : batt::SmallVec<BlockBuffer*, 8>{};
-
-      // If there are no updates, then sleep before polling again.
-      //
-      if (update_buffers.empty()) {
-        inactive_count += 1;
-        this->metrics_.sleep_count.add(1);
-
-        // If we get in here, then we have no indication that there is any data available for
-        // appending; in this case, enter our timed polling loop.
-        //
-        const i64 delay_usec = pick_delay_usec(rng);
-        batt::Task::sleep(std::chrono::microseconds(delay_usec));
-
-        if (this->halt_requested_.load()) {
-          return batt::OkStatus();
-        }
-
-        // After allowing other tasks to run, we should immediately poll updates again to see if we
-        // have more data.
-        //
-        continue;
-      }
-
-      VLOG(2) << "writer_task awakes!" << BATT_INSPECT(inactive_count);
-      inactive_count = 0;
-
-      BATT_ASSIGN_OK_RESULT(WriteOpStats stats, this->write_buffers(update_buffers));
-
-      // Force a sleep if the collected buffers weren't full enough to hit the target density.
-      //
-      force_sleep = (stats.user_bytes_written * 100 <
-                     Self::kMinBlockDensityTargetPct * stats.total_bytes_written);
-
-      VLOG(2) << "done writing!  polling for more";
-    }
-  }();
-
-  // If we are exiting cleanly, poll one more time and flush any buffers we find.
-  //
-  if (status.ok()) {
-    status = this->write_buffers(this->poll_updates()).status();
-  }
-
-  if (VLOG_IS_ON(1) || (!status.ok() && !this->halt_requested_.load())) {
-    LOG(INFO) << "ChangeLogWriter::writer_task exiting with status=" << status;
-  }
-}
-
-#if 0  // TODO [tastolfi 2026-04-20] delete once refactor is done
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-auto ChangeLogWriter::write_buffers(const batt::SmallVecBase<BlockBuffer*>& update_buffers) noexcept
-    -> StatusOr<WriteOpStats>
-{
-  batt::Grant grant = BATT_OK_RESULT_OR_PANIC(
-      this->change_log_->reserve_blocks(BlockCount{0}, batt::WaitForResource::kFalse));
-
-  // Don't release any buffers until we have appended as much data as we can.
-  //
-  auto on_scope_exit = batt::finally([&] {
-    // After `direct_append` (below); now it is OK to free buffers.
-    //
-    ChangeLogWriter::remove_buffer_refs(update_buffers);
-  });
-
-  // Add all to the grant.
-  //
-  WriteOpStats stats;
-
-  batt::SmallVec<ConstBuffer, 32> to_append;
-  for (BlockBuffer* buffer : update_buffers) {
-    BATT_CHECK_NOT_NULLPTR(buffer);
-    BATT_REQUIRE_OK(buffer->verify());
-
-    stats.user_bytes_written += buffer->slots_total_size();
-    stats.total_bytes_written += buffer->block_size();
-
-    grant.subsume(buffer->consume_grant());
-    to_append.emplace_back(buffer->prepare_to_flush());
-  }
-
-  this->metrics_.received_block_byte_count.add(stats.total_bytes_written);
-  this->metrics_.received_user_byte_count.add(stats.user_bytes_written);
-
-  VLOG(2) << "have " << to_append.size() << " buffers to write;"
-          << BATT_INSPECT(stats.user_bytes_written) << BATT_INSPECT(stats.total_bytes_written)
-          << BATT_INSPECT((double)stats.user_bytes_written / (double)stats.total_bytes_written);
-
-  // If we have some data to append to the WAL Volume, do it now.
-  //
-  if (!to_append.empty()) {
-    BATT_CHECK_EQ(grant.size(), to_append.size());
-
-    StatusOr<ChangeLogFile::ReadLock> read_lock = this->change_log_->append(grant, to_append);
-    BATT_REQUIRE_OK(read_lock);
-
-    this->metrics_.write_count.add(1);
-    this->metrics_.written_block_byte_count.add(stats.total_bytes_written);
-    this->metrics_.written_user_byte_count.add(stats.user_bytes_written);
-
-    usize i = 0;
-    for (BlockBuffer* buffer : update_buffers) {
-      buffer->set_read_lock(read_lock->lock_subrange(i, 1));
-      ++i;
-    }
-  }
-
-  return {stats};
-}
-#endif
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-Status ChangeLogWriter::collect_blocks(CollectedBlocksState& output) noexcept
-{
+  return OkStatus();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -891,7 +832,7 @@ Status ChangeLogWriter::trim(EditOffset new_active_lower_bound)
     // the trim offset.
     //
     while (s.active_lower_bound_block < s.active_upper_bound_block) {
-      // Stop at the first block whose upper bound is after the trim offset.x
+      // Stop at the first block whose upper bound is after the trim offset.
       //
       if (EditOffset{s.block_upper_bounds[s.active_lower_bound_block]} > new_active_lower_bound) {
         break;

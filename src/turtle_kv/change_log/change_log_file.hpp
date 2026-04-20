@@ -49,10 +49,6 @@
 #include <memory>
 #include <unordered_set>
 
-#if BATT_PLATFORM_IS_LINUX
-#include <limits.h>
-#endif
-
 namespace turtle_kv {
 
 class ChangeLogFile
@@ -182,56 +178,10 @@ class ChangeLogFile
   template <typename SerializeFn = batt::Status(boost::intrusive_ptr<ChangeLogBlock>)>
   batt::Status read_blocks(SerializeFn process_block);
 
-  Status append(const Slice<BlockBuffer*>& src) noexcept;
-
-  /** \brief Returns the index of the next block to be written, in the file.
-   */
-  BlockIndex append_pos() noexcept;
-
-#if 0
-  Interval<i64> active_blocks() noexcept
-  {
-    return {this->lower_bound_.load(), this->upper_bound_.load()};
-  }
-
-  i64 active_block_count() const
-  {
-    return this->upper_bound_.load() - this->lower_bound_.load();
-  }
-
-  i64 size() const
-  {
-    return this->active_block_count() * this->config_.block_size;
-  }
-#endif
-
   FileByteCount capacity() const
   {
     return FileByteCount{this->config_.block_count * this->config_.block_size};
   }
-
-#if 0
-  FileByteCount space() const
-  {
-    return FileByteCount{this->capacity() - this->size()};
-  }
-
-  u64 available_block_tokens() const
-  {
-    return this->free_block_tokens_.available();
-  }
-
-  u64 in_use_block_tokens() const
-  {
-    return this->in_use_block_tokens_.size();
-  }
-
-  u64 reserved_block_tokens() const
-  {
-    return this->config_.block_count -
-           (this->available_block_tokens() + this->in_use_block_tokens());
-  }
-#endif
 
   const Metrics& metrics() const
   {
@@ -250,91 +200,6 @@ class ChangeLogFile
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
-  struct TrimState {
-    const i64 block_count_;
-
-    Optional<EditOffset> trim_offset_;
-    Optional<BlockIndex> next_block_to_trim_;
-    Optional<BlockIndex> next_block_to_append_;
-    std::unique_ptr<u64[]> block_valid_;
-    std::unique_ptr<i64[]> block_upper_bound_;
-
-    //+++++++++++-+-+--+----- --- -- -  -  -   -
-
-    explicit TrimState(const Config& config) noexcept
-        : block_count_{config.block_count}
-        , trim_offset_{None}
-        , next_block_to_trim_{None}
-        , next_block_to_append_{None}
-        , block_valid_{new u64[(this->block_count_ + 63) / 64]}
-        , block_upper_bound_{new i64[this->block_count_]}
-    {
-      std::memset(this->block_valid_.get(), 0, sizeof(u64) * (config.block_count + 63) / 64);
-    }
-
-    //+++++++++++-+-+--+----- --- -- -  -  -   -
-
-    bool is_block_valid(BlockIndex i) const noexcept
-    {
-      return get_bit(this->block_valid_[i / 64], i % 64);
-    }
-
-    void set_block_valid(BlockIndex i, bool valid) noexcept
-    {
-      u64& w = this->block_valid_[i / 64];
-      w = set_bit(w, i % 64, valid);
-    }
-
-    void set_block_upper_bound(BlockIndex i, EditOffset offset)
-    {
-      this->set_block_valid(i, true);
-      this->block_upper_bound_[i] = offset.value();
-    }
-
-    void set_block_upper_bound(BlockIndex i, Optional<EditOffset> offset)
-    {
-      this->set_block_valid(i, offset.has_value());
-      if (offset) {
-        this->block_upper_bound_[i] = offset->value();
-      }
-    }
-
-    Optional<EditOffset> get_block_upper_bound(BlockIndex i)
-    {
-      if (!this->is_block_valid(i)) {
-        return None;
-      }
-      return EditOffset{this->block_upper_bound_[i]};
-    }
-
-    [[nodiscard]] i64 notify_blocks_written(i64 n_blocks_written);
-
-    /** \brief Updates the trim offset, returning the number of blocks which are now overwritable
-     * (starting at the previous trim offset).
-     */
-    [[nodiscard]] i64 set_trim_offset(EditOffset new_trim_offset);
-  };
-
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-
-#if 0
-  template <typename Fn = void(i64 block_i, ReadLockCounter& counter)>
-  void for_block_range(const Interval<i64>& block_range, Fn&& fn) noexcept;
-
-  void lock_for_read(const Interval<i64>& block_range) noexcept;
-
-  void unlock_for_read(const Interval<i64>& block_range) noexcept;
-
-  void update_lower_bound() noexcept;
-
-  /** \brief Marks grant as in use by adding grant to this->in_use_block_tokens_.
-   * Returns a ReadLock on the range block_range.
-   */
-  ReadLock set_block_range_in_use(batt::Grant& grant, const Interval<i64>& block_range) noexcept;
-#endif
-
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-
   std::unique_ptr<llfs::ScopedIoRing> io_ring_;
 
   llfs::IoRing::File file_;
@@ -342,17 +207,6 @@ class ChangeLogFile
   Config config_;
 
   Metrics metrics_;
-
-#if 0
-  // TODO [tastolfi 2026-04-20] rename block_offset_upper_bound (or similar)
-  const FileOffset last_block_offset_ = this->config_.last_block_end_offset();
-#endif
-
-  // TODO [tastolfi 2026-04-20] move to ChangeLogWriter
-  u64 total_bytes_written_ = 0;
-
-  // TODO [tastolfi 2026-04-20] move to ChangeLogWriter
-  batt::RateMetric<u64, /*seconds=*/100> write_throughput_;
 };
 
 BATT_OBJECT_PRINT_IMPL((inline), ChangeLogFile::Config, (block_size, block_count, block0_offset))
@@ -467,37 +321,5 @@ batt::Status ChangeLogFile::read_blocks(SerializeFn process_block)
   }
   return batt::OkStatus();
 }
-
-// #=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
-
-#if 0
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-template <typename Fn>
-inline void ChangeLogFile::for_block_range(const Interval<i64>& block_range, Fn&& fn) noexcept
-{
-  BATT_CHECK_GE(block_range.lower_bound, 0);
-  BATT_CHECK_GE(block_range.upper_bound, 0);
-  BATT_CHECK_LE(block_range.lower_bound, block_range.upper_bound);
-
-  i64 block_i = block_range.lower_bound;
-  i64 first_addr = block_range.lower_bound % this->config_.block_count;
-  i64 count = block_range.size();
-  BATT_CHECK_GE(count, 0);
-
-  while (count != 0) {
-    BATT_CHECK_LT(first_addr, this->config_.block_count);
-
-    fn(block_i, this->read_lock_counter_per_block_[first_addr]);
-
-    --count;
-    ++block_i;
-    ++first_addr;
-    if (first_addr == this->config_.block_count) {
-      first_addr = 0;
-    }
-  }
-}
-#endif
 
 }  // namespace turtle_kv

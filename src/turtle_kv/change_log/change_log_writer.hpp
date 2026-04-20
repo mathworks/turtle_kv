@@ -338,6 +338,22 @@ class ChangeLogWriter
   struct BlockBufferStats {
     u64 user_bytes = 0;
     u64 total_bytes = 0;
+
+    //----- --- -- -  -  -   -
+
+    bool is_under_target() const noexcept
+    {
+      return this->user_bytes * 100 <
+             this->total_bytes * ChangeLogWriter::kMinBlockDensityTargetPct;
+    }
+
+    BlockBufferStats operator+(const BlockBufferStats& other) const noexcept
+    {
+      return BlockBufferStats{
+          .user_bytes = this->user_bytes + other.user_bytes,
+          .total_bytes = this->total_bytes + other.total_bytes,
+      };
+    }
   };
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
