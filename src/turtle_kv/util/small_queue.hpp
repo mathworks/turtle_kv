@@ -30,6 +30,12 @@ class SmallQueueBase
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  void clear()
+  {
+    this->vec_.clear();
+    this->front_i_ = 0;
+  }
+
   usize size() const
   {
     return this->vec_.size() - this->front_i_;

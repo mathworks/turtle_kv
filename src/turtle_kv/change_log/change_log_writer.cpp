@@ -17,6 +17,147 @@
 
 namespace turtle_kv {
 
+constexpr usize kStaticQueueSize = 16;
+
+namespace {
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void release_blocks(SmallQueueBase<ChangeLogBlock*>& blocks) noexcept
+{
+  for (ChangeLogBlock* p_block : blocks) {
+    p_block->remove_ref(1);
+  }
+  blocks.clear();
+}
+
+}  // namespace
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+struct ChangeLogWriter::CollectedBlocksState {
+  /** \brief Blocks that have been collected from appender threads; these are waiting to be placed
+   * in the change log file by transferring to PreparedBlocksState.
+   */
+  SmallQueue<BlockBuffer*, kStaticQueueSize> blocks;
+
+  //----- --- -- -  -  -   -
+
+  ~CollectedBlocksState() noexcept
+  {
+    release_blocks(this->blocks);
+  }
+};
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+struct ChangeLogWriter::PreparedBlocksState {
+  /** \brief The position in the file where the next write will take place.
+   */
+  FileOffset file_offset;
+
+  /** \brief The unwritten portions of the prepared blocks.  There is exactly one element in
+   * `block_chunks` for each element in `blocks` (below).
+   */
+  SmallQueue<ConstBuffer, kStaticQueueSize> block_chunks;
+
+  /** \brief The blocks currently prepared for write.
+   */
+  SmallQueue<BlockBuffer*, kStaticQueueSize> blocks;
+
+  //----- --- -- -  -  -   -
+
+  ~PreparedBlocksState() noexcept
+  {
+    release_blocks(this->blocks);
+  }
+};
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+struct ChangeLogWriter::WrittenBlocksState {
+  /** \brief The (block-size-unit) offset within the file of the first block in the queue.
+   */
+  Optional<BlockIndex> block_index;
+
+  /** \brief Blocks known to have been written, but not yet added to the active blocks state.
+   */
+  SmallQueue<BlockBuffer*, kStaticQueueSize> blocks;
+
+  //----- --- -- -  -  -   -
+
+  ~WrittenBlocksState() noexcept
+  {
+    release_blocks(this->blocks);
+  }
+};
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+struct ChangeLogWriter::ActiveBlocksState {
+  /** \brief Aka the "trim position" -- this is the position in the file, not the logical offset.
+   */
+  BlockIndex active_lower_bound_block;
+
+  /** \brief Aka the "flush position" -- this is the position in the file (not logical offset) one
+   * past the *last* known written and untrimmed block.
+   */
+  BlockIndex active_upper_bound_block;
+
+  /** \brief Aka the "trim offset" -- this is the logical value (not the position in the file).
+   */
+  EditOffset active_edit_offset_lower_bound;
+
+  /** \brief For each block index in the file, the known upper bound edit offset of slots in that
+   * block.
+   */
+  std::unique_ptr<i64[]> block_upper_bounds;
+
+  /** \brief When blocks are transferred from `WrittenBlocksState` to `ActiveBlocksState`, we move
+   * their grant form the BlockBuffer to this shared grant pool.
+   */
+  batt::Grant in_use_block_grant;
+
+  //----- --- -- -  -  -   -
+
+  explicit ActiveBlocksState(const ChangeLogFile::Config& config,
+                             batt::Grant::Issuer& block_grant_pool,
+                             const Interval<BlockIndex>& active_block_range,
+                             const Slice<EditOffset>& active_blocks_upper_bounds) noexcept
+      : active_lower_bound_block{active_block_range.lower_bound}
+      , active_upper_bound_block{active_block_range.upper_bound}
+      , active_edit_offset_lower_bound{0 /*TODO [tastolfi 2026-04-20] - pass this in*/}
+      , block_upper_bounds{new i64[config.block_count]}
+      , in_use_block_grant{
+            BATT_OK_RESULT_OR_PANIC(block_grant_pool.issue_grant(0, batt::WaitForResource::kFalse))}
+  {
+    const usize block_count = BATT_CHECKED_CAST(usize, config.block_count);
+
+    BATT_CHECK_LT(this->active_lower_bound_block, config.block_count);
+
+    BATT_CHECK_LE(this->active_lower_bound_block, this->active_upper_bound_block);
+
+    BATT_CHECK_EQ(
+        active_blocks_upper_bounds.size(),
+        BATT_CHECKED_CAST(usize, this->active_upper_bound_block - this->active_lower_bound_block));
+
+    BATT_CHECK_LE(active_blocks_upper_bounds.size(), block_count);
+
+    for (usize src_i = 0, dst_i = this->active_lower_bound_block;
+         src_i < active_blocks_upper_bounds;
+         ++src_i) {
+      this->block_upper_bounds[dst_i] = active_blocks_upper_bounds[src_i].value();
+      ++dst_i;
+      if (dst_i == block_count) {
+        dst_i = 0;
+      }
+    }
+
+    this->in_use_block_grant.subsume(BATT_OK_RESULT_OR_PANIC(
+        block_grant_pool.issue_grant(active_block_range.size(), batt::WaitForResource::kFalse)));
+  }
+};
+
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 // class ChangeLogWriter::Context
 
@@ -113,11 +254,22 @@ void ChangeLogWriter::Context::push_buffer(BlockBuffer*& buffer,
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-/*explicit*/ ChangeLogWriter::ChangeLogWriter(std::unique_ptr<ChangeLogFile>&& change_log,
-                                              const Options& options) noexcept
+/*explicit*/ ChangeLogWriter::ChangeLogWriter(
+    std::unique_ptr<ChangeLogFile>&& change_log,
+    const Options& options,
+    const Interval<BlockIndex>& active_block_range,
+    const Slice<EditOffset>& active_blocks_upper_bounds) noexcept
     : change_log_{std::move(change_log)}
     , options_{options}
 {
+  {
+    batt::ScopedLock<State> locked_state{this->state_};
+    locked_state->active_blocks_state_ =
+        std::make_unique<ActiveBlocksState>(this->config(),
+                                            this->free_block_tokens_,
+                                            active_block_range,
+                                            active_blocks_upper_bounds);
+  }
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -127,7 +279,11 @@ ChangeLogWriter::~ChangeLogWriter() noexcept
   this->halt();
   this->join();
 
-  ChangeLogWriter::remove_buffer_refs(this->poll_updates());
+  // Collect and release any remaining block buffers.
+  {
+    CollectedBlocksState collected;
+    this->collect_blocks(collected).IgnoreError();
+  }
 
   this->state_.with_lock([](State& state) {
     state.check_ready_to_shut_down();
@@ -213,9 +369,7 @@ auto ChangeLogWriter::allocate_buffer(EditOffset offset) noexcept -> StatusOr<Bl
       batt::Grant buffer_grant,
       this->change_log_->reserve_blocks(BlockCount{1}, batt::WaitForResource::kTrue));
 
-  return BlockBuffer::allocate(offset,
-                               std::move(buffer_grant),
-                               this->change_log_->config().block_size);
+  return BlockBuffer::allocate(offset, std::move(buffer_grant), this->config().block_size);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -263,77 +417,6 @@ auto ChangeLogWriter::poll_updates() noexcept -> batt::SmallVec<BlockBuffer*, 8>
 
   return update_buffers;
 }
-
-constexpr usize kStaticQueueSize = 16;
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-struct ChangeLogWriter::CollectedBlocksState {
-  /** \brief Blocks that have been collected from appender threads; these are waiting to be placed
-   * in the change log file by transferring to PreparedBlocksState.
-   */
-  SmallQueue<BlockBuffer*, kStaticQueueSize> blocks;
-};
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-struct ChangeLogWriter::PreparedBlocksState {
-  /** \brief The position in the file where the next write will take place.
-   */
-  FileOffset file_offset;
-
-  /** \brief The unwritten portions of the prepared blocks.  There is exactly one element in
-   * `block_chunks` for each element in `blocks` (below).
-   */
-  SmallQueue<ConstBuffer, kStaticQueueSize> block_chunks;
-
-  /** \brief The blocks currently prepared for write.
-   */
-  SmallQueue<BlockBuffer*, kStaticQueueSize> blocks;
-};
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-struct ChangeLogWriter::WrittenBlocksState {
-  /** \brief The (block-size-unit) offset within the file of the first block in the queue.
-   */
-  Optional<BlockIndex> block_index;
-
-  /** \brief Blocks known to have been written, but not yet added to the active blocks state.
-   */
-  SmallQueue<BlockBuffer*, kStaticQueueSize> blocks;
-};
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-struct ChangeLogWriter::ActiveBlocksState {
-  /** \brief Aka the "trim position" -- this is the position in the file, not the logical offset.
-   */
-  BlockIndex active_lower_bound_block;
-
-  /** \brief Aka the "flush position" -- this is the position in the file (not logical offset) one
-   * past the *last* known written and untrimmed block.
-   */
-  BlockIndex active_upper_bound_block;
-
-  /** \brief Aka the "trim offset" -- this is the logical value (not the position in the file).
-   */
-  EditOffset active_edit_offset_lower_bound;
-
-  /** \brief The size of `this->block_upper_bounds`.
-   */
-  BlockCount max_block_count;
-
-  /** \brief For each block index in the file, the known upper bound edit offset of slots in that
-   * block.
-   */
-  std::unique_ptr<EditOffset[]> block_upper_bounds;
-
-  /** \brief When blocks are transferred from `WrittenBlocksState` to `ActiveBlocksState`, we move
-   * their grant form the BlockBuffer to this shared grant pool.
-   */
-  batt::Grant in_use_block_grant;
-};
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
@@ -494,6 +577,63 @@ auto ChangeLogWriter::write_buffers(const batt::SmallVecBase<BlockBuffer*>& upda
   }
 
   return {stats};
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Status ChangeLogWriter::trim(EditOffset new_active_lower_bound)
+{
+  // Release any grant count after we exit the critical section below, to avoid double-locking.
+  //
+  Optional<batt::Grant> released_grant;
+
+  const BlockCount max_block_count{this->config().block_count};
+  {
+    batt::ScopedLock<State> locked_state{this->state_};
+    ActiveBlocksState& s = *locked_state->active_blocks_state_;
+
+    // Do nothing if the new trim offset isn't greater than the current one.
+    //
+    if (new_active_lower_bound <= s.active_edit_offset_lower_bound) {
+      return OkStatus();
+    }
+    s.active_edit_offset_lower_bound = new_active_lower_bound;
+
+    // Keep track of how many blocks are newly trimmed.
+    //
+    u64 n_trimmed = 0;
+
+    // Step through the active blocks until we reach the end or find one whose upper bound is above
+    // the trim offset.
+    //
+    while (s.active_lower_bound_block < s.active_upper_bound_block) {
+      // Stop at the first block whose upper bound is after the trim offset.x
+      //
+      if (EditOffset{s.block_upper_bounds[s.active_lower_bound_block]} > new_active_lower_bound) {
+        break;
+      }
+
+      ++n_trimmed;
+
+      // Advance the active lower bound, with wrap-around.  We maintain the invariants:
+      //
+      //  - s.active_lower_bound_block < s.max_block_count
+      //  - s.active_lower_bound_block <= s.active_upper_bound_block
+      //
+      s.active_lower_bound_block = BlockIndex{s.active_lower_bound_block + 1};
+      if (s.active_lower_bound_block == max_block_count) {
+        s.active_lower_bound_block = BlockIndex{0};
+        s.active_upper_bound_block = BlockIndex{s.active_upper_bound_block - max_block_count};
+      }
+    }
+
+    // Release any trimmed blocks.
+    //
+    if (n_trimmed != 0) {
+      released_grant.emplace(BATT_OK_RESULT_OR_PANIC(s.in_use_block_grant.spend(n_trimmed)));
+    }
+  }
+  return OkStatus();
 }
 
 }  // namespace turtle_kv

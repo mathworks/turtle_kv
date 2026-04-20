@@ -192,7 +192,6 @@ class ChangeLogFile
   {
     return FileByteCount{this->capacity() - this->size()};
   }
-#endif
 
   u64 available_block_tokens() const
   {
@@ -209,6 +208,7 @@ class ChangeLogFile
     return this->config_.block_count -
            (this->available_block_tokens() + this->in_use_block_tokens());
   }
+#endif
 
   const Metrics& metrics() const
   {
@@ -312,32 +312,6 @@ class ChangeLogFile
 
   // TODO [tastolfi 2026-04-20] rename block_offset_upper_bound (or similar)
   const FileOffset last_block_offset_ = this->config_.block_offset_end();
-
-  const usize max_batch_size_ =
-#if BATT_PLATFORM_IS_LINUX
-      IOV_MAX;
-#else
-      2 * kMiB / this->config_.block_size;
-#endif
-
-  batt::Grant::Issuer free_block_tokens_{BATT_CHECKED_CAST(u64, this->config_.block_count.value())};
-
-  batt::Grant in_use_block_tokens_{BATT_OK_RESULT_OR_PANIC(
-      this->free_block_tokens_.issue_grant(0, batt::WaitForResource::kFalse))};
-
-  batt::SmallVec<ConstBuffer, 32> next_batch_;
-
-#if 0
-  std::atomic<i64> lower_bound_{0};
-  std::atomic<i64> upper_bound_{0};
-
-  std::unique_ptr<ReadLockCounter[]> read_lock_counter_per_block_{
-      new ReadLockCounter[this->config_.block_count]};
-#endif
-
-  absl::Mutex trim_state_mutex_;
-
-  TrimState trim_state_{this->config_};
 
   u64 total_bytes_written_ = 0;
 

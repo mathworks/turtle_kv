@@ -215,9 +215,14 @@ class ChangeLogWriter
   /** \brief Constructs a new ChangeLogWriter.
    *
    * The ChangeLogWriter must be started by calling ChangeLogWriter::start().
+   *
+   * `active_block_range` and `active_blocks_upper_bounds` are derived from running recovery on the
+   * ChangeLogFile.
    */
   explicit ChangeLogWriter(std::unique_ptr<ChangeLogFile>&& change_log,
-                           const Options& options) noexcept;
+                           const Options& options,
+                           const Interval<BlockIndex>& active_block_range,
+                           const Slice<EditOffset>& active_blocks_upper_bounds) noexcept;
 
   /** \brief Destructs a ChangeLogWriter.  All ChangeLogWriter::Context objects must be
    * destructed before the ChangeLogWriter is allowed to go out of scope.
@@ -229,6 +234,13 @@ class ChangeLogWriter
   Metrics& metrics() noexcept
   {
     return this->metrics_;
+  }
+
+  /** \brief Returns the Config of the ChangeLogFile.
+   */
+  const ChangeLogFile::Config& config() const noexcept
+  {
+    return this->change_log_->config();
   }
 
   /** \brief Returns the options passed in at construction time.
@@ -274,9 +286,37 @@ class ChangeLogWriter
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+  // Writer Task pipeline stage states.
+  //
+  // "Active blocks" have been written and are not yet trimmed.  They contain the data that we must
+  // *not* overwrite.
+
+  // collect_blocks() -> CollectedBlocksState -> prepare_blocks()
+  //
+  struct CollectedBlocksState;
+
+  // prepare_blocks() -> PreparedBlocksState -> write_blocks()
+  //
+  struct PreparedBlocksState;
+
+  // write_blocks() -> WrittenBlocksState -> activate_blocks()
+  //
+  struct WrittenBlocksState;
+
+  // activate_blocks() ->  ActiveBlocksState -> trim()
+
+  struct ActiveBlocksState;
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
   struct State {
     std::vector<Context*> contexts_;
     std::vector<BlockBuffer*> ready_to_write_;
+
+    /** \brief Both the background writer task and the public `trim` function need access to this.
+     */
+    std::unique_ptr<ActiveBlocksState> active_blocks_state_;
 
     //----- --- -- -  -  -   -
 
@@ -299,28 +339,6 @@ class ChangeLogWriter
     u64 user_bytes_written = 0;
     u64 total_bytes_written = 0;
   };
-
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-  // Writer Task pipeline stage states.
-  //
-  // "Active blocks" have been written and are not yet trimmed.  They contain the data that we must
-  // *not* overwrite.
-
-  // collect_blocks() -> CollectedBlocksState -> prepare_blocks()
-  //
-  struct CollectedBlocksState;
-
-  // prepare_blocks() -> PreparedBlocksState -> write_blocks()
-  //
-  struct PreparedBlocksState;
-
-  // write_blocks() -> WrittenBlocksState -> activate_blocks()
-  //
-  struct WrittenBlocksState;
-
-  // activate_blocks() ->  ActiveBlocksState -> trim()
-
-  struct ActiveBlocksState;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -372,7 +390,8 @@ class ChangeLogWriter
    * number of bytes actually written by `IoRing::File::async_write_some`), transfers blocks that
    * have been *entirely* written to `output`.
    */
-  Status write_blocks(PreparedBlocksState& input, WrittenBlocksState& output) noexcept;
+  StatusOr<WriteOpStats> write_blocks(PreparedBlocksState& input,
+                                      WrittenBlocksState& output) noexcept;
 
   /** \brief Takes blocks known to have been written and updates the active blocks state
    * accordingly. This means advancing `ActiveBlocksState::active_upper_bound_index`, copying each
@@ -383,8 +402,6 @@ class ChangeLogWriter
    * their ref count via `remove_ref`.
    */
   Status activate_blocks(WrittenBlocksState& input, ActiveBlocksState& output) noexcept;
-
-  // trim
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -403,6 +420,16 @@ class ChangeLogWriter
    */
   std::unique_ptr<ChangeLogFile> change_log_;
 
+  batt::Grant::Issuer free_block_tokens_{
+      BATT_CHECKED_CAST(u64, this->change_log_->config().block_count.value())};
+
+  const usize max_batch_size_ =
+#if BATT_PLATFORM_IS_LINUX
+      IOV_MAX;
+#else
+      2 * kMiB / this->config().block_size;
+#endif
+
   /** \brief The configuration options passed in at construction time.
    */
   Options options_;
@@ -410,10 +437,6 @@ class ChangeLogWriter
   /** \brief Set to true once-and-only-once when halt() is called the first time.
    */
   std::atomic<bool> halt_requested_{false};
-
-  /** \brief Both the background writer task and the public `trim` function need access to this.
-   */
-  std::unique_ptr<ActiveBlocksState> active_blocks_state_;
 
   /** \brief The background writer task.
    */
