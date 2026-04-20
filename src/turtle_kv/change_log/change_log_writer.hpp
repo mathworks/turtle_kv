@@ -14,6 +14,8 @@
 #include <turtle_kv/change_log/change_log_file.hpp>
 #include <turtle_kv/change_log/edit_offset.hpp>
 
+#include <turtle_kv/util/small_queue.hpp>
+
 #include <turtle_kv/import/constants.hpp>
 #include <turtle_kv/import/int_types.hpp>
 #include <turtle_kv/import/interval.hpp>
@@ -42,6 +44,16 @@ class ChangeLogWriter
   /** \brief The default maximum delay (in microseconds) for the background task.
    */
   static constexpr i64 kDefaultMaxDelayUsec = 2250;
+
+  /** \brief The log2 of the number of bytes (in EditOffset) between block cluster breaks.
+   */
+  static constexpr i32 kBlockClusterLimitBits = 24;  // 2^24 bytes == 16MB
+
+  /** \brief When the writer thread wakes, if it collects blocks which are *less* full than this
+   * percentage, it will go back to sleep after writing them; otherwise, it will poll immediately
+   * with no sleep.
+   */
+  static constexpr usize kMinBlockDensityTargetPct = 75;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -88,9 +100,10 @@ class ChangeLogWriter
     FastCountMetric<u64> received_user_byte_count{0};
     FastCountMetric<u64> written_block_byte_count{0};
     FastCountMetric<u64> written_user_byte_count{0};
+    FastCountMetric<u64> poll_count{0};
     FastCountMetric<u64> sleep_count{0};
     FastCountMetric<u64> write_count{0};
-    FastCountMetric<u64> block_alloc_count{0};
+    FastCountMetric<u64> block_rebase_count{0};
     DerivedMetric<double> block_utilization_rate{[this] {
       return (double)this->received_user_byte_count.load() /
              ((double)this->received_block_byte_count.load() + 1e-6);
@@ -152,9 +165,7 @@ class ChangeLogWriter
     template <typename SerializeFn>
       requires std::
           invocable<const SerializeFn&, FirstVisitToBlock, BlockBuffer*, MutableBuffer, EditOffset>
-        Status append_slot(EditOffset min_edit_offset_lower_bound,
-                           usize byte_size,
-                           const SerializeFn& fn) noexcept;
+        Status append_slot(usize byte_size, const SerializeFn& fn) noexcept;
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
    private:
@@ -256,6 +267,11 @@ class ChangeLogWriter
     return EditOffset{this->next_edit_offset_.load()};
   }
 
+  /** \brief Advances the trim position (file/block offset), possibly moving Grant count from in-use
+   * to available (which will unblock appenders).
+   */
+  Status trim(EditOffset new_active_lower_bound);
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
   struct State {
@@ -278,6 +294,33 @@ class ChangeLogWriter
       this->check_ready_to_shut_down();
     }
   };
+
+  struct WriteOpStats {
+    u64 user_bytes_written = 0;
+    u64 total_bytes_written = 0;
+  };
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+  // Writer Task pipeline stage states.
+  //
+  // "Active blocks" have been written and are not yet trimmed.  They contain the data that we must
+  // *not* overwrite.
+
+  // collect_blocks() -> CollectedBlocksState -> prepare_blocks()
+  //
+  struct CollectedBlocksState;
+
+  // prepare_blocks() -> PreparedBlocksState -> write_blocks()
+  //
+  struct PreparedBlocksState;
+
+  // write_blocks() -> WrittenBlocksState -> activate_blocks()
+  //
+  struct WrittenBlocksState;
+
+  // activate_blocks() ->  ActiveBlocksState -> trim()
+
+  struct ActiveBlocksState;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -318,11 +361,30 @@ class ChangeLogWriter
   /** \brief Does a non-blocking check of all associated Contexts for any BlockBuffers that
    * might contain committed slot data.
    */
-  batt::SmallVec<BlockBuffer*, 8> poll_updates() noexcept;
+  Status collect_blocks(CollectedBlocksState& output) noexcept;
 
-  /** \brief Writes all passed BlockBuffers to the log.
+  /** \brief Sets new edit offset upper bounds for the passed blocks, transferring as many as
+   * possible to this->write_buffer_.
    */
-  Status write_buffers(const batt::SmallVecBase<BlockBuffer*>& update_buffers) noexcept;
+  Status prepare_blocks(CollectedBlocksState& input, PreparedBlocksState& output) noexcept;
+
+  /** \brief Writes a contiguous series of BlockBuffer data chunks to the file, then (based on the
+   * number of bytes actually written by `IoRing::File::async_write_some`), transfers blocks that
+   * have been *entirely* written to `output`.
+   */
+  Status write_blocks(PreparedBlocksState& input, WrittenBlocksState& output) noexcept;
+
+  /** \brief Takes blocks known to have been written and updates the active blocks state
+   * accordingly. This means advancing `ActiveBlocksState::active_upper_bound_index`, copying each
+   * block's edit_offset_upper_bound() to `ActiveBlocksState::block_upper_bounds`, and transferring
+   * ownership of each block's Grant to `in_use_block_grant`.
+   *
+   * ChangeLogBlock (BlockBuffer) objects removed from `input.blocks` are released by decrementing
+   * their ref count via `remove_ref`.
+   */
+  Status activate_blocks(WrittenBlocksState& input, ActiveBlocksState& output) noexcept;
+
+  // trim
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -349,6 +411,10 @@ class ChangeLogWriter
    */
   std::atomic<bool> halt_requested_{false};
 
+  /** \brief Both the background writer task and the public `trim` function need access to this.
+   */
+  std::unique_ptr<ActiveBlocksState> active_blocks_state_;
+
   /** \brief The background writer task.
    */
   Optional<batt::Task> task_;
@@ -359,13 +425,23 @@ class ChangeLogWriter
 template <typename SerializeFn>
   requires std::
       invocable<const SerializeFn&, FirstVisitToBlock, ChangeLogBlock*, MutableBuffer, EditOffset>
-    inline Status ChangeLogWriter::Context::append_slot(EditOffset min_edit_offset_lower_bound,
-                                                        usize byte_size,
+    inline Status ChangeLogWriter::Context::append_slot(usize byte_size,
                                                         const SerializeFn& serialize_fn) noexcept
 {
   Context& context = *this;
   ChangeLogWriter& writer = this->writer_;
   auto first_visit_to_block = FirstVisitToBlock{false};
+
+  static constexpr i64 kBlockClusterMask =
+      ~((i64{1} << ChangeLogWriter::kBlockClusterLimitBits) - 1);
+
+  // Assign the EditOffset of the new slot.
+  //
+  const EditOffset slot_edit_offset{writer.next_edit_offset_.fetch_add(byte_size)};
+
+  // Make sure there is a clean break between blocks every 2^kBlockClusterLimitBits.
+  //
+  const EditOffset min_edit_offset_lower_bound{slot_edit_offset.value() & kBlockClusterMask};
 
   // Grab a private buffer.
   //
@@ -378,6 +454,7 @@ template <typename SerializeFn>
     if (block_buffer && block_buffer->edit_offset_lower_bound() < min_edit_offset_lower_bound) {
       context.push_buffer(block_buffer, observed_head);
       block_buffer = nullptr;
+      writer.metrics_.block_rebase_count.add(1);
     }
 
     const bool no_buffer = (block_buffer == nullptr);
@@ -387,18 +464,16 @@ template <typename SerializeFn>
     //
     const bool no_retry = no_buffer;
 
-    // Assign the EditOffset of the new slot.
-    //
-    const EditOffset slot_edit_offset = EditOffset{writer.next_edit_offset_.fetch_add(byte_size)};
-
     // If no buffer, allocate one.
     //
     if (no_buffer) {
+      BATT_CHECK_GE(slot_edit_offset, min_edit_offset_lower_bound);
       BATT_ASSIGN_OK_RESULT(block_buffer, writer.allocate_buffer(slot_edit_offset));
-      writer.metrics_.block_alloc_count.add(1);
       first_visit_to_block = FirstVisitToBlock{true};
     }
     BATT_CHECK_NOT_NULLPTR(block_buffer);
+    BATT_CHECK_GE(block_buffer->edit_offset_lower_bound(), min_edit_offset_lower_bound);
+    BATT_CHECK_LE(block_buffer->edit_offset_lower_bound(), slot_edit_offset);
 
     // Serialize the payload.
     //

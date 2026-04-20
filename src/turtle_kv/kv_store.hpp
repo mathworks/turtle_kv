@@ -143,7 +143,7 @@ class KVStore : public Table
       const TreeOptions& tree_options,
       Optional<RuntimeOptions> runtime_options = None) noexcept;
 
-  batt::Status run_recovery(const std::filesystem::path& path, EditOffset checkpoint_upper_bound);
+  batt::Status run_recovery(const std::filesystem::path& path);
 
   // TODO [tastolfi 2026-04-02] Should probably be private.
   //
@@ -200,7 +200,14 @@ class KVStore : public Table
     return this->checkpoint_distance_.load();
   }
 
-  Status force_checkpoint();
+  /** \brief Finalizes the current active MemTable (if non-empty) and returns an EditOffset
+   * corresponding to the upper bound of all edits up to that point.
+   */
+  StatusOr<EditOffset> force_checkpoint() noexcept;
+
+  /** \brief Waits for the current checkpoint to reach the given EditOffset upper bound.
+   */
+  Status wait_for_checkpoint(EditOffset target) noexcept;
 
   std::function<void(std::ostream&)> debug_info() const noexcept;
 

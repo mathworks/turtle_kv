@@ -29,6 +29,8 @@ namespace turtle_kv {
                                                     batt::Grant&& grant,
                                                     usize n_bytes) noexcept
 {
+  Self::metrics().block_alloc_count.add(1);
+
   ChangeLogBlock::ScopedMemory memory = ChangeLogBlock::allocate_aligned(n_bytes);
 
   void* data = memory.release_ownership();
@@ -42,8 +44,7 @@ namespace turtle_kv {
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 /*static*/ StatusOr<boost::intrusive_ptr<ChangeLogBlock>> ChangeLogBlock::recover(
-    ChangeLogBlock::ScopedMemory memory,
-    batt::Grant&& grant)
+    ChangeLogBlock::ScopedMemory memory)
 {
   ChangeLogBlock* block = reinterpret_cast<ChangeLogBlock*>(memory.data());
 
@@ -69,11 +70,13 @@ namespace turtle_kv {
     return {batt::StatusCode::kDataLoss};
   }
 
-  block->init_ephemeral_state(std::move(grant));
+  block->init_ephemeral_state(RecoveryChecksPassed{});
 
   // ref_count is 2 after reading from the change log. We want to initialize it to 1.
   //
   block->set_ref_count(1);
+
+  Self::metrics().block_alloc_count.add(1);
 
   return boost::intrusive_ptr<ChangeLogBlock>{
       reinterpret_cast<ChangeLogBlock*>(memory.release_ownership()),
@@ -109,6 +112,8 @@ ChangeLogBlock::~ChangeLogBlock() noexcept
 {
   this->magic_ = ChangeLogBlock::kExpired;
   this->ephemeral_state_ptr().~EphemeralStatePtr();
+
+  Self::metrics().block_free_count.add(1);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

@@ -1,3 +1,4 @@
+#if 0  // TODO [tastolfi 2026-04-16]  delete this file!
 #include <turtle_kv/change_log/change_log_read_lock.hpp>
 //
 
@@ -89,3 +90,4 @@ ChangeLogReadLock ChangeLogReadLock::clone() const noexcept
 }
 
 }  // namespace turtle_kv
+#endif

@@ -1,5 +1,15 @@
+//=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
+//
+// Part of the TurtleKV Project, under Apache License v2.0.
+// See https://www.apache.org/licenses/LICENSE-2.0 for license information.
+// SPDX short identifier: Apache-2.0
+//
+//+++++++++++-+-+--+----- --- -- -  -  -   -
+
 #include <turtle_kv/change_log/change_log_writer.hpp>
 //
+
+#include <turtle_kv/util/small_queue.hpp>
 
 #include <chrono>
 #include <cstdlib>
@@ -130,9 +140,12 @@ void ChangeLogWriter::start(batt::Task::executor_type&& executor) noexcept
 {
   BATT_CHECK(!this->task_);
 
-  this->task_.emplace(std::move(executor), [this] {
-    this->writer_task_main();
-  });
+  this->task_.emplace(
+      std::move(executor),
+      [this] {
+        this->writer_task_main();
+      },
+      "ChangeLogWriter::writer_task_main");
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -209,6 +222,8 @@ auto ChangeLogWriter::allocate_buffer(EditOffset offset) noexcept -> StatusOr<Bl
 //
 auto ChangeLogWriter::poll_updates() noexcept -> batt::SmallVec<BlockBuffer*, 8>
 {
+  this->metrics_.poll_count.add(1);
+
   batt::SmallVec<BlockBuffer*, 8> update_buffers;
   batt::SmallVec<BlockBuffer*, 8> buffer_stacks;
   {
@@ -249,10 +264,83 @@ auto ChangeLogWriter::poll_updates() noexcept -> batt::SmallVec<BlockBuffer*, 8>
   return update_buffers;
 }
 
+constexpr usize kStaticQueueSize = 16;
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+struct ChangeLogWriter::CollectedBlocksState {
+  /** \brief Blocks that have been collected from appender threads; these are waiting to be placed
+   * in the change log file by transferring to PreparedBlocksState.
+   */
+  SmallQueue<BlockBuffer*, kStaticQueueSize> blocks;
+};
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+struct ChangeLogWriter::PreparedBlocksState {
+  /** \brief The position in the file where the next write will take place.
+   */
+  FileOffset file_offset;
+
+  /** \brief The unwritten portions of the prepared blocks.  There is exactly one element in
+   * `block_chunks` for each element in `blocks` (below).
+   */
+  SmallQueue<ConstBuffer, kStaticQueueSize> block_chunks;
+
+  /** \brief The blocks currently prepared for write.
+   */
+  SmallQueue<BlockBuffer*, kStaticQueueSize> blocks;
+};
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+struct ChangeLogWriter::WrittenBlocksState {
+  /** \brief The (block-size-unit) offset within the file of the first block in the queue.
+   */
+  Optional<BlockIndex> block_index;
+
+  /** \brief Blocks known to have been written, but not yet added to the active blocks state.
+   */
+  SmallQueue<BlockBuffer*, kStaticQueueSize> blocks;
+};
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+struct ChangeLogWriter::ActiveBlocksState {
+  /** \brief Aka the "trim position" -- this is the position in the file, not the logical offset.
+   */
+  BlockIndex active_lower_bound_block;
+
+  /** \brief Aka the "flush position" -- this is the position in the file (not logical offset) one
+   * past the *last* known written and untrimmed block.
+   */
+  BlockIndex active_upper_bound_block;
+
+  /** \brief Aka the "trim offset" -- this is the logical value (not the position in the file).
+   */
+  EditOffset active_edit_offset_lower_bound;
+
+  /** \brief The size of `this->block_upper_bounds`.
+   */
+  BlockCount max_block_count;
+
+  /** \brief For each block index in the file, the known upper bound edit offset of slots in that
+   * block.
+   */
+  std::unique_ptr<EditOffset[]> block_upper_bounds;
+
+  /** \brief When blocks are transferred from `WrittenBlocksState` to `ActiveBlocksState`, we move
+   * their grant form the BlockBuffer to this shared grant pool.
+   */
+  batt::Grant in_use_block_grant;
+};
+
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 void ChangeLogWriter::writer_task_main() noexcept
 {
+  VLOG(1) << "entered ChangeLogWriter::writer_task_main";
+
   Status status = [this]() -> Status {
     // Use an RNG to select delay (with jitter) for polling.
     //
@@ -268,8 +356,37 @@ void ChangeLogWriter::writer_task_main() noexcept
     //
     usize inactive_count = 0;
 
+    // Set after each write to force a longer polling delay when collected buffers don't contain
+    // enough data (see ChangeLogWriter::kMinBlockDensityTargetPct).
+    //
+    bool force_sleep = false;
+
+    /*
+      Writer task main loop (new; not yet implemented):
+
+      Pipeline:
+
+      State -> action -> State -> action -> ...
+
+      Init:
+       - batch <- empty batch
+       - file_offset <- recovery upper bound
+
+      1. poll per-thread Contexts to gather any writable blocks
+      2. if we didn't get any (and there's no other queued data), sleep and goto 1
+      3. move as much data as we can from collected blocks to the "to-write" batch
+         - batch is limited by: a. end of file and b. max batch size (IOV_MAX)
+      4. write as much of the batch as possible (async_write_some) -> (could result in short write)
+      5. for all full written blocks, update the "edit_offset_upper_bound" table
+         - this will allow the trim position (i.e. the active lower bound) to advance
+      6. update file_offset + batch
+         - apply wrap-around if needed
+      7. loop back around to 1
+     */
+
     for (;;) {
-      batt::SmallVec<BlockBuffer*, 8> update_buffers = this->poll_updates();
+      batt::SmallVec<BlockBuffer*, 8> update_buffers =
+          !force_sleep ? this->poll_updates() : batt::SmallVec<BlockBuffer*, 8>{};
 
       // If there are no updates, then sleep before polling again.
       //
@@ -296,7 +413,12 @@ void ChangeLogWriter::writer_task_main() noexcept
       VLOG(2) << "writer_task awakes!" << BATT_INSPECT(inactive_count);
       inactive_count = 0;
 
-      BATT_REQUIRE_OK(this->write_buffers(update_buffers));
+      BATT_ASSIGN_OK_RESULT(WriteOpStats stats, this->write_buffers(update_buffers));
+
+      // Force a sleep if the collected buffers weren't full enough to hit the target density.
+      //
+      force_sleep = (stats.user_bytes_written * 100 <
+                     Self::kMinBlockDensityTargetPct * stats.total_bytes_written);
 
       VLOG(2) << "done writing!  polling for more";
     }
@@ -305,16 +427,18 @@ void ChangeLogWriter::writer_task_main() noexcept
   // If we are exiting cleanly, poll one more time and flush any buffers we find.
   //
   if (status.ok()) {
-    status = this->write_buffers(this->poll_updates());
+    status = this->write_buffers(this->poll_updates()).status();
   }
 
-  VLOG(1) << "ChangeLogWriter::writer_task exiting with status=" << status;
+  if (VLOG_IS_ON(1) || (!status.ok() && !this->halt_requested_.load())) {
+    LOG(INFO) << "ChangeLogWriter::writer_task exiting with status=" << status;
+  }
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status ChangeLogWriter::write_buffers(
-    const batt::SmallVecBase<BlockBuffer*>& update_buffers) noexcept
+auto ChangeLogWriter::write_buffers(const batt::SmallVecBase<BlockBuffer*>& update_buffers) noexcept
+    -> StatusOr<WriteOpStats>
 {
   batt::Grant grant = BATT_OK_RESULT_OR_PANIC(
       this->change_log_->reserve_blocks(BlockCount{0}, batt::WaitForResource::kFalse));
@@ -329,27 +453,26 @@ Status ChangeLogWriter::write_buffers(
 
   // Add all to the grant.
   //
-  u64 total_bytes = 0;
-  u64 total_buffer_size = 0;
+  WriteOpStats stats;
 
   batt::SmallVec<ConstBuffer, 32> to_append;
   for (BlockBuffer* buffer : update_buffers) {
     BATT_CHECK_NOT_NULLPTR(buffer);
     BATT_REQUIRE_OK(buffer->verify());
 
-    total_bytes += buffer->slots_total_size();
-    total_buffer_size += buffer->block_size();
+    stats.user_bytes_written += buffer->slots_total_size();
+    stats.total_bytes_written += buffer->block_size();
 
     grant.subsume(buffer->consume_grant());
     to_append.emplace_back(buffer->prepare_to_flush());
   }
 
-  this->metrics_.received_block_byte_count.add(total_buffer_size);
-  this->metrics_.received_user_byte_count.add(total_bytes);
+  this->metrics_.received_block_byte_count.add(stats.total_bytes_written);
+  this->metrics_.received_user_byte_count.add(stats.user_bytes_written);
 
-  VLOG(2) << "have " << to_append.size() << " buffers to write;" << BATT_INSPECT(total_bytes)
-          << BATT_INSPECT(total_buffer_size)
-          << BATT_INSPECT((double)total_bytes / (double)total_buffer_size);
+  VLOG(2) << "have " << to_append.size() << " buffers to write;"
+          << BATT_INSPECT(stats.user_bytes_written) << BATT_INSPECT(stats.total_bytes_written)
+          << BATT_INSPECT((double)stats.user_bytes_written / (double)stats.total_bytes_written);
 
   // If we have some data to append to the WAL Volume, do it now.
   //
@@ -360,8 +483,8 @@ Status ChangeLogWriter::write_buffers(
     BATT_REQUIRE_OK(read_lock);
 
     this->metrics_.write_count.add(1);
-    this->metrics_.written_block_byte_count.add(total_buffer_size);
-    this->metrics_.written_user_byte_count.add(total_bytes);
+    this->metrics_.written_block_byte_count.add(stats.total_bytes_written);
+    this->metrics_.written_user_byte_count.add(stats.user_bytes_written);
 
     usize i = 0;
     for (BlockBuffer* buffer : update_buffers) {
@@ -370,7 +493,7 @@ Status ChangeLogWriter::write_buffers(
     }
   }
 
-  return OkStatus();
+  return {stats};
 }
 
 }  // namespace turtle_kv

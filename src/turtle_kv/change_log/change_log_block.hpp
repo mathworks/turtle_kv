@@ -6,6 +6,7 @@
 #include <turtle_kv/import/buffer.hpp>
 #include <turtle_kv/import/int_types.hpp>
 #include <turtle_kv/import/interval.hpp>
+#include <turtle_kv/import/metrics.hpp>
 #include <turtle_kv/import/optional.hpp>
 #include <turtle_kv/import/status.hpp>
 
@@ -43,6 +44,17 @@ class ChangeLogBlock
    * called.
    */
   static constexpr u64 kExpired = 0xfdc038ae91507827ull;
+
+  struct Metrics {
+    FastCountMetric<i64> block_alloc_count{0};
+    FastCountMetric<i64> block_free_count{0};
+  };
+
+  static Metrics& metrics() noexcept
+  {
+    static Metrics m_;
+    return m_;
+  }
 
   /** \brief Internal structure used to delineate chunks of formatted slot data within the buffer.
    */
@@ -142,11 +154,14 @@ class ChangeLogBlock
     free(block);
   }
 
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+  //
+  class RecoveryChecksPassed;
+
   /** \brief Read a ChangeLogBlock from the ChangeLogFile into the buffer, buf. Returns an error
    * status if malformed or unsuccessful.
    */
-  static StatusOr<boost::intrusive_ptr<ChangeLogBlock>> recover(ScopedMemory memory,
-                                                                batt::Grant&& grant);
+  static StatusOr<boost::intrusive_ptr<ChangeLogBlock>> recover(ScopedMemory memory);
 
   /** \brief Serializes the passed `delta` to the front of `dst`, advancing `dst` beyond the written
    * value.
@@ -231,10 +246,7 @@ class ChangeLogBlock
 
   /** \brief Return a referenece to this ChangeLogBlock's underlying grant.
    */
-  batt::Grant& get_grant()
-  {
-    return this->ephemeral_state().grant_;
-  }
+  batt::Grant& get_grant();
 
   usize slot_count() const noexcept
   {
@@ -348,24 +360,7 @@ class ChangeLogBlock
  private:
   /** \brief The members of this object which live outside the block buffer.
    */
-  struct EphemeralState {
-    // TODO: [Gabe Bornstein 2/2/26] Consider turning grant and read lock into Variant
-    //
-    /** \brief Used to track whether this block has been flushed.
-     */
-    batt::Latch<boost::intrusive_ptr<ChangeLogReadLock>> read_lock_;
-
-    /** \brief The Volume root log Grant passed in at construction time; a pre-reservation of
-     * space in the Volume root log for the slot data that will be appended to this buffer.
-     */
-    batt::Grant grant_;
-
-    //----- --- -- -  -  -   -
-
-    explicit EphemeralState(batt::Grant&& grant) noexcept : read_lock_{}, grant_{std::move(grant)}
-    {
-    }
-  };
+  struct EphemeralState;
 
   using EphemeralStatePtr = std::unique_ptr<EphemeralState>;
 
@@ -425,12 +420,12 @@ class ChangeLogBlock
   /** \brief Helper function to initialize the ephemeral state of this ChangeLogBlock. Transfers
    * ownership of grant to ChangeLogBlock, and initializes the reference count to ref_count.
    */
-  void init_ephemeral_state(batt::Grant&& grant)
-  {
-    new (&this->ephemeral_state_storage_) EphemeralStatePtr{new EphemeralState{std::move(grant)}};
+  void init_ephemeral_state(batt::Grant&& grant);
 
-    BATT_CHECK_EQ(this->ephemeral_state().grant_.size(), 1);
-  }
+  /** \brief Helper function to initialize the ephemeral state of this ChangeLogBlock. Transfers
+   * ownership of grant to ChangeLogBlock, and initializes the reference count to ref_count.
+   */
+  void init_ephemeral_state(RecoveryChecksPassed&& token);
 
   EphemeralStatePtr& ephemeral_state_ptr() noexcept
   {
@@ -509,6 +504,72 @@ inline void intrusive_ptr_add_ref(ChangeLogBlock* block) noexcept
 inline void intrusive_ptr_release(ChangeLogBlock* block) noexcept
 {
   block->remove_ref(1);
+}
+
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+
+class ChangeLogBlock::RecoveryChecksPassed
+{
+  friend /*static*/ StatusOr<boost::intrusive_ptr<ChangeLogBlock>> ChangeLogBlock::recover(
+      ScopedMemory memory);
+
+ public:
+  RecoveryChecksPassed(const RecoveryChecksPassed&) = delete;
+  RecoveryChecksPassed& operator=(const RecoveryChecksPassed&) = delete;
+
+  RecoveryChecksPassed(RecoveryChecksPassed&&) = default;
+  RecoveryChecksPassed& operator=(RecoveryChecksPassed&&) = default;
+
+  ~RecoveryChecksPassed() = default;
+
+ private:
+  RecoveryChecksPassed() = default;
+};
+
+struct ChangeLogBlock::EphemeralState {
+  // TODO: [Gabe Bornstein 2/2/26] Consider turning grant and read lock into Variant
+  //
+
+  /** \brief The Volume root log Grant passed in at construction time; a pre-reservation of
+   * space in the Volume root log for the slot data that will be appended to this buffer.
+   */
+  std::variant<batt::Grant, RecoveryChecksPassed> token_;
+
+  //----- --- -- -  -  -   -
+
+  explicit EphemeralState(batt::Grant&& grant) noexcept : token_{std::move(grant)}
+  {
+  }
+
+  explicit EphemeralState(RecoveryChecksPassed&& token) noexcept : token_{std::move(token)}
+  {
+  }
+};
+
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+inline batt::Grant& ChangeLogBlock::get_grant()
+{
+  BATT_CHECK(batt::is_case<batt::Grant>(this->ephemeral_state().token_));
+  return std::get<batt::Grant>(this->ephemeral_state().token_);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+inline void ChangeLogBlock::init_ephemeral_state(batt::Grant&& grant)
+{
+  BATT_CHECK_EQ(grant.size(), 1);
+  new (&this->ephemeral_state_storage_) EphemeralStatePtr{new EphemeralState{std::move(grant)}};
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+inline void ChangeLogBlock::init_ephemeral_state(RecoveryChecksPassed&& token)
+{
+  BATT_CHECK_EQ(grant.size(), 1);
+  new (&this->ephemeral_state_storage_) EphemeralStatePtr{new EphemeralState{std::move(token)}};
 }
 
 }  // namespace turtle_kv

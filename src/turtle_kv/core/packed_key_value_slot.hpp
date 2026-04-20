@@ -81,19 +81,16 @@ inline StatusOr<std::pair<KeyView, ValueView>> unpack_key_value_slot(ConstBuffer
   BATT_ASSIGN_OK_RESULT(const little_u16* p_key_len, consume_first<little_u16>(payload));
   BATT_ASSIGN_OK_RESULT(const char* key_data, consume_first<char>(payload, *p_key_len));
   BATT_ASSIGN_OK_RESULT(const u8* p_packed_op, consume_first<u8>(payload));
-  const usize value_len = payload.size();
-  const char* value_data = static_cast<const char*>(payload.data());
 
-  return std::make_pair(
-      KeyView{
-          key_data,
-          *p_key_len,
-      },
-      ValueView::from_packed((ValueView::OpCode)*p_packed_op,
-                             std::string{
-                                 value_data,
-                                 value_len,
-                             }));
+  const auto op = static_cast<ValueView::OpCode>(*p_packed_op);
+
+  const char* value_data = static_cast<const char*>(payload.data());
+  const usize value_len = payload.size();
+
+  const std::string_view value_sv{value_data, value_len};
+  ValueView value = ValueView::from_packed(op, value_sv);
+
+  return std::make_pair(KeyView{key_data, *p_key_len}, value);
 }
 
 }  // namespace turtle_kv

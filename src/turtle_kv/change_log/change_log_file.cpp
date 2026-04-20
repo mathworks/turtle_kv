@@ -131,6 +131,7 @@ auto ChangeLogFile::PackedConfig::unpack() const noexcept -> ChangeLogFile::Conf
 {
   BATT_CHECK_EQ(this->config_.block_size & 511, 0);
 
+#if 0
   std::memset((void*)read_lock_counter_per_block_.get(),
               0,
               sizeof(ReadLockCounter) * this->config_.block_count);
@@ -138,6 +139,7 @@ auto ChangeLogFile::PackedConfig::unpack() const noexcept -> ChangeLogFile::Conf
   for (i64 i = 0; i < this->config_.block_count; ++i) {
     BATT_CHECK_EQ(read_lock_counter_per_block_[i]->load(), 0);
   }
+#endif
 
   this->metrics_.freed_blocks_count.add(this->free_block_tokens_.total_size());
 }
@@ -146,12 +148,15 @@ auto ChangeLogFile::PackedConfig::unpack() const noexcept -> ChangeLogFile::Conf
 //
 ChangeLogFile::~ChangeLogFile() noexcept
 {
+#if 0
   Interval<i64> block_range = this->active_blocks();
   BATT_CHECK_EQ(block_range.size(), 0);
+#endif
 
   VLOG(1) << BATT_INSPECT(this->write_throughput_.get());
 }
 
+#if 0
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 void ChangeLogFile::lock_for_read(const Interval<i64>& block_range) noexcept
@@ -223,6 +228,7 @@ void ChangeLogFile::update_lower_bound() noexcept
 
   this->metrics_.freed_blocks_count.add(newly_freed->size());
 }
+#endif
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
@@ -237,6 +243,7 @@ StatusOr<batt::Grant> ChangeLogFile::reserve_blocks(
   return grant;
 }
 
+#if 0
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 ChangeLogFile::ReadLock ChangeLogFile::set_block_range_in_use(
@@ -261,6 +268,7 @@ ChangeLogFile::ReadLock ChangeLogFile::set_block_range_in_use(
 
   return ReadLock{this, block_range};
 }
+#endif
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 // TODO: [Gabe Bornstein 1/20/26] Only read in blocks that are written after most recent checkpoint.
@@ -287,46 +295,133 @@ ChangeLogFile::read_blocks_into_vector()
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-auto ChangeLogFile::append(batt::Grant& grant, batt::SmallVecBase<ConstBuffer>& data) noexcept
-    -> StatusOr<ReadLock>
+Status ChangeLogFile::append(const Slice<BlockBuffer*>& src) noexcept
 {
-  i64 append_lower_bound = this->upper_bound_.load();
-  i64 addr = append_lower_bound % this->config_.block_count;
-  i64 file_offset = this->config_.block0_offset + addr * this->config_.block_size;
+  if (src.begin() == src.end()) {
+    return OkStatus();
+  }
+
+  // Initialize src state.  We will repeatedly build as large a batch as possible by consuming
+  // chunks of data from the src.
+  //
+  auto src_next = src.begin();
+  const auto src_last = src.end();
+  ConstBuffer src_first = (*src_next)->prepare_to_flush();
+
+  // Helper function: returns true iff there is no more data in src to consume.
+  //
+  const auto src_empty = [&] {
+    return src_next == src_last;
+  };
+
+  // Find the block at which to start appending.
+  //
+  i64 dst_block_i = this->append_pos();
+  i64 file_offset = this->config_.block0_offset + dst_block_i * this->config_.block_size;
   i64 total_written = 0;
 
-  while (!data.empty()) {
-    auto data_slice = batt::as_slice(data.data(), std::min(data.size(), this->max_batch_size_));
+  //----- --- -- -  -  -   -
+  batt::SmallVecBase<ConstBuffer>& batch = this->next_batch_;
+  batch.clear();
 
+  // The number of bytes in the next batch.
+  //
+  usize batch_size = 0;
+
+  // The index within `batch` where the unconsumed data begins.
+  //
+  usize batch_start = 0;
+
+  // Helper function: returns true iff the batch is empty.
+  //
+  const auto batch_empty = [&batch, &batch_start] {
+    return batch_start == batch.size();
+  };
+
+  // We are not done until the input is consumed and all data is written.
+  //
+  while (!src_empty() || !batch_empty()) {
+    // The available space (bytes) in the next batch.
+    //
+    usize space_in_batch = static_cast<usize>(std::min(this->last_block_offset_ - file_offset,
+                                                       this->max_batch_size_)) -
+                           batch_size;
+
+    //----- --- -- -  -  -   -
+    // Collect the next batch.
+    //
+    {
+      absl::MutexLock lock{&this->trim_state_mutex_};
+
+      while (!src_empty() && space_in_batch >= src_first.size()) {
+        this->next_batch_.push_back(src_first);
+
+        batch_size += src_first.size();
+        space_in_batch -= src_first.size();
+
+        ++src_next;
+        src_first = (*src_next)->prepare_to_flush();
+      }
+    }
+
+    //----- --- -- -  -  -   -
+    // Write the batch.
+    //
     StatusOr<i32> n_written = batt::Task::await<StatusOr<i32>>([&](auto&& handler) {
+      Slice<ConstBuffer> data_slice = batt::as_slice(batch.data() + batch_start,  //
+                                                     batch.size() - batch_start);
+
       this->file_.async_write_some(file_offset, data_slice, BATT_FORWARD(handler));
     });
-
     BATT_REQUIRE_OK(n_written);
 
     total_written += *n_written;
 
+    //----- --- -- -  -  -   -
+    // Consume the written data from the front of the batch.
+    //
     usize n_to_consume = BATT_CHECKED_CAST(usize, *n_written);
     this->total_bytes_written_ += n_to_consume;
     this->write_throughput_.update(this->total_bytes_written_);
 
     while (n_to_consume != 0) {
-      usize n_this_block = std::min(n_to_consume, data.front().size());
-      data.front() += n_this_block;
-      if (data.front().size() == 0) {
-        data.erase(data.begin());
+      ConstBuffer& batch_chunk = batch[batch_start];
+      const usize consumed_this_chunk = std::min(n_to_consume, batch_chunk.size());
+
+      // Advance/shrink the first chunk in the batch, and increase the available space.
+      //
+      batch_chunk += consumed_this_chunk;
+      batch_size -= consumed_this_chunk;
+
+      // When we have fully consumed the first chunk of the batch, increment the `batch_start`
+      // index.
+      //
+      if (batch_chunk.size() == 0) {
+        ++batch_start;
+
+        // Once `batch_start` has advanced to half the size of the batch (in chunks), shift
+        // everything down to the beginning.  This does not change the space_in_batch.
+        //
+        if (batch_start * 2 >= batch.size()) {
+          this->next_batch_.erase(this->next_batch_.begin(),
+                                  this->next_batch_.begin() + batch_start);
+          batch_start = 0;
+        }
       }
 
-      file_offset += n_this_block;
-      n_to_consume -= n_this_block;
+      file_offset += consumed_this_chunk;
+      n_to_consume -= consumed_this_chunk;
 
       BATT_CHECK_LE(file_offset, this->last_block_offset_)
           << BATT_INSPECT(this->config_.block_size) << BATT_INSPECT(this->config_.block_count)
           << BATT_INSPECT(this->config_.block0_offset);
+    }
 
-      if (file_offset == this->last_block_offset_) {
-        file_offset = this->config_.block0_offset;
-      }
+    //----- --- -- -  -  -   -
+    // Wrap around when we get to the end of the file.
+    //
+    if (file_offset == this->last_block_offset_) {
+      file_offset = this->config_.block0_offset;
     }
   }
 
@@ -341,6 +436,91 @@ auto ChangeLogFile::append(batt::Grant& grant, batt::SmallVecBase<ConstBuffer>& 
   this->upper_bound_.fetch_add(block_range.size());
 
   return {std::move(read_lock)};
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+BlockIndex ChangeLogFile::append_pos() noexcept
+{
+  absl::MutexLock lock{&this->trim_state_mutex_};
+  BATT_CHECK(this->trim_state_.next_block_to_append_);
+
+  return *this->trim_state_.next_block_to_append_ % this->config_.block_count;
+}
+
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+// class ChangeLogFile::TrimState
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+i64 ChangeLogFile::TrimState::notify_blocks_written(const Slice<BlockBuffer*>& blocks)
+{
+  BATT_CHECK(this->next_block_to_trim_ && this->next_block_to_append_)
+      << "The next block to append must be set before updating the trim offset!  (Forgot to run "
+         "recovery?)";
+
+  i64 block_i = *this->next_block_to_append_;
+  for (BlockBuffer* block_buffer : blocks) {
+    this->set_block_upper_bound(block_i, block_buffer->edit_offset_upper_bound());
+    ++block_i;
+    if (block_i == this->block_count_) {
+      block_i -= this->block_count_;
+    }
+  }
+
+  *this->next_block_to_append_ += BATT_CHECKED_CAST(i64, blocks.size());
+
+  const i64 active_count = *this->next_block_to_append_ - *this->next_block_to_trim_;
+
+  BATT_CHECK_GE(active_count, 0);
+  BATT_CHECK_LE(active_count, this->block_count_);
+  BATT_CHECK_EQ(block_i, *this->next_block_to_append_ % this->block_count_);
+
+  return block_i;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+usize ChangeLogFile::TrimState::set_trim_offset(EditOffset new_trim_offset)
+{
+  BATT_CHECK(this->next_block_to_trim_ && this->next_block_to_append_)
+      << "The oldest untrimmed block must be set before updating the trim offset!  (Forgot to run "
+         "recovery?)";
+
+  BATT_CHECK_LE(*this->next_block_to_trim_, *this->next_block_to_append_);
+
+  // If the current trim offset is past the new one, do nothing.
+  //
+  if (this->trim_offset_ && *this->trim_offset_ > new_trim_offset) {
+    return 0;
+  }
+
+  usize n_blocks_trimmed = 0;
+
+  for (;;) {
+    // Are we out of potential blocks to trim?
+    //
+    if (*this->next_block_to_trim_ == *this->next_block_to_append_) {
+      break;
+    }
+
+    Optional<EditOffset> next_block_upper_bound =
+        this->get_block_upper_bound(*this->next_block_to_trim_);
+
+    // Is the next block after the new trim offset?
+    //
+    if (next_block_upper_bound && *next_block_upper_bound > new_trim_offset) {
+      break;
+    }
+
+    // Trim the block!
+    //
+    this->set_block_valid(*this->next_block_to_trim_, false);
+    n_blocks_trimmed += 1;
+    *this->next_block_to_trim_ += 1;
+  }
+
+  return n_blocks_trimmed;
 }
 
 }  // namespace turtle_kv

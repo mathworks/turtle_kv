@@ -39,7 +39,7 @@ struct MockMemTableStorage {
     using SlotCallbackFn =
         std::function<void(FirstVisitToBlock, BlockBuffer*, MutableBuffer, EditOffset)>;
 
-    MOCK_METHOD(Status, append_slot, (EditOffset, usize /*byte_count*/, SlotCallbackFn), ());
+    MOCK_METHOD(Status, append_slot, (usize /*byte_count*/, SlotCallbackFn), ());
   };
 };
 

@@ -134,16 +134,6 @@ class BasicMemTable : public MemTableBase
   static constexpr i64 kFinalizedMask = i64{1} << 62;  // single bit, non-negative.
   static_assert(kFinalizedMask > 0);
 
-  /** \brief The number of bytes between minium-EditOffset-lower-bound rebasing.  Must be a power
-   * of 2.
-   */
-  static constexpr u64 kStorageBlockRebaseDelta = 1 * kMiB;
-  static_assert(std::popcount(kStorageBlockRebaseDelta) == 1);
-
-  /** \brief Mask to zero all bits less than kStorageBlockRebaseDelta.
-   */
-  static constexpr i64 kStorageBlockRebaseMask = ~(kStorageBlockRebaseDelta - 1);
-
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   explicit BasicMemTable(AllocationTracker& allocation_tracker,
@@ -404,8 +394,6 @@ class BasicMemTable<StorageT, AllocationTrackerT>::PerOpStorageContext
   Status store_data(usize n_bytes, SerializeFn&& serialize_fn) noexcept
   {
     return this->storage_writer_context_.append_slot(
-        /*min_edit_offset_lower_bound=*/this->mem_table_.edit_offset_lower_bound_ +
-            EditOffsetDelta{this->total_size_before_ & BasicMemTable::kStorageBlockRebaseMask},
         n_bytes,
         [&](FirstVisitToBlock first_visit,
             StorageBlockBuffer* buffer,
@@ -424,7 +412,16 @@ class BasicMemTable<StorageT, AllocationTrackerT>::PerOpStorageContext
   i64 total_size_before_;
 };
 
-/** \brief Returns the greatest ordered DeltaBatchId included in the passed MemTable.
+/** \brief Returns the lower bound EditOffset included in the passed MemTable.
+ */
+template <typename StorageT, typename AllocationTrackerT>
+inline EditOffset get_edit_offset_lower_bound(
+    const BasicMemTable<StorageT, AllocationTrackerT>& mem_table)
+{
+  return mem_table.edit_offset_lower_bound();
+}
+
+/** \brief Returns the min upper bound EditOffset included in the passed MemTable.
  */
 template <typename StorageT, typename AllocationTrackerT>
 inline EditOffset get_edit_offset_upper_bound(
