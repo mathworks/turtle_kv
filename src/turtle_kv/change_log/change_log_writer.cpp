@@ -90,6 +90,15 @@ struct ChangeLogWriter::WrittenBlocksState {
   {
     release_blocks(this->blocks);
   }
+
+  void check_invariants(const ChangeLogFile::Config& config) const noexcept
+  {
+    BATT_CHECK_IMPLIES(!this->blocks.empty(), this->block_index)
+        << "If there are written blocks, then block_index must be set!";
+
+    BATT_CHECK_LT(this->block_index.value_or(BlockIndex{0}), config.block_count)
+        << "block_index must be strictly less than the block count!";
+  }
 };
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -156,7 +165,44 @@ struct ChangeLogWriter::ActiveBlocksState {
     this->in_use_block_grant.subsume(BATT_OK_RESULT_OR_PANIC(
         block_grant_pool.issue_grant(active_block_range.size(), batt::WaitForResource::kFalse)));
   }
+
+  void check_invariants(const ChangeLogFile::Config& config) const noexcept
+  {
+    BATT_CHECK_LE(this->active_lower_bound_block, this->active_upper_bound_block)
+        << "active_lower_bound_block and active_upper_bound_block must form a valid Interval";
+
+    BATT_CHECK_LE(this->active_upper_bound_block - this->active_lower_bound_block,
+                  config.block_count)
+        << "The active block interval must not be larger than the maximum block count";
+
+    BATT_CHECK_LT(this->active_lower_bound_block, config.block_count)
+        << "active_lower_bound_block must always be a valid (physical) block index within the file";
+
+    BATT_CHECK_EQ(
+        BATT_CHECKED_CAST(u64, this->active_upper_bound_block - this->active_lower_bound_block),
+        in_use_block_grant.size())
+        << "in_use_block_grant must exactly cover the active block interval";
+  }
 };
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+/*static*/ void ChangeLogWriter::check_invariants(const ChangeLogFile::Config& config,
+                                                  const WrittenBlocksState& written_blocks,
+                                                  const ActiveBlocksState& active_blocks) noexcept
+{
+  if (written_blocks.block_index.has_value()) {
+    const i64 block_i = *written_blocks.block_index;
+
+    BATT_CHECK(block_i == active_blocks.active_upper_bound_block ||
+               block_i + config.block_count == active_blocks.active_upper_bound_block)
+        << "The WrittenBlocksState::block_index must agree with "
+           "ActiveBlocksState::active_upper_bound_block!"
+        << BATT_INSPECT(block_i) << BATT_INSPECT(active_blocks.active_upper_bound_block)
+        << BATT_INSPECT(config.block_count);
+  }
+  x
+}
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 // class ChangeLogWriter::Context
@@ -518,6 +564,7 @@ void ChangeLogWriter::writer_task_main() noexcept
   }
 }
 
+#if 0  // TODO [tastolfi 2026-04-20] delete once refactor is done
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 auto ChangeLogWriter::write_buffers(const batt::SmallVecBase<BlockBuffer*>& update_buffers) noexcept
@@ -578,6 +625,74 @@ auto ChangeLogWriter::write_buffers(const batt::SmallVecBase<BlockBuffer*>& upda
 
   return {stats};
 }
+#endif
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Status ChangeLogWriter::activate_blocks(WrittenBlocksState& input,
+                                        ActiveBlocksState& output) noexcept
+{
+  if (input.blocks.empty()) {
+    return OkStatus();
+  }
+
+  // Sanity checks.
+  //
+  input.check_invariants(this->config());
+  output.check_invariants(this->config());
+  check_invariants(this->config(), input, output);
+
+  auto on_scope_exit = batt::finally([&] {
+    input.check_invariants(this->config());
+    output.check_invariants(this->config());
+    check_invariants(this->config(), input, output);
+    BATT_CHECK(input.blocks.empty());
+  });
+
+  // If the input is non-empty, the next block index must be set.
+  //
+  i64 block_i = input.block_index.value_or_panic();
+
+  // We must consume the entire input.
+  //
+  while (!input.blocks.empty()) {
+    BlockBuffer* const next_block = input.blocks.front();
+
+    // Remove the first element and release the block each time we reach the end of the loop body.
+    //
+    auto on_loop_body_exit = batt::finally([&] {
+      input.blocks.pop_front();
+      next_block->remove_ref(1);
+    });
+
+    // Update active blocks edit offset upper bound.
+    //
+    output.block_upper_bounds[block_i] = next_block->edit_offset_upper_bound().value();
+
+    // Transfer grant ownership to the in_use_block_grant.
+    //
+    output.in_use_block_grant.subsume(next_block->consume_grant());
+
+    // Advance to the next block index, with wrap-around.
+    //
+    ++block_i;
+    if (block_i == this->config().block_count) {
+      block_i = 0;
+    }
+  }
+
+  // Synchronize input.block_index and output.active_upper_bound_block with block_i.
+  //
+  input.block_index = BlockIndex{block_i};
+  output.active_upper_bound_block = *input.block_index;
+
+  if (output.active_upper_bound_block < output.active_lower_bound_block) {
+    output.active_upper_bound_block =
+        BlockIndex{output.active_upper_bound_block + this->config().block_count};
+  }
+
+  return OkStatus();
+}
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
@@ -591,6 +706,13 @@ Status ChangeLogWriter::trim(EditOffset new_active_lower_bound)
   {
     batt::ScopedLock<State> locked_state{this->state_};
     ActiveBlocksState& s = *locked_state->active_blocks_state_;
+
+    // Sanity checks.
+    //
+    s.check_invariants(this->config());
+    auto on_scope_exit = batt::finally([&] {
+      s.check_invariants(this->config());
+    });
 
     // Do nothing if the new trim offset isn't greater than the current one.
     //

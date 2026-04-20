@@ -355,6 +355,12 @@ class ChangeLogWriter
     }
   }
 
+  /** \brief Panics if invariants do not hold between written_blocks and active_blocks.
+   */
+  static void check_invariants(const ChangeLogFile::Config& config,
+                               const WrittenBlocksState& written_blocks,
+                               const ActiveBlocksState& active_blocks) noexcept;
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   /** \brief (Thread-safe) Adds an associated Context object.
