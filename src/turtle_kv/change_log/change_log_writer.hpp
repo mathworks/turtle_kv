@@ -329,10 +329,7 @@ class ChangeLogWriter
       BATT_CHECK_EQ(this->ready_to_write_.size(), 0) << "BlockBuffer stacks must be released!";
     }
 
-    ~State() noexcept
-    {
-      this->check_ready_to_shut_down();
-    }
+    ~State() noexcept;
   };
 
   struct BlockBufferStats {

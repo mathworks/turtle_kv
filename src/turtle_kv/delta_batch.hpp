@@ -7,12 +7,11 @@
 //+++++++++++-+-+--+----- --- -- -  -  -   -
 
 #pragma once
+#define TURTLE_KV_DELTA_BATCH_HPP
 
 #include <turtle_kv/api_types.hpp>
 
 #include <turtle_kv/mem_table/mem_table.hpp>
-
-#include <turtle_kv/change_log/change_log_read_lock.hpp>
 
 #include <turtle_kv/core/edit_view.hpp>
 #include <turtle_kv/core/merge_compactor.hpp>

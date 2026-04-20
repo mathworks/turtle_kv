@@ -530,7 +530,7 @@ void KVStore::halt()
     // the new value of `this->halt_`.
     //
     batt::Toggle<State>::Writer writer{this->state_};
-    writer.new_state() = writer.old_state();
+    writer.new_value() = writer.old_value();
   }
 
   // Stop the ChangeLogWriter.
@@ -993,7 +993,7 @@ Status KVStore::finalize_mem_table(boost::intrusive_ptr<MemTable>&& old_mem_tabl
     // A different thread won the race to finalize the MemTable; wait for the next MemTable to be
     // installed in `State` by that thread.
     //
-    this->wait_for_new_mem_table(/*target_edit_offset=*/current_edit_offset);
+    BATT_REQUIRE_OK(this->wait_for_new_mem_table(/*target_edit_offset=*/current_edit_offset));
   }
 
   return OkStatus();
@@ -1059,7 +1059,7 @@ Status KVStore::wait_for_new_mem_table(EditOffset target_edit_offset)
     u64 observed;
     {
       batt::Toggle<State>::Reader state_reader{this->state_};
-      if (this->halt_.load() == true) {
+      if (this->halt_.get_value() == true) {
         return batt::StatusCode::kClosed;
       }
       if (state_reader->mem_table_->edit_offset_lower_bound() >= target_edit_offset) {
@@ -1069,6 +1069,7 @@ Status KVStore::wait_for_new_mem_table(EditOffset target_edit_offset)
     }
     this->state_.wait(observed);
   }
+  return OkStatus();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -1645,11 +1646,12 @@ void KVStore::collect_stats(
   fn("kv_store.log.user_bytes", change_log_writer.received_user_byte_count.get());
   fn("kv_store.log.block_bytes", change_log_writer.received_block_byte_count.get());
 
-  fn("kv_store.log.in_use_tokens", change_log_file.in_use_block_tokens());
-  fn("kv_store.log.avail_tokens", change_log_file.available_block_tokens());
-  fn("kv_store.log.reserved_tokens", change_log_file.reserved_block_tokens());
-  fn("kv_store.log.max_blocks", change_log_file.max_block_count());
-  fn("kv_store.log.block_size", change_log_file.block_size());
+  // TODO [tastolfi 2026-04-20]  re-enable
+  //  fn("kv_store.log.in_use_tokens", change_log_file.in_use_block_tokens());
+  //  fn("kv_store.log.avail_tokens", change_log_file.available_block_tokens());
+  //  fn("kv_store.log.reserved_tokens", change_log_file.reserved_block_tokens());
+  //  fn("kv_store.log.max_blocks", change_log_file.max_block_count());
+  //  fn("kv_store.log.block_size", change_log_file.block_size());
   fn("kv_store.log.poll_count", change_log_writer.poll_count.get());
   fn("kv_store.log.sleep_count", change_log_writer.sleep_count.get());
 

@@ -200,7 +200,8 @@ ConstBuffer ChangeLogBlock::prepare_to_flush() noexcept
 //
 batt::Grant ChangeLogBlock::consume_grant() noexcept
 {
-  return std::move(this->ephemeral_state().grant_);
+  BATT_CHECK(batt::is_case<batt::Grant>(this->ephemeral_state().token_));
+  return std::move(std::get<batt::Grant>(this->ephemeral_state().token_));
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -239,24 +240,6 @@ void ChangeLogBlock::check_buffer_invariant() const noexcept
       << BATT_INSPECT(sizeof(Self)) << BATT_INSPECT(this->slots_total_size())
       << BATT_INSPECT(this->space_) << BATT_INSPECT(sizeof(SlotInfo))
       << BATT_INSPECT(this->slot_count_);
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-void ChangeLogBlock::set_read_lock(ChangeLogReadLock&& read_lock) noexcept
-{
-  this->ephemeral_state().read_lock_.set_value(
-      boost::intrusive_ptr<ChangeLogReadLock>{new ChangeLogReadLock{std::move(read_lock)}});
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-StatusOr<Interval<i64>> ChangeLogBlock::await_flush_begin() noexcept
-{
-  BATT_ASSIGN_OK_RESULT(boost::intrusive_ptr<ChangeLogReadLock> p_read_lock,
-                        this->ephemeral_state().read_lock_.await());
-
-  return p_read_lock->block_range();
 }
 
 }  // namespace turtle_kv

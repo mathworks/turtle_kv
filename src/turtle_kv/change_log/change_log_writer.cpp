@@ -72,6 +72,9 @@ struct ChangeLogWriter::PreparedBlocksState {
 
   //----- --- -- -  -  -   -
 
+  explicit PreparedBlocksState(const ChangeLogFile::Config& config,
+                               const ActiveBlocksState& active_blocks) noexcept;
+
   ~PreparedBlocksState() noexcept
   {
     release_blocks(&this->blocks);
@@ -170,7 +173,7 @@ struct ChangeLogWriter::ActiveBlocksState {
       , in_use_block_grant{
             BATT_OK_RESULT_OR_PANIC(block_grant_pool.issue_grant(0, batt::WaitForResource::kFalse))}
   {
-    const usize block_count = BATT_CHECKED_CAST(usize, config.block_count);
+    const usize block_count = BATT_CHECKED_CAST(usize, config.block_count.value());
 
     BATT_CHECK_LT(this->active_lower_bound_block, config.block_count);
 
@@ -183,7 +186,7 @@ struct ChangeLogWriter::ActiveBlocksState {
     BATT_CHECK_LE(active_blocks_upper_bounds.size(), block_count);
 
     for (usize src_i = 0, dst_i = this->active_lower_bound_block;
-         src_i < active_blocks_upper_bounds;
+         src_i < active_blocks_upper_bounds.size();
          ++src_i) {
       this->block_upper_bounds[dst_i] = active_blocks_upper_bounds[src_i].value();
       ++dst_i;
@@ -214,6 +217,19 @@ struct ChangeLogWriter::ActiveBlocksState {
         << "in_use_block_grant must exactly cover the active block interval";
   }
 };
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+/*explicit*/ ChangeLogWriter::PreparedBlocksState::PreparedBlocksState(
+    const ChangeLogFile::Config& config,
+    const ActiveBlocksState& active_blocks) noexcept
+{
+  BlockIndex next_block_to_write = active_blocks.active_upper_bound_block;
+  if (next_block_to_write >= config.block_count) {
+    next_block_to_write = BlockIndex{next_block_to_write - config.block_count};
+  }
+  this->file_offset = config.block_offset_from_index(next_block_to_write);
+}
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
@@ -310,7 +326,12 @@ void ChangeLogWriter::Context::push_buffer(BlockBuffer*& buffer,
 
   BATT_ASSIGN_OK_RESULT(std::unique_ptr<ChangeLogFile> log_file, ChangeLogFile::open(path));
 
-  return {std::make_unique<ChangeLogWriter>(std::move(log_file), options)};
+  // TODO [tastolfi 2026-04-20] pass real values for active blocks params!
+  //
+  return {std::make_unique<ChangeLogWriter>(std::move(log_file),
+                                            options,
+                                            make_interval(BlockIndex{0}, BlockIndex{0}),
+                                            Slice<EditOffset>{})};
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -324,7 +345,12 @@ void ChangeLogWriter::Context::push_buffer(BlockBuffer*& buffer,
 
   BATT_ASSIGN_OK_RESULT(std::unique_ptr<ChangeLogFile> log_file, ChangeLogFile::open(path));
 
-  return {std::make_unique<ChangeLogWriter>(std::move(log_file), options)};
+  // TODO [tastolfi 2026-04-20] pass real values for active blocks params!
+  //
+  return {std::make_unique<ChangeLogWriter>(std::move(log_file),
+                                            options,
+                                            make_interval(BlockIndex{0}, BlockIndex{0}),
+                                            Slice<EditOffset>{})};
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -384,6 +410,7 @@ void ChangeLogWriter::start(batt::Task::executor_type&& executor) noexcept
 void ChangeLogWriter::halt() noexcept
 {
   this->halt_requested_.store(true);
+  this->free_block_tokens_.close();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -475,7 +502,7 @@ void ChangeLogWriter::writer_task_main() noexcept
     bool force_sleep = false;
 
     CollectedBlocksState collected;
-    PreparedBlocksState prepared;
+    PreparedBlocksState prepared{this->config(), *this->state_.lock()->active_blocks_state_};
     WrittenBlocksState written;
 
     for (;;) {
@@ -859,6 +886,13 @@ Status ChangeLogWriter::trim(EditOffset new_active_lower_bound)
     }
   }
   return OkStatus();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+ChangeLogWriter::State::~State() noexcept
+{
+  this->check_ready_to_shut_down();
 }
 
 }  // namespace turtle_kv

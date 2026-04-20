@@ -1,6 +1,14 @@
-#pragma once
+//=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
+//
+// Part of the TurtleKV Project, under Apache License v2.0.
+// See https://www.apache.org/licenses/LICENSE-2.0 for license information.
+// SPDX short identifier: Apache-2.0
+//
+//+++++++++++-+-+--+----- --- -- -  -  -   -
 
-#include <turtle_kv/change_log/change_log_read_lock.hpp>
+#pragma once
+#define TURTLE_KV_CHANGE_LOG_BLOCK_HPP
+
 #include <turtle_kv/change_log/edit_offset.hpp>
 
 #include <turtle_kv/import/buffer.hpp>
@@ -349,13 +357,6 @@ class ChangeLogBlock
    */
   void check_buffer_invariant() const noexcept;
 
-  /** \brief Sets the read lock for this block, indicating that its position in the change log file
-   * has been finalized.
-   */
-  void set_read_lock(ChangeLogReadLock&& read_lock) noexcept;
-
-  StatusOr<Interval<i64>> await_flush_begin() noexcept;
-
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
   /** \brief The members of this object which live outside the block buffer.
@@ -568,7 +569,6 @@ inline void ChangeLogBlock::init_ephemeral_state(batt::Grant&& grant)
 //
 inline void ChangeLogBlock::init_ephemeral_state(RecoveryChecksPassed&& token)
 {
-  BATT_CHECK_EQ(grant.size(), 1);
   new (&this->ephemeral_state_storage_) EphemeralStatePtr{new EphemeralState{std::move(token)}};
 }
 

@@ -113,7 +113,7 @@ class SmallQueueBase
   bool try_compact()
   {
     if (this->front_i_ * 2 >= this->vec_.size()) {
-      this->vec_.erase(this->vec_.begin(), std::next(this->vec_.begin, this->front_i_));
+      this->vec_.erase(this->vec_.begin(), std::next(this->vec_.begin(), this->front_i_));
       this->front_i_ = 0;
       return true;
     }
@@ -129,7 +129,7 @@ class SmallQueueBase
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
   VecBase& vec_;
-  Movable<usize> front_i_{0};
+  Movable<usize> front_i_{usize{0}};
 };
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------

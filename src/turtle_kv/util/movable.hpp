@@ -51,6 +51,14 @@ class Movable
     return this->value_;
   }
 
+  template <typename U>
+    requires(std::is_convertible_v<U, T>)
+  Movable& operator=(const U& new_value)
+  {
+    this->value_ = new_value;
+    return *this;
+  }
+
  private:
   T value_;
 };

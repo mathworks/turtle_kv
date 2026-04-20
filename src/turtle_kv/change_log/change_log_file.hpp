@@ -12,7 +12,6 @@
 #include <turtle_kv/api_types.hpp>
 #include <turtle_kv/change_log/change_log_block.hpp>
 #include <turtle_kv/change_log/change_log_file_metrics.hpp>
-#include <turtle_kv/change_log/change_log_read_lock.hpp>
 #include <turtle_kv/file_utils.hpp>
 
 #include <turtle_kv/import/bit_ops.hpp>
@@ -57,7 +56,6 @@ class ChangeLogFile
 
  public:
   using ReadLockCounter = batt::CpuCacheLineIsolated<std::atomic<i64>>;
-  using ReadLock = ChangeLogReadLock;
   using Metrics = ChangeLogFileMetrics;
   using BlockBuffer = ChangeLogBlock;
 
@@ -107,7 +105,8 @@ class ChangeLogFile
 
       BATT_CHECK_EQ(block_begin_offset, this->block_offset_from_index(block_index))
           << "The passed `block_end_offset` must be aligned to the block size!"
-          << BATT_INSPECT(this->block_size) << BATT_INSPECT(block_end_offset);
+          << BATT_INSPECT(this->block_size) << BATT_INSPECT(block_end_offset)
+          << BATT_INSPECT(block_index);
 
       return block_index;
     }
@@ -181,6 +180,13 @@ class ChangeLogFile
   FileByteCount capacity() const
   {
     return FileByteCount{this->config_.block_count * this->config_.block_size};
+  }
+
+  auto size() const
+  {
+    // TODO [tastolfi 2026-04-20] fix this to be accurate
+    //
+    return this->capacity();
   }
 
   const Metrics& metrics() const
@@ -302,13 +308,6 @@ batt::Status ChangeLogFile::read_blocks(SerializeFn process_block)
         }
       }
     }
-
-    // TODO: [Gabe Bornstein 4/13/26] We're planning on removing ReadLocks. This code will need to
-    // be removed once that happens.
-    //
-    Interval<i64> block_range{blocks_read, blocks_read + 1};
-    (*block)->set_read_lock(this->set_block_range_in_use((*block)->get_grant(), block_range));
-    // this->upper_bound_.fetch_add(1);
 
     // `process_block` is responsible for determining when to stop reading.
     //

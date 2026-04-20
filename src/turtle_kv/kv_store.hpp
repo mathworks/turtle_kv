@@ -276,7 +276,7 @@ class KVStore : public Table
    */
   Status hand_off_finalized_mem_table(boost::intrusive_ptr<MemTable>&& old_mem_table);
 
-  void wait_for_new_mem_table(EditOffset target_edit_offset);
+  Status wait_for_new_mem_table(EditOffset target_edit_offset);
 
   void info_task_main() noexcept;
 
