@@ -231,19 +231,6 @@ void ChangeLogFile::update_lower_bound() noexcept
 }
 #endif
 
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-StatusOr<batt::Grant> ChangeLogFile::reserve_blocks(
-    BlockCount count,
-    batt::WaitForResource wait_for_resource) noexcept
-{
-  StatusOr<batt::Grant> grant = this->free_block_tokens_.issue_grant(count, wait_for_resource);
-  if (grant.ok()) {
-    this->metrics_.reserved_blocks_count.add(grant->size());
-  }
-  return grant;
-}
-
 #if 0
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //

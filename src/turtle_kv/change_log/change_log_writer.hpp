@@ -335,9 +335,9 @@ class ChangeLogWriter
     }
   };
 
-  struct WriteOpStats {
-    u64 user_bytes_written = 0;
-    u64 total_bytes_written = 0;
+  struct BlockBufferStats {
+    u64 user_bytes = 0;
+    u64 total_bytes = 0;
   };
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -390,14 +390,15 @@ class ChangeLogWriter
   /** \brief Sets new edit offset upper bounds for the passed blocks, transferring as many as
    * possible to this->write_buffer_.
    */
-  Status prepare_blocks(CollectedBlocksState& input, PreparedBlocksState& output) noexcept;
+  StatusOr<BlockBufferStats> prepare_blocks(CollectedBlocksState& input,
+                                            PreparedBlocksState& output) noexcept;
 
   /** \brief Writes a contiguous series of BlockBuffer data chunks to the file, then (based on the
    * number of bytes actually written by `IoRing::File::async_write_some`), transfers blocks that
    * have been *entirely* written to `output`.
    */
-  StatusOr<WriteOpStats> write_blocks(PreparedBlocksState& input,
-                                      WrittenBlocksState& output) noexcept;
+  StatusOr<BlockBufferStats> write_blocks(PreparedBlocksState& input,
+                                          WrittenBlocksState& output) noexcept;
 
   /** \brief Takes blocks known to have been written and updates the active blocks state
    * accordingly. This means advancing `ActiveBlocksState::active_upper_bound_index`, copying each

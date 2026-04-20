@@ -23,12 +23,12 @@ namespace {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-void release_blocks(SmallQueueBase<ChangeLogBlock*>& blocks) noexcept
+void release_blocks(SmallQueueBase<ChangeLogBlock*>* blocks) noexcept
 {
-  for (ChangeLogBlock* p_block : blocks) {
+  for (ChangeLogBlock* p_block : *blocks) {
     p_block->remove_ref(1);
   }
-  blocks.clear();
+  blocks->clear();
 }
 
 }  // namespace
@@ -45,7 +45,7 @@ struct ChangeLogWriter::CollectedBlocksState {
 
   ~CollectedBlocksState() noexcept
   {
-    release_blocks(this->blocks);
+    release_blocks(&this->blocks);
   }
 };
 
@@ -69,7 +69,21 @@ struct ChangeLogWriter::PreparedBlocksState {
 
   ~PreparedBlocksState() noexcept
   {
-    release_blocks(this->blocks);
+    release_blocks(&this->blocks);
+  }
+
+  void check_invariants(const ChangeLogFile::Config& config) const noexcept
+  {
+    BATT_CHECK_LT(this->file_offset, config.last_block_end_offset())
+        << "file_offset must be before the end of the last block!";
+
+    BATT_CHECK_EQ(this->block_chunks.size(), this->blocks.size())
+        << "The elements of block_chunks and blocks must line up!";
+
+    if (!this->block_chunks.empty()) {
+      BATT_CHECK_GT(this->block_chunks.front().size(), 0)
+          << "Empty chunks must be removed from the front of the queue!";
+    }
   }
 };
 
@@ -88,7 +102,7 @@ struct ChangeLogWriter::WrittenBlocksState {
 
   ~WrittenBlocksState() noexcept
   {
-    release_blocks(this->blocks);
+    release_blocks(&this->blocks);
   }
 
   void check_invariants(const ChangeLogFile::Config& config) const noexcept
@@ -410,9 +424,10 @@ void ChangeLogWriter::remove_context(Context& context) noexcept
 //
 auto ChangeLogWriter::allocate_buffer(EditOffset offset) noexcept -> StatusOr<BlockBuffer*>
 {
-  BATT_ASSIGN_OK_RESULT(
-      batt::Grant buffer_grant,
-      this->change_log_->reserve_blocks(BlockCount{1}, batt::WaitForResource::kTrue));
+  BATT_ASSIGN_OK_RESULT(batt::Grant buffer_grant,
+                        this->free_block_tokens_.issue_grant(1, batt::WaitForResource::kTrue));
+
+  this->change_log_->metrics().reserved_blocks_count.add(buffer_grant.size());
 
   return BlockBuffer::allocate(offset, std::move(buffer_grant), this->config().block_size);
 }
@@ -625,6 +640,98 @@ auto ChangeLogWriter::write_buffers(const batt::SmallVecBase<BlockBuffer*>& upda
   return {stats};
 }
 #endif
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+auto ChangeLogWriter::write_blocks(PreparedBlocksState& input, WrittenBlocksState& output) noexcept
+    -> StatusOr<BlockBufferStats>
+{
+  // Sanity checks.
+  //
+  input.check_invariants(this->config());
+  output.check_invariants(this->config());
+
+  auto on_scope_exit = batt::finally([&] {
+    input.check_invariants(this->config());
+    output.check_invariants(this->config());
+  });
+
+  BATT_CHECK_LT(input.block_chunks.size(), this->max_batch_size_) << "Too many prepared blocks!";
+
+  // Write!
+  //
+  BATT_ASSIGN_OK_RESULT(  //
+      i32 n_written,
+      batt::Task::await<StatusOr<i32>>([&](auto&& handler) {
+        this->change_log_->file().async_write_some(input.file_offset,
+                                                   batt::as_slice(input.block_chunks),
+                                                   BATT_FORWARD(handler));
+      }));
+
+  // Collect stats on the blocks that were written.
+  //
+  BlockBufferStats stats;
+
+  // Consume however many bytes were written.
+  //
+  while (n_written > 0) {
+    BATT_CHECK(!input.block_chunks.empty())
+        << "More bytes written than were passed to async_write_some!";
+
+    ConstBuffer& next_chunk = input.block_chunks.front();
+    const usize n_to_consume = std::min<usize>(next_chunk.size(), n_written);
+
+    next_chunk += n_to_consume;
+    n_written -= n_to_consume;
+    input.file_offset = FileOffset{input.file_offset + BATT_CHECKED_CAST(i64, n_to_consume)};
+
+    BATT_CHECK_LE(input.file_offset, this->config().last_block_end_offset())
+        << "Wrote past the end of the last block!";
+
+    // Wrap-around at the end of the file.
+    //
+    if (input.file_offset == this->config().last_block_end_offset()) {
+      input.file_offset = this->config().block0_offset;
+
+      BATT_CHECK_EQ(n_written, 0)
+          << "write_blocks should never write data that wraps around to the file start!";
+    }
+
+    // When the prepared chunk at the front of the input is fully consumed, remove it and transfer
+    // its BlockBuffer to the output state.
+    //
+    if (next_chunk.size() == 0) {
+      BlockBuffer* const block = input.blocks.front();
+
+      stats.user_bytes += block->slots_total_size();
+      stats.total_bytes += block->block_size();
+
+      if (output.blocks.empty()) {
+        const BlockIndex written_block_index =
+            this->config().block_index_from_end_offset(input.file_offset);
+
+        // Update or verify the output block index.
+        //
+        if (output.block_index.has_value()) {
+          BATT_CHECK_EQ(*output.block_index, written_block_index) << "";
+        } else {
+          output.block_index = written_block_index;
+        }
+      }
+
+      // No need to touch the block's ref count; just push, pop and keep going.
+      //
+      output.blocks.push_back(block);
+      input.blocks.pop_front();
+      input.block_chunks.pop_front();
+    }
+  }
+
+  this->metrics_.written_user_byte_count.add(stats.user_bytes);
+  this->metrics_.written_block_byte_count.add(stats.total_bytes);
+
+  return {stats};
+}
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //

@@ -88,9 +88,32 @@ class ChangeLogFile
 
     void pack_to(PackedConfig* packed_config) const noexcept;
 
-    FileOffset block_offset_end() const noexcept
+    /** \brief Returns the file offset corresponding to the end of the last block.
+     */
+    FileOffset last_block_end_offset() const noexcept
     {
-      return FileOffset{this->block0_offset + (this->block_size * this->block_count)};
+      return this->block_offset_from_index(BlockIndex{this->block_count});
+    }
+
+    /** \brief Returns the file offset of the beginning of the specific block.
+     */
+    FileOffset block_offset_from_index(BlockIndex block_index) const noexcept
+    {
+      return FileOffset{this->block0_offset + (this->block_size * block_index)};
+    }
+
+    /** \brief Returns the index of the block that *ends* at `block_end_offset`.
+     */
+    BlockIndex block_index_from_end_offset(FileOffset block_end_offset) const noexcept
+    {
+      FileOffset block_begin_offset{block_end_offset - this->block_size};
+      BlockIndex block_index{(block_begin_offset - this->block0_offset) / this->block_size};
+
+      BATT_CHECK_EQ(block_begin_offset, this->block_offset_from_index(block_index))
+          << "The passed `block_end_offset` must be aligned to the block size!"
+          << BATT_INSPECT(this->block_size) << BATT_INSPECT(block_end_offset);
+
+      return block_index;
     }
   };
 
@@ -215,6 +238,16 @@ class ChangeLogFile
     return this->metrics_;
   }
 
+  Metrics& metrics()
+  {
+    return this->metrics_;
+  }
+
+  llfs::IoRing::File& file() noexcept
+  {
+    return this->file_;
+  }
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
   struct TrimState {
@@ -310,11 +343,15 @@ class ChangeLogFile
 
   Metrics metrics_;
 
+#if 0
   // TODO [tastolfi 2026-04-20] rename block_offset_upper_bound (or similar)
-  const FileOffset last_block_offset_ = this->config_.block_offset_end();
+  const FileOffset last_block_offset_ = this->config_.last_block_end_offset();
+#endif
 
+  // TODO [tastolfi 2026-04-20] move to ChangeLogWriter
   u64 total_bytes_written_ = 0;
 
+  // TODO [tastolfi 2026-04-20] move to ChangeLogWriter
   batt::RateMetric<u64, /*seconds=*/100> write_throughput_;
 };
 

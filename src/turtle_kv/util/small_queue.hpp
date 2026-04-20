@@ -41,6 +41,11 @@ class SmallQueueBase
     return this->vec_.size() - this->front_i_;
   }
 
+  const T* data() const noexcept
+  {
+    return this->vec_.data() + this->front_i_;
+  }
+
   bool empty() const
   {
     return this->size() == 0;
