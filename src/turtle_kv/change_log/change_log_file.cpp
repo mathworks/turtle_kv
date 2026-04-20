@@ -151,6 +151,7 @@ ChangeLogFile::~ChangeLogFile() noexcept
 #if 0
   Interval<i64> block_range = this->active_blocks();
   BATT_CHECK_EQ(block_range.size(), 0);
+  BATT_CHECK_EQ(this->active_block_count(), 0);
 #endif
 
   VLOG(1) << BATT_INSPECT(this->write_throughput_.get());
@@ -271,7 +272,6 @@ ChangeLogFile::ReadLock ChangeLogFile::set_block_range_in_use(
 #endif
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-// TODO: [Gabe Bornstein 1/20/26] Only read in blocks that are written after most recent checkpoint.
 //
 batt::StatusOr<std::vector<boost::intrusive_ptr<ChangeLogBlock>>>
 ChangeLogFile::read_blocks_into_vector()
