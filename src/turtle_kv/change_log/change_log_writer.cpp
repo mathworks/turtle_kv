@@ -201,7 +201,6 @@ struct ChangeLogWriter::ActiveBlocksState {
         << BATT_INSPECT(block_i) << BATT_INSPECT(active_blocks.active_upper_bound_block)
         << BATT_INSPECT(config.block_count);
   }
-  x
 }
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
