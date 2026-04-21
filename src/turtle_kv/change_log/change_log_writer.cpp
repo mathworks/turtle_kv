@@ -760,11 +760,15 @@ Status ChangeLogWriter::activate_blocks(WrittenBlocksState& input,
   while (!input.blocks.empty()) {
     BlockBuffer* const next_block = input.blocks.front();
 
-    // Remove the first element and release the block each time we reach the end of the loop body.
-    //
     auto on_loop_body_exit = batt::finally([&] {
+      // Remove the first element and release the block each time we reach the end of the loop body.
+      //
       input.blocks.pop_front();
       next_block->remove_ref(1);
+
+      // Advance to the next block index, with wrap-around.
+      //
+      cfg.increment_with_wrap(*input.block_index);
     });
 
     // IMPORTANT: consume the block grant before doing anything else, so we don't leak the block.
@@ -789,10 +793,6 @@ Status ChangeLogWriter::activate_blocks(WrittenBlocksState& input,
     //
     output.in_use_block_grant.subsume(std::move(block_grant));
 
-    // Advance to the next block index, with wrap-around.
-    //
-    cfg.increment_with_wrap(*input.block_index);
-
     // No wrap-around for active_upper_bound_block, because it must stay >= the lower bound.
     //
     cfg.increment_upper_bound(output.block_range);
@@ -805,6 +805,8 @@ Status ChangeLogWriter::activate_blocks(WrittenBlocksState& input,
 //
 Status ChangeLogWriter::trim(EditOffset new_trim_edit_offset)
 {
+  VLOG(1) << "ChangeLogWriter::trim(" << new_trim_edit_offset << ")";
+
   // Release any grant count after we exit the critical section below, to avoid double-locking.
   //
   Optional<batt::Grant> released_grant;
@@ -848,6 +850,8 @@ Status ChangeLogWriter::trim(EditOffset new_trim_edit_offset)
       //
       cfg.increment_lower_bound(s.block_range);
     }
+
+    VLOG(1) << BATT_INSPECT(n_trimmed);
 
     // Release any trimmed blocks.
     //

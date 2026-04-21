@@ -465,14 +465,16 @@ TEST_F(ChangeLogTest, ExceedCapacityWrapAround)
 
       Status write_status = context.append_slot(
           slot_data.size(),
-          [&slot_data, &offsets](FirstVisitToBlock,
-                                 ChangeLogBlock* block,
-                                 MutableBuffer buffer,
-                                 EditOffset offset) {
+          [&slot_data, &writer, &offsets](FirstVisitToBlock,
+                                          ChangeLogBlock* block,
+                                          MutableBuffer buffer,
+                                          EditOffset offset) {
             VLOG(1) << "Appending block with lower_bound: " << block->edit_offset_lower_bound()
                     << ", on slot: " << offset;
             offsets.insert(offset.value());
             std::memcpy(buffer.data(), slot_data.data(), slot_data.size());
+
+            (*writer)->trim(offset).IgnoreError();
           });
 
       if (write_status.ok()) {
