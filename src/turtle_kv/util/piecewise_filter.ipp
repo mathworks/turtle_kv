@@ -92,20 +92,35 @@ Interval<OffsetT> PiecewiseFilter<OffsetT>::drop_index_range(Interval<OffsetT> t
                                         to_drop,
                                         typename Interval<OffsetT>::LinearOrder{});
 
-  // Edge case: if dropping a sub-range of an already dropped range, do nothing.
+  Interval<OffsetT> dropped = to_drop;
+
+  // Extend lower and upper bounds if we need to merge with a previously dropped region to set
+  // the return value bounds correctly.
   //
-  if (first == last) {
-    Interval<OffsetT> dropped;
+  if (first == last || to_drop.lower_bound < first->lower_bound) {
     if (first != this->live_.begin()) {
+      // We are starting in a live interval gap (dropped region), so we extend to the previous live
+      // interval's upper bound.
+      //
       dropped.lower_bound = std::prev(first)->upper_bound;
     } else {
       dropped.lower_bound = Self::kMinLowerBound;
     }
+  }
+
+  if (first == last || to_drop.upper_bound >= std::prev(last)->upper_bound) {
     if (last != this->live_.end()) {
+      // We are ending in a live interval gap, so we extend to the next live interval's start.
+      //
       dropped.upper_bound = last->lower_bound;
     } else {
       dropped.upper_bound = Self::kMaxUpperBound;
     }
+  }
+
+  // Edge case: if dropping a sub-range of an already dropped range, do nothing.
+  //
+  if (first == last) {
     return dropped;
   }
 
@@ -146,24 +161,6 @@ Interval<OffsetT> PiecewiseFilter<OffsetT>::drop_index_range(Interval<OffsetT> t
   //         │  *iter   │
   //         └──────────┘
   //
-
-  Interval<OffsetT> dropped = to_drop;
-
-  // Extend lower and upper bounds if we need to merge with a previously dropped region to set
-  // the return value bounds correctly.
-  //
-  if (first != this->live_.begin() && to_drop.lower_bound < first->lower_bound) {
-    // We are starting in a live interval gap (dropped region), so we extend to the previous live
-    // interval's upper bound.
-    //
-    dropped.lower_bound = std::prev(first)->upper_bound;
-  }
-
-  if (last != this->live_.end() && to_drop.upper_bound > last->lower_bound) {
-    // We are ending in a live interval gap, so we extend to the next live interval's start.
-    //
-    dropped.upper_bound = last->lower_bound;
-  }
 
   // Process all overlapping intervals with `to_drop`.
   //
@@ -231,15 +228,6 @@ OffsetT PiecewiseFilter<OffsetT>::live_lower_bound(OffsetT i) const
                                i,
                                typename Interval<OffsetT>::LinearOrder{});
 
-  // Check if the previous interval contains `i`.
-  //
-  if (iter != this->live_.begin()) {
-    auto prev = std::prev(iter);
-    if (prev->contains(i)) {
-      return i;
-    }
-  }
-
   // Check if current interval contains `i`.
   //
   if (iter != this->live_.end() && iter->contains(i)) {
@@ -271,19 +259,6 @@ Interval<OffsetT> PiecewiseFilter<OffsetT>::find_live_range(Interval<OffsetT> i)
                                this->live_.end(),
                                start_i,
                                typename Interval<OffsetT>::LinearOrder{});
-
-  // Check if the previous interval contains `start_i`.
-  //
-  if (iter != this->live_.begin()) {
-    auto prev = std::prev(iter);
-    if (prev->contains(start_i)) {
-      // `start_i` is in the previous interval, so we return the intersection of `i`
-      // and this current live interval.
-      //
-      OffsetT live_end = std::min(end_i, prev->upper_bound);
-      return Interval<OffsetT>{start_i, live_end};
-    }
-  }
 
   // Check if current interval contains or starts at `start_i`.
   //

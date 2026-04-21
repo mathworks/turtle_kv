@@ -163,13 +163,12 @@ PackedNodePage* build_node_page(const MutableBuffer& buffer, const InMemoryNode&
           for (const Interval<u32>& range : live_ranges) {
             // If the first item is filtered, don't store index 0. Otherwise, store both bounds.
             //
-            if (range.lower_bound == PiecewiseFilter<u32>::kMinLowerBound) {
-              segment_filters_array->items[segment_filters_offset] = range.upper_bound;
-              segment_filters_offset++;
-            } else {
+            if (range.lower_bound != PiecewiseFilter<u32>::kMinLowerBound) {
               segment_filters_array->items[segment_filters_offset] = range.lower_bound;
               segment_filters_offset++;
+            }
 
+            if (range.upper_bound != PiecewiseFilter<u32>::kMaxUpperBound) {
               segment_filters_array->items[segment_filters_offset] = range.upper_bound;
               segment_filters_offset++;
             }
@@ -268,15 +267,29 @@ StatusOr<PiecewiseFilter<u32>> PackedNodePage::create_piecewise_filter(usize lev
   // serialized version of the filter doesn't store index 0.
   //
   if (filter_data.start_is_live) {
-    BATT_CHECK_NE(filter_data.values.size() % 2, 0);
-    live_ranges.emplace_back(
-        Interval<u32>{PiecewiseFilter<u32>::kMinLowerBound, filter_data.values[i].value()});
-    i++;
+    if (filter_data.values.empty()) {
+      // Entire segment is live.
+      //
+      live_ranges.emplace_back(
+          Interval<u32>{PiecewiseFilter<u32>::kMinLowerBound, PiecewiseFilter<u32>::kMaxUpperBound});
+    } else {
+      live_ranges.emplace_back(
+          Interval<u32>{PiecewiseFilter<u32>::kMinLowerBound, filter_data.values[i].value()});
+      i++;
+    }
   }
 
   for (; i + 1 < filter_data.values.size(); i += 2) {
     live_ranges.emplace_back(
         Interval<u32>{filter_data.values[i].value(), filter_data.values[i + 1].value()});
+  }
+
+  // If there's one unpaired value left, it's a lower_bound whose upper_bound (kMaxUpperBound)
+  // was omitted.
+  //
+  if (i < filter_data.values.size()) {
+    live_ranges.emplace_back(
+        Interval<u32>{filter_data.values[i].value(), PiecewiseFilter<u32>::kMaxUpperBound});
   }
 
   return PiecewiseFilter<u32>::from_live(as_slice(live_ranges));
@@ -317,32 +330,7 @@ StatusOr<llfs::PinnedPage> PackedNodePage::UpdateBuffer::Segment::load_leaf_page
 bool PackedNodePage::UpdateBuffer::Segment::is_index_filtered(const SegmentedLevel& level,
                                                               u32 index) const
 {
-  const usize segment_i = std::distance(level.segments_slice.begin(), this);
-  PackedNodePage::UpdateBuffer::SegmentFilterData filter_data =
-      level.packed_node_->get_segment_filter_values(level.level_i_, segment_i);
-
-  BATT_CHECK(!filter_data.values.empty());
-
-  // If there is only one value and it is kMaxUpperBound, everything is live.
-  //
-  if (filter_data.values.size() == 1 &&
-      filter_data.values[0].value() == PiecewiseFilter<u32>::kMaxUpperBound) {
-    return false;
-  }
-
-  // Compute the number of cut points that occur up to and potentially including this index.
-  //
-  auto iter = std::upper_bound(filter_data.values.begin(), filter_data.values.end(), index);
-
-  usize previous_cut_points = std::distance(filter_data.values.begin(), iter);
-
-  // If the start is live, an even number of previous cut points would mean that we are in a
-  // live region. If the start is filtered, an odd number of cut points would mean that we are
-  // also in a live region.
-  //
-  bool is_live = (previous_cut_points % 2 == 0) == filter_data.start_is_live;
-
-  return !is_live;
+  return !(this->live_lower_bound(level, index) == index);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -355,10 +343,9 @@ u32 PackedNodePage::UpdateBuffer::Segment::live_lower_bound(const SegmentedLevel
       level.packed_node_->get_segment_filter_values(level.level_i_, segment_i);
 
   const Slice<const little_u32> filter_values = filter_data.values;
-  BATT_CHECK(!filter_values.empty());
 
-  if (filter_values.size() == 1 &&
-      filter_values[0].value() == PiecewiseFilter<u32>::kMaxUpperBound) {
+  if (filter_data.values.empty()) {
+    BATT_CHECK(filter_data.start_is_live);
     return item_i;
   }
 
@@ -398,10 +385,9 @@ Interval<u32> PackedNodePage::UpdateBuffer::Segment::get_live_item_range(
       level.packed_node_->get_segment_filter_values(level.level_i_, segment_i);
 
   const Slice<const little_u32> filter_values = filter_data.values;
-  BATT_CHECK(!filter_values.empty());
 
-  if (filter_values.size() == 1 &&
-      filter_values[0].value() == PiecewiseFilter<u32>::kMaxUpperBound) {
+  if (filter_data.values.empty()) {
+    BATT_CHECK(filter_data.start_is_live);
     return i;
   }
 
