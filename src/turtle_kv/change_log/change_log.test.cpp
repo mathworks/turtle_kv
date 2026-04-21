@@ -366,6 +366,8 @@ TEST_F(ChangeLogTest, BlockBoundaryConditions)
           }
           this->on_visit_block(first_visit, block);
           std::memcpy(buffer.data(), large_data.data(), large_data.size());
+
+          (*writer)->trim(offset + EditOffsetDelta{(i64)large_data.size()}).IgnoreError();
         });
 
     if (!write_status.ok()) {
