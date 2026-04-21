@@ -1,0 +1,166 @@
+\documentclass[11pt]{article}
+\usepackage[margin=3cm]{geometry}
+\usepackage{parskip}
+\usepackage{graphicx}
+	\usepackage{times}
+
+\title{TurtleTree Updates for Deletion Support}
+\author{
+Tony Astolfi
+\and
+Vidya Silai
+}
+
+\begin{document}
+\maketitle{}
+
+%%------------------------------------------------------------------------------
+\section{Client Interface}
+
+To delete a key/value pair from TurtleKV, a client should call the \texttt{remove} function on their \texttt{KVStore} object and pass in the key to delete.
+
+%%------------------------------------------------------------------------------
+\section{New TurtleTree Algorithms}
+
+\subsection{Concepts}
+
+\subsubsection{Tombstone Record}
+
+A key/value pair in which the value is a special value indicating that the associated key is deleted. A tombstone record is constructed
+internally by TurtleKV. To do this, a \texttt{ValueView} with the \texttt{OpCode} type \texttt{OP\_DELETE} is constructed.
+
+\subsubsection{Viability}
+Nodes and leaves can be in three possible states with respect to the concept of viability:
+\begin{enumerate}
+    \item \textit{Viable}: The size of the node/leaf is within acceptable bounds, nothing needs to be done to modify it.
+    \item \textit{NeedsSplit}: The size of the node/leaf is too large and needs to be split into two.
+        \begin{enumerate}
+        \item A node needs a split when at least one of the following conditions is true:
+            \begin{itemize}
+                \item The node has more than 64 pivots
+                \item The sum of the total size (bytes) of the pivot keys and flushed segment data exceeds the amount of variable space allocated in \texttt{PackedNodePage} for serialization.
+            \end{itemize}
+        \item A leaf needs a split when the total size (bytes) of the key/value pairs in the leaf exceeds \texttt{flush\_size} (size of a batch update).
+        \end{enumerate}
+    \item \textit{NeedsMerge}: The size of the node/leaf is too small and needs to be merged with a sibling.
+        \begin{enumerate}
+            \item A node needs a merge when its pivot count is less than 4.
+            \item A leaf needs a merge when the total size (bytes) of the key/value pairs in the leaf is less than one fourth of \texttt{flush\_size}.
+        \end{enumerate}
+\end{enumerate}
+
+The root is an exception to the rules stated above. If the root is a node, it is only not viable when it has one pivot. In this
+case, it is considered to be in the \texttt{NeedsMerge} state.
+
+\subsection{Algorithms}
+
+\subsubsection{\texttt{KVStore::remove}}
+
+The \texttt{remove} function is implemented a \texttt{put} operation. In this \texttt{put} operation, a tombstone record is constructed from the key that the client passes in.
+
+\subsubsection{Batch Update}
+
+A batch update on a leaf (whether it is a true leaf at the bottom of the tree or an Update Buffer Segment leaf) consists of doing a merge/compact of the newly applied batch update data and the existing data in the leaf.
+
+When a merge/compact occurs on a Update Buffer Segment leaf, both regular records and tombstone records are treated the same. For each key in the resulting leaf, only the latest update to that key is present.
+
+When merge/compact occurs on a true leaf, there is a difference between how regular records and tombstone records are handled. Regular records are handled in the same way as described above. For tombstone records, the merge/compact process will remove the tombstone record from the leaf's data as well as a potential older record with the same key (i.e., the key being deleted).
+
+\subsubsection{Leaf Merging}
+
+Merging two leaves is simple. We concatenate the two \texttt{ResultSet} objects from each leaf.
+
+\subsubsection{Node Merging}\label{section:newturtletreealogs:nodemerge}
+
+Merging two nodes involves concatenating the metadata of each node and merging the two update buffers.
+
+Metadata includes pivot keys, pending bytes counts, and child subtree pages.
+
+Update buffer merging involves merging each level one by one. The following rules apply to merging two update buffer levels:
+\begin{itemize}
+    \item Merging an \texttt{EmptyLevel} with another level type will result in a level with the other level type.
+    \item Merging two \texttt{MergedLevel}s involves concatenating the two \texttt{ResultSet} objects to form a new \texttt{MergedLevel}.
+    \item Merging two \texttt{SegmentedLevel}s involves the following steps:
+    \begin{enumerate}
+        \item In the \texttt{SegmentedLevel} from the right node, shift each segment's \texttt{active\_pivot} bit set to the left by the number of pivots in the left node.
+        \item Concatenate the segment vectors from both \texttt{SegmentedLevel}s.
+        \item Iterate over this newly concatenated segment vector to identify duplicate segments that exist due to a previous split. For these duplicates, merge the \texttt{PiecewiseFilter}s ($\S$\ref{section:datastructureupdates:piecewisefilter}), take the union of the \texttt{active\_pivot} bit sets, and then erase the duplicate.
+    \end{enumerate}
+    \item Merging a \texttt{MergedLevel} and a \texttt{SegmentedLevel} will output a \texttt{HybridLevel} ($\S$\ref{section:datastructureupdates:hybridlevel}).
+\end{itemize}
+
+\subsubsection{Parent Node Merge Updates}\label{section:newturtletreealogs:parentnodemerge}
+
+When a merge occurs, the parent node of the two subtrees being merged will undergo some metadata changes.
+
+The code is set up such that the left subtree is modified in place, and the right subtree is consumed. Therefore, all the metadata for the right subtree is erased from the parent.
+
+Additionally, the merge of the two pivots must be reflected in the segmented levels of the parent's update buffer. To do this, we have to update each segment's \texttt{active\_pivots} bit set as follows:
+\begin{enumerate}
+    \item Take the bit-wise OR of the left pivot and right pivot bits and set this result to be the new value for the left pivot bit.
+    \item Remove the right pivot's bit.
+\end{enumerate}
+
+If the merge of the two pivots results in a new \texttt{Subtree} that needs to be split, a split operation will be performed after all the metadata changes described above happen.
+
+\subsubsection{\texttt{flush\_and\_shrink}}
+
+When the root has only 1 pivot, the \texttt{flush\_and\_shrink} operation is performed as follows:
+\begin{enumerate}
+    \item First, we try flushing the root's update buffer. If this flush causes the singular pivot to split into two, the root will now become viable and the operation finished.
+    \item If the flush still leaves the root with one pivot, we try flushing again. We repeatedly keep flushing until there is nothing left in the root's update buffer.
+    \begin{itemize}
+        \item If we reach the point where nothing is left in the root's update buffer and the root is still not viable, we we shrink the tree by one level.
+        \item When the tree is collapsed by one level, the singular pivot of the root becomes the new root. This will reduce the height of the tree by 1.
+    \end{itemize}
+\end{enumerate}
+
+%%------------------------------------------------------------------------------
+\section{Updates to Existing TurtleTree Structures}
+
+\subsection{Update Buffer Segment \texttt{PiecewiseFilter}}\label{section:datastructureupdates:piecewisefilter}
+\subsubsection{Gaps in Existing Design}
+When merging two pivots, the parent node's update buffer must be updated to reflect the merge ($\S$\ref{section:newturtletreealogs:parentnodemerge}).
+
+With the existing model of using a \texttt{flushed\_pivots} bit set and \texttt{flushed\_upper\_bound} vector, we are unable to handle the case were a merge produces an "on/off" flushed range for the newly merged pivot. For example, this can occur when both pivots being merged are partially flushed, leaving the \texttt{flushed\_upper\_bound} value to be ambigious.
+
+\subsubsection{Solution}
+We introduce a new data structure to represent flushed ranges within a segment leaf called \texttt{PiecewiseFilter}. In doing so, we eliminate the \texttt{flushed\_pivots} bit set and \texttt{flushed\_upper\_bound} vector.
+
+\texttt{PiecewiseFilter} stores a vector of half-open intervals that denote the live (unflushed) regions of the leaf. When a flush occurs, we remove the corresponding index range in the leaf from the live intervals list.
+
+This solution proves to be the most robust, as it does not encode the flushed data information with respect to pivots.
+
+\subsubsection{Alternate Designs Considered}
+\begin{enumerate}
+    \item Flush all the data in the update buffer from both pivots until there is nothing left, so that both pivots become inactive. This design idea was rejected as it could trigger unecessary cascading flushes.
+    \item Merge/compact the entire update buffer. This idea was rejected as it would increase write amplification.
+    \item Use another bit set to signify if there are keys for a given pivot present in the leaf, since the active pivot bit is set to 0 when all the keys for that pivot are flushed. This idea was rejected as we would still need to either perform a flush as described in the first solution or perform extra I/O to load the segment page to know what keys to skip over during a range query.
+\end{enumerate}
+
+\subsection{Update Buffer Segment \texttt{active\_pivots}}
+
+\subsubsection{Gaps in Existing Design}
+When merging two nodes together the sum of the two nodes' pivot counts could exceed the viable definition of 64. In the existing design, \texttt{active\_pivots} is a 64-bit bit set; this doesn't support this intermediate state of node merging where we would need more than 64 bits before later splitting the node.
+
+\subsubsection{Solution}
+To handle this intermediate state during merging, we make \texttt{active\_pivots} a 128-bit bit set represented as an array of two 64-bit integers. If the pivot count of the merged node exceeds the viable defintion during merging, we will split it at the end of the merge operation.
+
+\subsubsection{Alternate Designs Considered}
+One alternate design idea was to try a "partial merge" of the two nodes, only taking the number of pivots we need from the sibling node to make the non-viable node viable.
+
+
+\subsection{Update Buffer Segment \texttt{HybridLevel}}\label{section:datastructureupdates:hybridlevel}
+
+\subsubsection{Gaps in Existing Design}
+When two nodes are being merged, we have to merge their update buffers; when we merge update buffers, we merge the same level from each node together ($\S$\ref{section:newturtletreealogs:nodemerge}).
+
+If the two levels are of the same type, the resulting merged level will still have the same type. However, the existing design lacks a representation for the result when level types differ (i.e., merging a \texttt{MergedLevel} and \texttt{SegmentedLevel}).
+
+\subsubsection{Solution}
+We introdue a new update buffer level type called \texttt{HybridLevel}. This type simply stores all the levels needing to be merged in a single container. When the level needs to be serialized, we iterate through the container to serialize the \texttt{MergedLevel}s.
+
+\subsubsection{Alternate Designs Considered}
+One other way to approach this problem is to merge/compact the two different levels during the update buffer merge. While this works from a correctness standpoint, it would increase write amplification.
+
+\end{document}
