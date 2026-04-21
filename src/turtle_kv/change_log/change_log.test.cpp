@@ -361,11 +361,9 @@ TEST_F(ChangeLogTest, BlockBoundaryConditions)
                                         EditOffset offset) {
           VLOG(1) << "Appending block with lower_bound: " << block->edit_offset_lower_bound()
                   << ", on slot: " << offset;
-          if (first_visit) {
-            (*writer)->trim(block->edit_offset_lower_bound()).IgnoreError();
-          }
           this->on_visit_block(first_visit, block);
           std::memcpy(buffer.data(), large_data.data(), large_data.size());
+          (*writer)->trim(offset + EditOffsetDelta{(i64)slot_data.size()}).IgnoreError();
         });
 
     if (!write_status.ok()) {
