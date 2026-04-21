@@ -110,6 +110,102 @@ class ChangeLogFile
 
       return block_index;
     }
+
+    /** \brief Increments the passed block index variable, with no wrap-around.
+     */
+    BlockIndex& increment_no_wrap(BlockIndex& block_index) const noexcept
+    {
+      block_index = BlockIndex{block_index + 1};
+      return block_index;
+    }
+
+    /** \brief Increments the passed block index variable, applying wrap-around.
+     */
+    BlockIndex& increment_with_wrap(BlockIndex& block_index) const noexcept
+    {
+      if (this->increment_no_wrap(block_index) == this->block_count) {
+        block_index = BlockIndex{0};
+      }
+      return block_index;
+    }
+
+    /** \brief Increments the lower bound of the passed interval, wrapping around at
+     * this->block_count while maintaining the size of the interval.
+     */
+    Interval<BlockIndex>& increment_lower_bound(Interval<BlockIndex>& block_range) const noexcept
+    {
+      this->check_invariants(block_range);
+      auto on_scope_exit = batt::finally([&] {
+        this->check_invariants(block_range);
+      });
+
+      this->increment_no_wrap(block_range.lower_bound);
+
+      return this->wrap_block_range(block_range);
+    }
+
+    /** \brief If the lower bound is this->block_count, shifts upper and lower bound down by
+     * block_count.
+     */
+    Interval<BlockIndex>& wrap_block_range(Interval<BlockIndex>& block_range) const noexcept
+    {
+      BATT_CHECK_LT(block_range.lower_bound, this->block_count * 2);
+
+      if (block_range.lower_bound >= this->block_count) {
+        block_range.lower_bound = BlockIndex{block_range.lower_bound - this->block_count};
+        block_range.upper_bound = BlockIndex{block_range.upper_bound - this->block_count};
+      }
+      return block_range;
+    }
+
+    /** \brief Increments the upper bound of the passed interval.
+     */
+    Interval<BlockIndex>& increment_upper_bound(Interval<BlockIndex>& block_range) const noexcept
+    {
+      this->check_invariants(block_range);
+      auto on_scope_exit = batt::finally([&] {
+        this->check_invariants(block_range);
+      });
+
+      this->increment_no_wrap(block_range.upper_bound);
+
+      return block_range;
+    }
+
+    Interval<BlockIndex>& increment_block_range(Interval<BlockIndex>& block_range) const noexcept
+    {
+      this->check_invariants(block_range);
+      auto on_scope_exit = batt::finally([&] {
+        this->check_invariants(block_range);
+      });
+
+      this->increment_no_wrap(block_range.lower_bound);
+      this->increment_no_wrap(block_range.upper_bound);
+
+      return this->wrap_block_range(block_range);
+    }
+
+    /** \brief Returns the upper bound of the passed interval, with wrap-around.
+     */
+    BlockIndex wrapped_upper_bound(const Interval<BlockIndex>& block_range) const noexcept
+    {
+      this->check_invariants(block_range);
+      if (block_range.upper_bound < this->block_count) {
+        return block_range.upper_bound;
+      }
+      const BlockIndex wrapped{block_range.upper_bound - this->block_count};
+      BATT_CHECK_LE(wrapped, this->block_count);
+      return wrapped;
+    }
+
+    /** \brief Panics if the passed interval is not well formed for this configuration.
+     */
+    void check_invariants(const Interval<BlockIndex>& block_range) const noexcept
+    {
+      BATT_CHECK_LT(block_range.lower_bound, this->block_count);
+      BATT_CHECK_LE(block_range.lower_bound, block_range.upper_bound);
+      BATT_CHECK_LE(block_range.upper_bound - block_range.lower_bound, this->block_count);
+    }
   };
 
   // The flag O_DIRECT is set to true when reading some files. In order for the

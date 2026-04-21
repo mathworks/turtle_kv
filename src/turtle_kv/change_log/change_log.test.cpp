@@ -355,12 +355,15 @@ TEST_F(ChangeLogTest, BlockBoundaryConditions)
   for (int i = 0; i < num_appends; ++i) {
     Status write_status = context.append_slot(
         large_data.size(),
-        [&large_data, i, this](FirstVisitToBlock first_visit,
-                               ChangeLogBlock* block,
-                               MutableBuffer buffer,
-                               EditOffset offset) {
+        [&large_data, &writer, i, this](FirstVisitToBlock first_visit,
+                                        ChangeLogBlock* block,
+                                        MutableBuffer buffer,
+                                        EditOffset offset) {
           VLOG(1) << "Appending block with lower_bound: " << block->edit_offset_lower_bound()
                   << ", on slot: " << offset;
+          if (first_visit) {
+            (*writer)->trim(block->edit_offset_lower_bound()).IgnoreError();
+          }
           this->on_visit_block(first_visit, block);
           std::memcpy(buffer.data(), large_data.data(), large_data.size());
         });

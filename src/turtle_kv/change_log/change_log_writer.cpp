@@ -137,18 +137,18 @@ struct ChangeLogWriter::WrittenBlocksState {
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 struct ChangeLogWriter::ActiveBlocksState {
-  /** \brief Aka the "trim position" -- this is the position in the file, not the logical offset.
+  /** \brief The (logical) interval of active block indices.
+   *
+   * lower_bound: the "trim position" -- this is the position in the file, not the logical offset.
+   * upper_bound: the "flush position" -- this is the position in the file (not logical offset) one
+   *     past the *last* known written and untrimmed block.
    */
-  BlockIndex active_lower_bound_block;
+  Interval<BlockIndex> block_range;
 
-  /** \brief Aka the "flush position" -- this is the position in the file (not logical offset) one
-   * past the *last* known written and untrimmed block.
+  /** \brief Blocks with edit offset upper bound less than or equal to this value can be
+   * safely overwritten.
    */
-  BlockIndex active_upper_bound_block;
-
-  /** \brief Aka the "trim offset" -- this is the logical value (not the position in the file).
-   */
-  EditOffset active_edit_offset_lower_bound;
+  EditOffset trim_edit_offset;
 
   /** \brief For each block index in the file, the known upper bound edit offset of slots in that
    * block.
@@ -166,33 +166,21 @@ struct ChangeLogWriter::ActiveBlocksState {
                              batt::Grant::Issuer& block_grant_pool,
                              const Interval<BlockIndex>& active_block_range,
                              const Slice<EditOffset>& active_blocks_upper_bounds) noexcept
-      : active_lower_bound_block{active_block_range.lower_bound}
-      , active_upper_bound_block{active_block_range.upper_bound}
-      , active_edit_offset_lower_bound{0 /*TODO [tastolfi 2026-04-20] - pass this in*/}
+      : block_range{active_block_range}
+      , trim_edit_offset{0 /*TODO [tastolfi 2026-04-20] - pass this in*/}
       , block_upper_bounds{new i64[config.block_count]}
       , in_use_block_grant{
             BATT_OK_RESULT_OR_PANIC(block_grant_pool.issue_grant(0, batt::WaitForResource::kFalse))}
   {
-    const usize block_count = BATT_CHECKED_CAST(usize, config.block_count.value());
+    config.check_invariants(this->block_range);
 
-    BATT_CHECK_LT(this->active_lower_bound_block, config.block_count);
+    BATT_CHECK_EQ(active_blocks_upper_bounds.size(), (usize)this->block_range.size());
 
-    BATT_CHECK_LE(this->active_lower_bound_block, this->active_upper_bound_block);
+    Interval<BlockIndex> uninitialized = this->block_range;
 
-    BATT_CHECK_EQ(
-        active_blocks_upper_bounds.size(),
-        BATT_CHECKED_CAST(usize, this->active_upper_bound_block - this->active_lower_bound_block));
-
-    BATT_CHECK_LE(active_blocks_upper_bounds.size(), block_count);
-
-    for (usize src_i = 0, dst_i = this->active_lower_bound_block;
-         src_i < active_blocks_upper_bounds.size();
-         ++src_i) {
-      this->block_upper_bounds[dst_i] = active_blocks_upper_bounds[src_i].value();
-      ++dst_i;
-      if (dst_i == block_count) {
-        dst_i = 0;
-      }
+    for (const EditOffset& block_upper_bound : active_blocks_upper_bounds) {
+      this->block_upper_bounds[uninitialized.lower_bound] = block_upper_bound.value();
+      config.increment_lower_bound(uninitialized);
     }
 
     this->in_use_block_grant.subsume(BATT_OK_RESULT_OR_PANIC(
@@ -201,19 +189,8 @@ struct ChangeLogWriter::ActiveBlocksState {
 
   void check_invariants(const ChangeLogFile::Config& config) const noexcept
   {
-    BATT_CHECK_LE(this->active_lower_bound_block, this->active_upper_bound_block)
-        << "active_lower_bound_block and active_upper_bound_block must form a valid Interval";
-
-    BATT_CHECK_LE(this->active_upper_bound_block - this->active_lower_bound_block,
-                  config.block_count)
-        << "The active block interval must not be larger than the maximum block count";
-
-    BATT_CHECK_LT(this->active_lower_bound_block, config.block_count)
-        << "active_lower_bound_block must always be a valid (physical) block index within the file";
-
-    BATT_CHECK_EQ(
-        BATT_CHECKED_CAST(u64, this->active_upper_bound_block - this->active_lower_bound_block),
-        in_use_block_grant.size())
+    config.check_invariants(this->block_range);
+    BATT_CHECK_EQ((usize)this->block_range.size(), in_use_block_grant.size())
         << "in_use_block_grant must exactly cover the active block interval";
   }
 };
@@ -224,10 +201,7 @@ struct ChangeLogWriter::ActiveBlocksState {
     const ChangeLogFile::Config& config,
     const ActiveBlocksState& active_blocks) noexcept
 {
-  BlockIndex next_block_to_write = active_blocks.active_upper_bound_block;
-  if (next_block_to_write >= config.block_count) {
-    next_block_to_write = BlockIndex{next_block_to_write - config.block_count};
-  }
+  BlockIndex next_block_to_write = config.wrapped_upper_bound(active_blocks.block_range);
   this->file_offset = config.block_offset_from_index(next_block_to_write);
 }
 
@@ -240,11 +214,11 @@ struct ChangeLogWriter::ActiveBlocksState {
   if (written_blocks.block_index.has_value()) {
     const i64 block_i = *written_blocks.block_index;
 
-    BATT_CHECK(block_i == active_blocks.active_upper_bound_block ||
-               block_i + config.block_count == active_blocks.active_upper_bound_block)
+    BATT_CHECK(block_i == active_blocks.block_range.upper_bound ||
+               block_i + config.block_count == active_blocks.block_range.upper_bound)
         << "The WrittenBlocksState::block_index must agree with "
            "ActiveBlocksState::active_upper_bound_block!"
-        << BATT_INSPECT(block_i) << BATT_INSPECT(active_blocks.active_upper_bound_block)
+        << BATT_INSPECT(block_i) << BATT_INSPECT(active_blocks.block_range.upper_bound)
         << BATT_INSPECT(config.block_count);
   }
 }
@@ -766,22 +740,20 @@ Status ChangeLogWriter::activate_blocks(WrittenBlocksState& input,
     return OkStatus();
   }
 
+  const ChangeLogFile::Config& cfg = this->config();
+
   // Sanity checks.
   //
-  input.check_invariants(this->config());
-  output.check_invariants(this->config());
-  check_invariants(this->config(), input, output);
+  input.check_invariants(cfg);
+  output.check_invariants(cfg);
+  check_invariants(cfg, input, output);
 
   auto on_scope_exit = batt::finally([&] {
-    input.check_invariants(this->config());
-    output.check_invariants(this->config());
-    check_invariants(this->config(), input, output);
+    input.check_invariants(cfg);
+    output.check_invariants(cfg);
+    check_invariants(cfg, input, output);
     BATT_CHECK(input.blocks.empty());
   });
-
-  // If the input is non-empty, the next block index must be set.
-  //
-  i64 block_i = input.block_index.value_or_panic();
 
   // We must consume the entire input.
   //
@@ -795,30 +767,35 @@ Status ChangeLogWriter::activate_blocks(WrittenBlocksState& input,
       next_block->remove_ref(1);
     });
 
+    // IMPORTANT: consume the block grant before doing anything else, so we don't leak the block.
+    //
+    batt::Grant block_grant = next_block->consume_grant();
+    BATT_CHECK_EQ(block_grant.size(), 1);
+
+    // If there are no active blocks and the trim point is already past the next block, just
+    // increment the block range and keep going.
+    //
+    if (output.block_range.empty() &&
+        output.trim_edit_offset >= next_block->edit_offset_upper_bound()) {
+      cfg.increment_block_range(output.block_range);
+      continue;
+    }
+
     // Update active blocks edit offset upper bound.
     //
-    output.block_upper_bounds[block_i] = next_block->edit_offset_upper_bound().value();
+    output.block_upper_bounds[*input.block_index] = next_block->edit_offset_upper_bound().value();
 
     // Transfer grant ownership to the in_use_block_grant.
     //
-    output.in_use_block_grant.subsume(next_block->consume_grant());
+    output.in_use_block_grant.subsume(std::move(block_grant));
 
     // Advance to the next block index, with wrap-around.
     //
-    ++block_i;
-    if (block_i == this->config().block_count) {
-      block_i = 0;
-    }
-  }
+    cfg.increment_with_wrap(*input.block_index);
 
-  // Synchronize input.block_index and output.active_upper_bound_block with block_i.
-  //
-  input.block_index = BlockIndex{block_i};
-  output.active_upper_bound_block = *input.block_index;
-
-  if (output.active_upper_bound_block < output.active_lower_bound_block) {
-    output.active_upper_bound_block =
-        BlockIndex{output.active_upper_bound_block + this->config().block_count};
+    // No wrap-around for active_upper_bound_block, because it must stay >= the lower bound.
+    //
+    cfg.increment_upper_bound(output.block_range);
   }
 
   return OkStatus();
@@ -826,30 +803,30 @@ Status ChangeLogWriter::activate_blocks(WrittenBlocksState& input,
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status ChangeLogWriter::trim(EditOffset new_active_lower_bound)
+Status ChangeLogWriter::trim(EditOffset new_trim_edit_offset)
 {
   // Release any grant count after we exit the critical section below, to avoid double-locking.
   //
   Optional<batt::Grant> released_grant;
 
-  const BlockCount max_block_count{this->config().block_count};
+  const ChangeLogFile::Config& cfg = this->config();
   {
     batt::ScopedLock<State> locked_state{this->state_};
     ActiveBlocksState& s = *locked_state->active_blocks_state_;
 
     // Sanity checks.
     //
-    s.check_invariants(this->config());
+    s.check_invariants(cfg);
     auto on_scope_exit = batt::finally([&] {
-      s.check_invariants(this->config());
+      s.check_invariants(cfg);
     });
 
     // Do nothing if the new trim offset isn't greater than the current one.
     //
-    if (new_active_lower_bound <= s.active_edit_offset_lower_bound) {
+    if (new_trim_edit_offset <= s.trim_edit_offset) {
       return OkStatus();
     }
-    s.active_edit_offset_lower_bound = new_active_lower_bound;
+    s.trim_edit_offset = new_trim_edit_offset;
 
     // Keep track of how many blocks are newly trimmed.
     //
@@ -858,25 +835,18 @@ Status ChangeLogWriter::trim(EditOffset new_active_lower_bound)
     // Step through the active blocks until we reach the end or find one whose upper bound is above
     // the trim offset.
     //
-    while (s.active_lower_bound_block < s.active_upper_bound_block) {
+    while (!s.block_range.empty()) {
       // Stop at the first block whose upper bound is after the trim offset.
       //
-      if (EditOffset{s.block_upper_bounds[s.active_lower_bound_block]} > new_active_lower_bound) {
+      if (EditOffset{s.block_upper_bounds[s.block_range.lower_bound]} > new_trim_edit_offset) {
         break;
       }
 
       ++n_trimmed;
 
-      // Advance the active lower bound, with wrap-around.  We maintain the invariants:
+      // Advance the active lower bound, with wrap-around.
       //
-      //  - s.active_lower_bound_block < s.max_block_count
-      //  - s.active_lower_bound_block <= s.active_upper_bound_block
-      //
-      s.active_lower_bound_block = BlockIndex{s.active_lower_bound_block + 1};
-      if (s.active_lower_bound_block == max_block_count) {
-        s.active_lower_bound_block = BlockIndex{0};
-        s.active_upper_bound_block = BlockIndex{s.active_upper_bound_block - max_block_count};
-      }
+      cfg.increment_lower_bound(s.block_range);
     }
 
     // Release any trimmed blocks.

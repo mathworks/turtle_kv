@@ -1440,6 +1440,10 @@ Status KVStore::commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_jo
                                                   .offset = checkpoint_slot_range->upper_bound,
                                               }));
 
+  // Save the checkpoint edit upper bound before we move ownership to this->state_.
+  //
+  const EditOffset edit_upper_bound = checkpoint_job->edit_offset_upper_bound;
+
   // Update the base checkpoint and clear deltas.
   //
   Optional<llfs::slot_offset_type> prev_checkpoint_slot;
@@ -1491,6 +1495,10 @@ Status KVStore::commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_jo
   if (prev_checkpoint_slot) {
     BATT_REQUIRE_OK(this->checkpoint_log_->trim(*prev_checkpoint_slot));
   }
+
+  // Trim the change log.
+  //
+  BATT_REQUIRE_OK(this->change_log_writer_->trim(edit_upper_bound));
 
   return OkStatus();
 }

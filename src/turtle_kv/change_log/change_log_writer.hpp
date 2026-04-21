@@ -425,6 +425,17 @@ class ChangeLogWriter
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  /** \brief The state of the log file.
+   */
+  std::unique_ptr<ChangeLogFile> change_log_;
+
+  /** \brief The configuration options passed in at construction time.
+   */
+  Options options_;
+
+  batt::Grant::Issuer free_block_tokens_{
+      BATT_CHECKED_CAST(u64, this->change_log_->config().block_count.value())};
+
   Metrics metrics_;
 
   /** \brief The next unassigned EditOffset.
@@ -436,23 +447,12 @@ class ChangeLogWriter
    */
   batt::Mutex<State> state_;
 
-  /** \brief The state of the log file.
-   */
-  std::unique_ptr<ChangeLogFile> change_log_;
-
-  batt::Grant::Issuer free_block_tokens_{
-      BATT_CHECKED_CAST(u64, this->change_log_->config().block_count.value())};
-
   const usize max_batch_size_ =
 #if BATT_PLATFORM_IS_LINUX
       IOV_MAX;
 #else
       2 * kMiB / this->config().block_size;
 #endif
-
-  /** \brief The configuration options passed in at construction time.
-   */
-  Options options_;
 
   /** \brief Set to true once-and-only-once when halt() is called the first time.
    */
