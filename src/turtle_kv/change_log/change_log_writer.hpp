@@ -510,9 +510,11 @@ template <typename SerializeFn>
     // If no buffer, allocate one.
     //
     if (no_buffer) {
+      VLOG(1) << "ChangeLogWriter::append_slot - allocating new block buffer...";
       BATT_CHECK_GE(slot_edit_offset, min_edit_offset_lower_bound);
       BATT_ASSIGN_OK_RESULT(block_buffer, writer.allocate_buffer(slot_edit_offset));
       first_visit_to_block = FirstVisitToBlock{true};
+      VLOG(1) << "ChangeLogWriter::append_slot - have new buffer!";
     }
     BATT_CHECK_NOT_NULLPTR(block_buffer);
     BATT_CHECK_GE(block_buffer->edit_offset_lower_bound(), min_edit_offset_lower_bound);

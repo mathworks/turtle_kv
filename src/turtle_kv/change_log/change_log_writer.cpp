@@ -658,6 +658,7 @@ auto ChangeLogWriter::write_blocks(PreparedBlocksState& input, WrittenBlocksStat
 
   // Write!
   //
+  this->metrics_.write_count.add(1);
   BATT_ASSIGN_OK_RESULT(  //
       i32 n_written,
       batt::Task::await<StatusOr<i32>>([&](auto&& handler) {
@@ -711,7 +712,8 @@ auto ChangeLogWriter::write_blocks(PreparedBlocksState& input, WrittenBlocksStat
         // Update or verify the output block index.
         //
         if (output.block_index.has_value()) {
-          BATT_CHECK_EQ(*output.block_index, written_block_index) << "";
+          BATT_CHECK_EQ(*output.block_index, written_block_index)
+              << BATT_INSPECT(input.file_offset);
         } else {
           output.block_index = written_block_index;
         }
@@ -748,11 +750,17 @@ Status ChangeLogWriter::activate_blocks(WrittenBlocksState& input,
   output.check_invariants(cfg);
   check_invariants(cfg, input, output);
 
+  VLOG(1) << "ChangeLogWriter::activate_blocks entered --"
+          << BATT_INSPECT(output.in_use_block_grant.size());
+
   auto on_scope_exit = batt::finally([&] {
     input.check_invariants(cfg);
     output.check_invariants(cfg);
     check_invariants(cfg, input, output);
     BATT_CHECK(input.blocks.empty());
+
+    VLOG(1) << "ChangeLogWriter::activate_blocks returned--"
+            << BATT_INSPECT(output.in_use_block_grant.size());
   });
 
   // We must consume the entire input.
@@ -776,11 +784,19 @@ Status ChangeLogWriter::activate_blocks(WrittenBlocksState& input,
     batt::Grant block_grant = next_block->consume_grant();
     BATT_CHECK_EQ(block_grant.size(), 1);
 
+    VLOG(1) << BATT_INSPECT(output.block_range) << BATT_INSPECT(output.trim_edit_offset)
+            << BATT_INSPECT(next_block->edit_offset_lower_bound())
+            << BATT_INSPECT(next_block->edit_offset_upper_bound());
+
     // If there are no active blocks and the trim point is already past the next block, just
     // increment the block range and keep going.
     //
     if (output.block_range.empty() &&
         output.trim_edit_offset >= next_block->edit_offset_upper_bound()) {
+      VLOG(1) << "discarding already-trimmed block that was just written;"
+              << BATT_INSPECT(output.trim_edit_offset) << BATT_INSPECT(output.block_range)
+              << BATT_INSPECT(next_block->edit_offset_lower_bound())
+              << BATT_INSPECT(next_block->edit_offset_upper_bound());
       cfg.increment_block_range(output.block_range);
       continue;
     }
@@ -858,6 +874,8 @@ Status ChangeLogWriter::trim(EditOffset new_trim_edit_offset)
     if (n_trimmed != 0) {
       released_grant.emplace(BATT_OK_RESULT_OR_PANIC(s.in_use_block_grant.spend(n_trimmed)));
     }
+
+    VLOG(1) << BATT_INSPECT(s.in_use_block_grant.size());
   }
   return OkStatus();
 }

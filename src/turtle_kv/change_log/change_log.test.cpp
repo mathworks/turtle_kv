@@ -474,7 +474,7 @@ TEST_F(ChangeLogTest, ExceedCapacityWrapAround)
             offsets.insert(offset.value());
             std::memcpy(buffer.data(), slot_data.data(), slot_data.size());
 
-            (*writer)->trim(offset).IgnoreError();
+            (*writer)->trim(offset + EditOffsetDelta{(i64)slot_data.size()}).IgnoreError();
           });
 
       if (write_status.ok()) {

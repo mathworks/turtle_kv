@@ -100,6 +100,10 @@ class ChangeLogFile
      */
     BlockIndex block_index_from_end_offset(FileOffset block_end_offset) const noexcept
     {
+      if (block_end_offset == this->block0_offset) {
+        return BlockIndex{this->block_count - 1};
+      }
+
       FileOffset block_begin_offset{block_end_offset - this->block_size};
       BlockIndex block_index{(block_begin_offset - this->block0_offset) / this->block_size};
 
