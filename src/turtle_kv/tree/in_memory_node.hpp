@@ -160,9 +160,9 @@ struct InMemoryNode {
         // If the first element is live, don't include 0 as a cut point, only include the
         // upper bound.
         //
-        bool first_element_live = live_ranges.empty() || live_ranges.front().lower_bound ==
-                                                             PiecewiseFilter<u32>::kMinLowerBound;
-        bool ends_at_max = live_ranges.empty() ||
+        bool first_element_live = !live_ranges.empty() && live_ranges.front().lower_bound ==
+                                                              PiecewiseFilter<u32>::kMinLowerBound;
+        bool ends_at_max = !live_ranges.empty() &&
                            live_ranges.back().upper_bound == PiecewiseFilter<u32>::kMaxUpperBound;
 
         return live_ranges.size() * 2 - (first_element_live ? 1 : 0) - (ends_at_max ? 1 : 0);
