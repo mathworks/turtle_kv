@@ -356,6 +356,7 @@ u64 query_page_loader_reset_every_n()
     , log_writer_{std::move(change_log_writer)}
     , checkpoint_distance_{this->runtime_options_.initial_checkpoint_distance}
     , checkpoint_log_{std::move(checkpoint_log)}
+    , filter_page_write_state_{FilterPageWriteState::make_new()}
     , current_epoch_{0}
     , state_{[&] {
       State* state = new State{};
@@ -390,6 +391,7 @@ u64 query_page_loader_reset_every_n()
     , checkpoint_generator_{this->worker_pool_,
                             this->tree_options_,
                             this->page_cache(),
+                            batt::make_copy(this->filter_page_write_state_),
                             this->state_.load()->base_checkpoint_.clone(),
                             *this->checkpoint_log_}
 
@@ -491,12 +493,14 @@ void KVStore::halt()
   }
   this->checkpoint_update_channel_.close();
   this->checkpoint_flush_channel_.close();
+  this->filter_page_write_state_->halt();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 void KVStore::join()
 {
+  this->filter_page_write_state_->join();
   this->log_writer_->join();
   for (std::thread& t : this->memtable_compact_threads_) {
     t.join();

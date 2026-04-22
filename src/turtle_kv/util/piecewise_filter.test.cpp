@@ -1,3 +1,11 @@
+//=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
+//
+// Part of the TurtleKV Project, under Apache License v2.0.
+// See https://www.apache.org/licenses/LICENSE-2.0 for license information.
+// SPDX short identifier: Apache-2.0
+//
+//+++++++++++-+-+--+----- --- -- -  -  -   -
+
 #include <turtle_kv/util/piecewise_filter.hpp>
 //
 #include <turtle_kv/util/piecewise_filter.hpp>
@@ -94,7 +102,9 @@ TEST(PiecewiseFilterTest, QueryTest)
         live_items.erase(j);
       }
 
-      filter.drop_index_range(Interval<usize>{start_i, end_i});
+      Interval<usize> new_dropped = filter.drop_index_range(Interval<usize>{start_i, end_i});
+      EXPECT_LE(new_dropped.lower_bound, start_i);
+      EXPECT_GE(new_dropped.upper_bound, end_i);
     }
 
     EXPECT_TRUE(filter.check_invariants());
@@ -181,8 +191,11 @@ TEST(PiecewiseFilterTest, KeyQueryTest)
     // Drop an interval in the middle of the items range, and query the filter.
     //
     CInterval<std::string_view> cinterval_dropped{keys[100], keys[300]};
-    drop_item_range(filter, batt::as_const_slice(keys), cinterval_dropped, KeyRangeOrder{});
+    Interval<u32> after =
+        drop_item_range(filter, batt::as_const_slice(keys), cinterval_dropped, KeyRangeOrder{});
 
+    EXPECT_LE(after.lower_bound, 100);
+    EXPECT_GT(after.upper_bound, 300);
     EXPECT_EQ(filter.dropped_total(), 201);
 
     EXPECT_TRUE(filter.live_at_index(99));
@@ -208,8 +221,11 @@ TEST(PiecewiseFilterTest, KeyQueryTest)
     // Drop another interval that is not adjacent to the previously dropped one.
     //
     Interval<std::string_view> interval_dropped{keys[600], keys.back()};
-    drop_item_range(filter, batt::as_const_slice(keys), interval_dropped, KeyRangeOrder{});
+    Interval<u32> after2 =
+        drop_item_range(filter, batt::as_const_slice(keys), interval_dropped, KeyRangeOrder{});
 
+    EXPECT_LE(after2.lower_bound, 600);
+    EXPECT_EQ(after2.upper_bound, keys.size() - 1);
     EXPECT_TRUE(filter.live_at_index(num_keys - 1));
     EXPECT_TRUE(filter.live_at_index(400));
     EXPECT_FALSE(filter.live_at_index(600));
@@ -230,8 +246,11 @@ TEST(PiecewiseFilterTest, KeyQueryTest)
     // Drop another range in the middle, this time with overlap until the end.
     //
     cinterval_dropped = CInterval<std::string_view>{keys[500], keys[num_keys - 1]};
-    drop_item_range(filter, batt::as_const_slice(keys), cinterval_dropped, KeyRangeOrder{});
+    Interval<u32> after3 =
+        drop_item_range(filter, batt::as_const_slice(keys), cinterval_dropped, KeyRangeOrder{});
 
+    EXPECT_LE(after3.lower_bound, 500);
+    EXPECT_GE(after3.upper_bound, num_keys);
     EXPECT_FALSE(filter.live_at_index(num_keys - 1));
     EXPECT_TRUE(filter.live_at_index(301));
 
@@ -245,8 +264,10 @@ TEST(PiecewiseFilterTest, KeyQueryTest)
 
     // Drop everything.
     //
-    filter.drop_index_range(Interval<u32>{0, num_keys});
+    auto everything = Interval<u32>{0, num_keys};
+    Interval<u32> after4 = filter.drop_index_range(everything);
 
+    EXPECT_EQ(after4, everything);
     EXPECT_EQ(filter.dropped_total(), num_keys);
 
     EXPECT_FALSE(filter.live_at_index(0));

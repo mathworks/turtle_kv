@@ -1,8 +1,10 @@
 #pragma once
+#define TURTLE_KV_FILTER_BUILDER_HPP
 
 #include <turtle_kv/config.hpp>
 //
 
+#include <turtle_kv/tree/filter_page_write_state.hpp>
 #include <turtle_kv/tree/tree_options.hpp>
 
 #include <turtle_kv/util/pipeline_channel.hpp>
@@ -39,6 +41,8 @@
 
 namespace turtle_kv {
 
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+//
 struct BloomFilterMetrics {
   using Self = BloomFilterMetrics;
 
@@ -58,7 +62,10 @@ struct BloomFilterMetrics {
   LatencyMetric build_page_latency;
 };
 
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+//
 struct FilterPageAlloc {
+  boost::intrusive_ptr<FilterPageWriteState> write_state_;
   llfs::PageCache& page_cache_;
   llfs::PageCacheOvercommit overcommit_;
   llfs::PageId leaf_page_id_;
@@ -71,12 +78,14 @@ struct FilterPageAlloc {
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  explicit FilterPageAlloc(llfs::PageCache& page_cache,
+  explicit FilterPageAlloc(boost::intrusive_ptr<FilterPageWriteState>&& write_state,
+                           llfs::PageCache& page_cache,
                            llfs::PageId leaf_page_id,
                            llfs::PageLayoutId filter_page_layout_id,
                            llfs::PageSize filter_page_size,
-						   bool overcommit_triggered) noexcept
-      : page_cache_{page_cache}
+                           bool overcommit_triggered) noexcept
+      : write_state_{std::move(write_state)}
+      , page_cache_{page_cache}
       , leaf_page_id_{leaf_page_id}
   {
     this->overcommit_.allow(true);
@@ -85,15 +94,15 @@ struct FilterPageAlloc {
     this->status = [&]() -> Status {
       BATT_ASSIGN_OK_RESULT(
           this->pinned_filter_page,
-          page_cache.allocate_paired_page_for(leaf_page_id,
-                                              kPairedFilterForLeaf,
-                                              llfs::PageAllocateOptions{
-                                                  batt::make_copy(filter_page_size),
-                                                  batt::make_copy(filter_page_layout_id),
-                                                  llfs::LruPriority{kNewFilterLruPriority},
-                                                  batt::WaitForResource::kFalse,
-												  this->overcommit_,
-                                              }));
+          this->page_cache_.allocate_paired_page_for(leaf_page_id,
+                                                     kPairedFilterForLeaf,
+                                                     llfs::PageAllocateOptions{
+                                                         batt::make_copy(filter_page_size),
+                                                         batt::make_copy(filter_page_layout_id),
+                                                         llfs::LruPriority{kNewFilterLruPriority},
+                                                         batt::WaitForResource::kFalse,
+                                                         this->overcommit_,
+                                                     }));
 
       this->filter_page_id = this->pinned_filter_page.page_id();
       BATT_CHECK(this->filter_page_id);
@@ -114,10 +123,19 @@ struct FilterPageAlloc {
         std::make_shared<ViewT>(batt::make_copy(this->filter_buffer),
                                 BATT_FORWARD(extra_args)...)));
 
+    // Increment the started counter.
+    //
+    BATT_REQUIRE_OK(this->write_state_->start());
+
     this->page_cache_.async_write_paired_page(
         this->pinned_filter_page,
         kPairedFilterForLeaf,
-        [keep_page_pinned = this->pinned_filter_page](batt::Status /*ignored_for_now*/) mutable {
+        [keep_page_pinned = this->pinned_filter_page,
+         write_state = std::move(this->write_state_)](batt::Status /*ignored_for_now*/) mutable {
+          // Increment the finished counter.
+          //
+          auto local_write_state = std::move(write_state);
+          local_write_state->finish();
         });
 
     return OkStatus();
@@ -127,7 +145,8 @@ struct FilterPageAlloc {
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename ItemsT>
-Status build_bloom_filter_for_leaf(llfs::PageCache& page_cache,
+Status build_bloom_filter_for_leaf(boost::intrusive_ptr<FilterPageWriteState>&& write_state,
+                                   llfs::PageCache& page_cache,
                                    bool overcommit_triggered,
                                    usize filter_bits_per_key,
                                    llfs::PageSize filter_page_size,
@@ -141,11 +160,12 @@ Status build_bloom_filter_for_leaf(llfs::PageCache& page_cache,
   auto& metrics = BloomFilterMetrics::instance();
 
   FilterPageAlloc alloc{
+      std::move(write_state),
       page_cache,
       leaf_page_id,
       llfs::PackedBloomFilterPage::page_layout_id(),
       filter_page_size,
-	  overcommit_triggered,
+      overcommit_triggered,
   };
   BATT_REQUIRE_OK(alloc.status);
 
@@ -247,7 +267,8 @@ inline Status build_vqf_filter(const MutableBuffer& filter_buffer,
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename ItemsT>
-Status build_quotient_filter_for_leaf(llfs::PageCache& page_cache,
+Status build_quotient_filter_for_leaf(boost::intrusive_ptr<FilterPageWriteState>&& write_state,
+                                      llfs::PageCache& page_cache,
                                       bool overcommit_triggered,
                                       usize filter_bits_per_key,
                                       llfs::PageSize filter_page_size,
@@ -259,11 +280,12 @@ Status build_quotient_filter_for_leaf(llfs::PageCache& page_cache,
   }
 
   FilterPageAlloc alloc{
+      std::move(write_state),
       page_cache,
       leaf_page_id,
       VqfFilterPageView::page_layout_id(),
       filter_page_size,
-	  overcommit_triggered,
+      overcommit_triggered,
   };
   BATT_REQUIRE_OK(alloc.status);
 
@@ -341,7 +363,8 @@ Status build_quotient_filter_for_leaf(llfs::PageCache& page_cache,
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename ItemsT>
-auto build_filter_for_leaf_in_job(llfs::PageCache& page_cache,
+auto build_filter_for_leaf_in_job(boost::intrusive_ptr<FilterPageWriteState>&& write_state,
+                                  llfs::PageCache& page_cache,
                                   bool overcommit_triggered,
                                   usize filter_bits_per_key,
                                   llfs::PageSize filter_page_size,
@@ -349,7 +372,8 @@ auto build_filter_for_leaf_in_job(llfs::PageCache& page_cache,
                                   const ItemsT& items)
 {
 #if TURTLE_KV_USE_BLOOM_FILTER
-  Status filter_status = build_bloom_filter_for_leaf(page_cache,
+  Status filter_status = build_bloom_filter_for_leaf(std::move(write_state),
+                                                     page_cache,
                                                      overcommit_triggered,
                                                      filter_bits_per_key,
                                                      filter_page_size,
@@ -357,7 +381,8 @@ auto build_filter_for_leaf_in_job(llfs::PageCache& page_cache,
                                                      items);
 
 #elif TURTLE_KV_USE_QUOTIENT_FILTER
-  Status filter_status = build_quotient_filter_for_leaf(page_cache,
+  Status filter_status = build_quotient_filter_for_leaf(std::move(write_state),
+                                                        page_cache,
                                                         overcommit_triggered,
                                                         filter_bits_per_key,
                                                         filter_page_size,

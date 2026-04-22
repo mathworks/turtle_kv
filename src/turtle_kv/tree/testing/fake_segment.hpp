@@ -1,3 +1,11 @@
+//=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
+//
+// Part of the TurtleKV Project, under Apache License v2.0.
+// See https://www.apache.org/licenses/LICENSE-2.0 for license information.
+// SPDX short identifier: Apache-2.0
+//
+//+++++++++++-+-+--+----- --- -- -  -  -   -
+
 #pragma once
 
 #include <turtle_kv/tree/testing/fake_page_loader.hpp>
@@ -102,15 +110,15 @@ struct FakeSegment {
   }
 
   template <typename Traits>
-  void drop_key_range(const BasicInterval<Traits>& key_range,
-                      const Slice<const PackedKeyValue>& items)
+  Interval<u32> drop_key_range(const BasicInterval<Traits>& key_range,
+                               const Slice<const PackedKeyValue>& items)
   {
-    drop_item_range(this->filter_, items, key_range, llfs::KeyRangeOrder{});
+    return drop_item_range(this->filter_, items, key_range, llfs::KeyRangeOrder{});
   }
 
-  void drop_index_range(Interval<u32> i)
+  Interval<u32> drop_index_range(Interval<u32> i)
   {
-    this->filter_.drop_index_range(i);
+    return this->filter_.drop_index_range(i);
   }
 
   bool is_index_filtered(const FakeLevel&, u32 index) const

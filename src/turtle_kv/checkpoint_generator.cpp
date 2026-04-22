@@ -11,14 +11,18 @@ namespace turtle_kv {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-/*explicit*/ CheckpointGenerator::CheckpointGenerator(batt::WorkerPool& worker_pool,    //
-                                                      const TreeOptions& tree_options,  //
-                                                      llfs::PageCache& cache,           //
-                                                      Checkpoint&& base_checkpoint,     //
-                                                      llfs::Volume& checkpoint_volume) noexcept
+/*explicit*/ CheckpointGenerator::CheckpointGenerator(
+    batt::WorkerPool& worker_pool,
+    const TreeOptions& tree_options,
+    llfs::PageCache& cache,
+    boost::intrusive_ptr<FilterPageWriteState>&& filter_page_write_state,
+    Checkpoint&& base_checkpoint,
+    llfs::Volume& checkpoint_volume) noexcept
+    //----- --- -- -  -  -   -
     : worker_pool_{worker_pool}
     , tree_options_{tree_options}
     , cache_{cache}
+    , filter_page_write_state_{std::move(filter_page_write_state)}
     , base_checkpoint_{std::move(base_checkpoint)}
     , stop_requested_{false}
     , checkpoint_volume_{checkpoint_volume}
@@ -164,7 +168,8 @@ Status CheckpointGenerator::serialize_checkpoint(llfs::PageCacheOvercommit& over
                         this->base_checkpoint_.serialize(this->tree_options_,
                                                          *this->job_,
                                                          overcommit,
-                                                         this->worker_pool_));
+                                                         this->worker_pool_,
+                                                         this->filter_page_write_state_));
 
   return OkStatus();
 }
