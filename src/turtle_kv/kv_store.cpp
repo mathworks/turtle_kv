@@ -841,11 +841,38 @@ StatusOr<ValueView> KVStore::get(const KeyView& key) noexcept /*override*/
 {
   batt::Toggle<State>::Reader state_reader{this->state_};
 
+  //----- --- -- -  -  -   -
+  // TODO [tastolfi 2026-04-21] revert
+  //
+  StatusOr<ValueView> value = this->get_impl(*state_reader, key, /*no_invalidate=*/false);
+
+  if constexpr (false) {
+    if (state_reader->prev_checkpoint_state_ && state_reader->base_checkpoint_ &&
+        state_reader->prev_checkpoint_state_->base_checkpoint_ &&
+        state_reader->base_checkpoint_->edit_offset_upper_bound() !=
+            state_reader->prev_checkpoint_state_->base_checkpoint_->edit_offset_upper_bound()  //
+    ) {
+      StatusOr<ValueView> value2 =
+          this->get_impl(*state_reader->prev_checkpoint_state_, key, /*no_invalidate=*/true);
+      BATT_CHECK_EQ(value, value2);
+    }
+  }
+  //----- --- -- -  -  -   -
+
+  return value;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+StatusOr<ValueView> KVStore::get_impl(const State& state,
+                                      const KeyView& key,
+                                      bool no_invalidate) noexcept /*override*/
+{
   // First check the current active MemTable.
   //
   Optional<ValueView> value = TURTLE_KV_COLLECT_LATENCY_SAMPLE(batt::Every2ToTheConst<14>{},
                                                                this->metrics_.mem_table_get_latency,
-                                                               state_reader->mem_table_->get(key));
+                                                               state.mem_table_->get(key));
 
   const auto return_mem_table_value =
       [](Optional<ValueView> mem_table_value,
@@ -865,10 +892,10 @@ StatusOr<ValueView> KVStore::get(const KeyView& key) noexcept /*override*/
 
   // Second, check recently finalized MemTables (the deltas_ stack).
   //
-  const usize observed_deltas_size = state_reader->deltas_.size();
+  const usize observed_deltas_size = state.deltas_.size();
   for (usize i = observed_deltas_size; i != 0;) {
     --i;
-    const boost::intrusive_ptr<MemTable>& delta = state_reader->deltas_[i];
+    const boost::intrusive_ptr<MemTable>& delta = state.deltas_[i];
 
     Optional<ValueView> delta_value =
         TURTLE_KV_COLLECT_LATENCY_SAMPLE(batt::Every2ToTheConst<18>{},
@@ -899,7 +926,9 @@ StatusOr<ValueView> KVStore::get(const KeyView& key) noexcept /*override*/
   ThreadContext& thread_context = this->per_thread_.get(this);
 
   ++thread_context.query_count;
-  thread_context.query_result_storage.emplace();
+  if (!no_invalidate) {
+    thread_context.query_result_storage.emplace();
+  }
 
   llfs::PageLoader& page_loader = thread_context.get_page_loader();
 
@@ -913,7 +942,7 @@ StatusOr<ValueView> KVStore::get(const KeyView& key) noexcept /*override*/
   StatusOr<ValueView> value_from_checkpoint =
       TURTLE_KV_COLLECT_LATENCY_SAMPLE(batt::Every2ToTheConst<12>{},
                                        this->metrics_.checkpoint_get_latency,
-                                       state_reader->base_checkpoint_->find_key(query));
+                                       state.base_checkpoint_->find_key(query));
 
   if (value_from_checkpoint.ok()) {
     // VLOG(1) << "found key " << batt::c_str_literal(key) << " in checkpoint tree";
@@ -1016,6 +1045,8 @@ Status KVStore::reset_active_mem_table(EditOffset current_edit_offset)
   new_state.base_checkpoint_ = old_state.base_checkpoint_;
   new_state.deltas_ = old_state.deltas_;
   new_state.deltas_.emplace_back(old_state.mem_table_);
+  // TODO [tastolfi 2026-04-21] remove vvv
+  // new_state.prev_checkpoint_state_.reset(new State{new_state});
 
   BATT_CHECK_EQ(new_state.mem_table_->edit_offset_lower_bound(), current_edit_offset);
 
@@ -1217,7 +1248,9 @@ void KVStore::mem_table_batch_scanner_thread_main()
     }
   }();
 
-  LOG(INFO) << "mem_table_compact_thread done: " << BATT_INSPECT(status);
+  if (VLOG_IS_ON(1) || (!status.ok() && !this->halt_.get_value())) {
+    LOG(INFO) << "mem_table_compact_thread done: " << BATT_INSPECT(status);
+  }
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -1299,7 +1332,9 @@ void KVStore::checkpoint_update_thread_main()
     }
   }();
 
-  LOG(INFO) << "checkpoint_update_thread done: " << BATT_INSPECT(status);
+  if (VLOG_IS_ON(1) || (!status.ok() && !this->halt_.get_value())) {
+    LOG(INFO) << "checkpoint_update_thread done: " << BATT_INSPECT(status);
+  }
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -1408,7 +1443,9 @@ void KVStore::checkpoint_flush_thread_main()
     }
   }();
 
-  LOG(INFO) << "checkpoint_flush_thread done: " << BATT_INSPECT(status);
+  if (VLOG_IS_ON(1) || (!status.ok() && !this->halt_.get_value())) {
+    LOG(INFO) << "checkpoint_flush_thread done: " << BATT_INSPECT(status);
+  }
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -1456,6 +1493,10 @@ Status KVStore::commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_jo
     new_state.base_checkpoint_ = std::move(*checkpoint_job->checkpoint);
     new_state.base_checkpoint_->notify_durable(std::move(*slot_read_lock));
     new_state.base_checkpoint_->tree()->lock();
+    //----- --- -- -  -  -   -
+    // TODO [tastolfi 2026-04-21] REMOVE!!
+    // new_state.prev_checkpoint_state_.reset(new State{old_state});
+    //----- --- -- -  -  -   -
 
     BATT_CHECK(new_state.base_checkpoint_->tree()->is_serialized());
     BATT_CHECK(old_state.base_checkpoint_->tree()->is_serialized());
@@ -1479,9 +1520,51 @@ Status KVStore::commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_jo
                                  checkpoint_job,
                                  OrderByEditOffsetUpperBound{});
 
+    //----- --- -- -  -  -   -
+    // TODO [tastolfi 2026-04-21] REMOVE!!!
+    if constexpr (false) {
+      auto iter2 = old_state.deltas_.begin();
+      while (iter2 != old_state.deltas_.end()) {
+        if (iter2->get()->edit_offset_upper_bound() <= checkpoint_job->edit_offset_upper_bound) {
+          ++iter2;
+          continue;
+        }
+        break;
+      }
+
+      if (iter != iter2) {
+        LOG(INFO) << "------------------";
+        LOG(INFO) << BATT_INSPECT(edit_upper_bound);
+        LOG(INFO) << BATT_INSPECT(old_state.deltas_.size());
+        LOG(INFO) << BATT_INSPECT(std::distance(old_state.deltas_.begin(), iter));
+        LOG(INFO) << BATT_INSPECT(std::distance(old_state.deltas_.begin(), iter2));
+
+        for (auto& d : old_state.deltas_) {
+          LOG(INFO) << "old delta: " << BATT_INSPECT(d->edit_offset_lower_bound())
+                    << BATT_INSPECT(d->edit_offset_upper_bound());
+        }
+
+        LOG(INFO) << BATT_INSPECT(get_edit_offset_upper_bound(checkpoint_job));
+      }
+
+      BATT_CHECK_EQ(iter, iter2);
+    }
+    //----- --- -- -  -  -   -
+
     // Copy over references to delta MemTables _newer_ than the checkpoint.
     //
     new_state.deltas_.assign(iter, old_state.deltas_.end());
+
+    //----- --- -- -  -  -   -
+    // TODO [tastolfi 2026-04-21] REMOVE!!!
+    if constexpr (false) {
+      LOG(INFO) << BATT_INSPECT(new_state.deltas_.size());
+      for (auto& d : new_state.deltas_) {
+        LOG(INFO) << "new delta: " << BATT_INSPECT(d->edit_offset_lower_bound())
+                  << BATT_INSPECT(d->edit_offset_upper_bound());
+      }
+    }
+    //----- --- -- -  -  -   -
 
     BATT_CHECK_LE(new_state.deltas_.size(), old_state.deltas_.size())
         << "Deltas should never grow as a result of committing a checkpoint!";

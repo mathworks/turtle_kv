@@ -361,9 +361,9 @@ batt::Status ChangeLogFile::read_blocks(SerializeFn process_block)
         ChangeLogBlock::recover(std::move(block_memory));
 
     if (block.status() == batt::StatusCode::kOutOfRange) {
-      LOG(INFO) << "Recovered " << blocks_read
-                << " blocks. Stopped reading with status:" << BATT_INSPECT(block.status())
-                << BATT_INSPECT(file_offset) << BATT_INSPECT(file_offset);
+      VLOG(1) << "Recovered " << blocks_read
+              << " blocks. Stopped reading with status:" << BATT_INSPECT(block.status())
+              << BATT_INSPECT(file_offset) << BATT_INSPECT(file_offset);
 
       return batt::OkStatus();
 

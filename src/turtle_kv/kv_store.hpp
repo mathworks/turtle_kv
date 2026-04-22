@@ -161,8 +161,14 @@ class KVStore : public Table
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  /** \brief Start shutting down the KVStore.
+   *
+   * This initiates, but does not wait for the completion of, shutdown.  See also KVStore::join.
+   */
   void halt();
 
+  /** \brief Waits for the KVStore to finish shutting down.
+   */
   void join();
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -225,14 +231,20 @@ class KVStore : public Table
  private:
   struct State {
     boost::intrusive_ptr<MemTable> mem_table_;
+
     std::vector<boost::intrusive_ptr<MemTable>> deltas_;
+
     Optional<Checkpoint> base_checkpoint_;
+
+    std::shared_ptr<const State> prev_checkpoint_state_;
   };
 
   static_assert(std::default_initializable<State>);
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  /** \brief (internal use only) KVStore instances must be created via `KVStore::open`.
+   */
   explicit KVStore(batt::TaskScheduler& task_scheduler,
                    batt::WorkerPool& worker_pool,
                    llfs::ScopedIoRing&& scoped_io_ring,
@@ -276,8 +288,15 @@ class KVStore : public Table
    */
   Status hand_off_finalized_mem_table(boost::intrusive_ptr<MemTable>&& old_mem_table);
 
+  /** \brief Blocks the caller until either the KVStore is `halt()`-ed or a new MemTable with
+   * `edit_offset_lower_bound() >= target_edit_offset` is activated.
+   */
   Status wait_for_new_mem_table(EditOffset target_edit_offset);
 
+  /** \brief The entry point of a background task whose sole purpose is to report metrics and other
+   * diagnostic information as `BATT_DEBUG_INFO` (so it will be printed when the debug info signal
+   * is trapped).
+   */
   void info_task_main() noexcept;
 
   template <typename Fn>
@@ -310,6 +329,11 @@ class KVStore : public Table
                      ChangeLogBlock* block,
                      EditOffset edit_offset,
                      ConstBuffer payload);
+
+  //----- --- -- -  -  -   -
+  // TODO [tastolfi 2026-04-21] REMOVE?
+  StatusOr<ValueView> get_impl(const State& state, const KeyView& key, bool no_invalidate) noexcept;
+  //----- --- -- -  -  -   -
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 

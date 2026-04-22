@@ -82,7 +82,7 @@ Status BasicMemTable<StorageT, AllocationTrackerT>::put(
   // hasn't been finalized).
   //
   const i64 edit_size = PackedSizeOfEdit{}(key.size(), value.size());
-  BATT_ASSIGN_OK_RESULT(const i64 total_size_before, this->prepare_edit(edit_size));
+  BATT_REQUIRE_OK(this->prepare_edit(edit_size));
 
   // Now that we have successfully reserved space in the MemTable, we *must* increase
   // this->committed_bytes_total_ by the same amount after we are done modifying the log/index;
@@ -92,7 +92,7 @@ Status BasicMemTable<StorageT, AllocationTrackerT>::put(
     this->commit_edit(edit_size);
   });
 
-  PerOpStorageContext op_storage_context{*this, storage_writer_context, total_size_before};
+  PerOpStorageContext op_storage_context{*this, storage_writer_context};
   {
     MemTableValueEntryInserter<PerOpStorageContext> inserter{
         op_storage_context,
@@ -138,6 +138,7 @@ StatusOr<i64> BasicMemTable<StorageT, AllocationTrackerT>::prepare_edit(i64 pack
   //
   if (prior_value + packed_edit_size <= this->max_byte_size_.load() &&
       this->overcommit_triggered_.load() == false) {
+    BATT_CHECK_EQ((prior_value & Self::kFinalizedMask), 0);
     return {prior_value};
   }
 
@@ -456,11 +457,20 @@ BasicMemTable<StorageT, AllocationTrackerT>::BatchCompactor::consume_next() noex
     for (; !this->scanner_.is_done(); this->scanner_.advance()) {
       const MemTableValueEntry& entry = this->scanner_.get_value();
 
+      //----- --- -- -  -  -   -
+      // TODO [tastolfi 2026-04-21] REMOVE THIS!!!
+      BATT_CHECK_LT(this->prev_key_, entry.key_view());
+      //----- --- -- -  -  -   -
+
       EditView edit{entry.key_view(), entry.value_view()};
       total_size += packed_size_of(edit);
 
       if (total_size < this->byte_size_limit_) {
         edits_out.emplace_back(edit);
+        //----- --- -- -  -  -   -
+        // TODO [tastolfi 2026-04-21] REMOVE THIS!!!
+        this->prev_key_ = entry.key_view();
+        //----- --- -- -  -  -   -
       } else {
         break;
       }

@@ -28,6 +28,8 @@
 
 namespace turtle_kv {
 
+usize free_all_blocks();
+
 /** \brief A per-thread/task buffer that receives formatted slot data.
  *
  * Instances of Buffer are created via placement-new at the beginning of aligned memory regions
@@ -159,7 +161,7 @@ class ChangeLogBlock
   static void free_allocated(ChangeLogBlock* block)
   {
     block->~ChangeLogBlock();
-    free(block);
+    std::free(block);
   }
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -344,6 +346,8 @@ class ChangeLogBlock
    * _current_ ready region is returned; the rest is released to the Grant::Issuer pool.
    */
   batt::Grant consume_grant() noexcept;
+
+  bool release_grant() noexcept;  // TODO [tastolfi 2026-04-21] remove
 
   /** \brief Perform basic sanity checks to make sure this is a valid ChangeLogBlock object.
    */

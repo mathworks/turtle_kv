@@ -771,6 +771,7 @@ Status ChangeLogWriter::activate_blocks(WrittenBlocksState& input,
     auto on_loop_body_exit = batt::finally([&] {
       // Remove the first element and release the block each time we reach the end of the loop body.
       //
+      input.blocks.front() = nullptr;
       input.blocks.pop_front();
       next_block->remove_ref(1);
 

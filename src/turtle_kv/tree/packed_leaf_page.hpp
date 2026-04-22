@@ -758,6 +758,23 @@ inline PackedLeafPage* build_leaf_page(MutableBuffer buffer,
         break;
       }
 
+      //+++++++++++-+-+--+----- --- -- -  -  -   -
+      // TODO [tastolfi 2026-04-21] START REMOVE vvvvv
+      //
+      BATT_DEBUG_INFO(BATT_INSPECT_RANGE(pivot_keys));
+
+      static std::atomic<i64> ok_count{0};
+
+      BATT_CHECK(std::is_sorted(pivot_keys.begin(), pivot_keys.end()))
+          << BATT_INSPECT(
+                 std::is_sorted(p_header->items_begin(), p_header->items_end(), KeyOrder{}))
+          << BATT_INSPECT(ok_count);  // TODO [tastolfi 2026-04-21] REMOVE!!!!
+
+      ok_count.fetch_add(1);
+      //
+      // TODO [tastolfi 2026-04-21] END REMOVE ^^^^^
+      //+++++++++++-+-+--+----- --- -- -  -  -   -
+
       llfs::BPTrie in_memory_trie{pivot_keys};
 
       const usize packed_trie_size = in_memory_trie.packed_size();

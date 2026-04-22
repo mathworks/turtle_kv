@@ -32,6 +32,11 @@ struct MockMemTableStorage {
     MOCK_METHOD(i32, ref_count, (), (const));
     MOCK_METHOD(void, add_ref, (i32 delta), (const));
     MOCK_METHOD(void, remove_ref, (i32 count), ());
+
+    usize slot_count() const
+    {
+      return 0;
+    }
   };
 
   struct WriterContext {
