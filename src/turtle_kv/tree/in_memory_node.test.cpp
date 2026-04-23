@@ -578,7 +578,7 @@ TEST(InMemoryNodeTest, SubtreeDeletions)
     for (usize i = 0; i < items_per_leaf; ++i) {
       usize key_i = batch_number + i * total_batches;
       if (key_i < keys.size()) {
-         current_batch.emplace_back(keys[key_i], ValueView::deleted());
+        current_batch.emplace_back(keys[key_i], ValueView::deleted());
       }
     }
 
@@ -647,7 +647,8 @@ TEST(InMemoryNodeTest, SubtreeDeletions)
         TreeSerializeContext context{tree_options,
                                      *page_job,
                                      worker_pool,
-                                     llfs::PageCacheOvercommit::not_allowed()};
+                                     llfs::PageCacheOvercommit::not_allowed(),
+                                     turtle_kv::FilterPageWriteState::make_new()};
 
         Status start_status = tree.start_serialize(context);
         ASSERT_TRUE(start_status.ok()) << BATT_INSPECT(start_status);

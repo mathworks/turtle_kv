@@ -249,6 +249,8 @@ struct InMemoryNode {
         // Nothing to do!
       }
 
+      Level merge(Level&& sibling_level, usize node_pivot_count);
+
       SmallFn<void(std::ostream&)> dump() const;
     };
 
@@ -364,6 +366,8 @@ struct InMemoryNode {
        */
       usize segment_filter_cut_points() const;
 
+      void push_front_pivots(usize node_pivot_count);
+
       /** \brief Merges this level with a "sibling" level from another node.
        *
        * This function is called when two nodes are being merged and their update buffers are
@@ -461,7 +465,7 @@ struct InMemoryNode {
         return this->result_set.empty();
       }
 
-      Level merge(Level&& sibling_level);
+      Level merge(Level&& sibling_level, usize node_pivot_count);
 
       /** \brief Returns the number of segment leaf page build jobs added to the context.
        */
@@ -497,6 +501,8 @@ struct InMemoryNode {
                             std::make_move_iterator(other.levels.begin()),
                             std::make_move_iterator(other.levels.end()));
       }
+
+      void push_front_pivots(usize node_pivot_count);
 
       bool set_pivot_items_flushed(const InMemoryNode& node,
                                    BatchUpdateContext& update_context,
@@ -536,7 +542,7 @@ struct InMemoryNode {
                         i32 left_pivot_i,
                         i32 right_pivot_i);
 
-      Level merge(Level&& sibling_level);
+      Level merge(Level&& sibling_level, usize node_pivot_count);
 
       StatusOr<usize> start_serialize(const InMemoryNode& node, TreeSerializeContext& context);
 

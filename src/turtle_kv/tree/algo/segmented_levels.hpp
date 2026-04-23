@@ -288,9 +288,16 @@ struct SegmentedLevelAlgorithms {
   {
     const usize segment_count = this->level_.segment_count();
 
-    for (usize segment_i = 0; segment_i < segment_count; ++segment_i) {
+    for (usize segment_i = 0; segment_i < segment_count;) {
       SegmentT& segment = this->level_.get_segment(segment_i);
+      
       in_segment(segment).merge_pivots(left_pivot, right_pivot, this->level_);
+      
+      if (segment.is_inactive()) {
+        this->level_.drop_segment(segment_i);
+      } else {
+        ++segment_i;
+      }
     }
   }
 
