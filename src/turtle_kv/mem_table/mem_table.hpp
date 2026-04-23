@@ -335,8 +335,6 @@ class BasicMemTable : public MemTableBase
 
   batt::CpuCacheLineIsolated<std::atomic<i64>> committed_bytes_total_{0};
 
-  std::atomic<i64> min_log_block_lower_bound_{this->edit_offset_lower_bound_.value()};
-
   absl::Mutex block_list_mutex_;
 
   batt::SmallVec<StorageBlockBuffer*, Self::kBlockListPreAllocSize> block_buffers_;
@@ -381,11 +379,9 @@ class BasicMemTable<StorageT, AllocationTrackerT>::PerOpStorageContext
 {
  public:
   explicit PerOpStorageContext(BasicMemTable& mem_table,
-                               StorageWriterContext& storage_writer_context,
-                               i64 total_size_before) noexcept
+                               StorageWriterContext& storage_writer_context) noexcept
       : mem_table_{mem_table}
       , storage_writer_context_{storage_writer_context}
-      , total_size_before_{total_size_before}
   {
   }
 
@@ -394,11 +390,13 @@ class BasicMemTable<StorageT, AllocationTrackerT>::PerOpStorageContext
   Status store_data(usize n_bytes, SerializeFn&& serialize_fn) noexcept
   {
     return this->storage_writer_context_.append_slot(
+        this->mem_table_.edit_offset_lower_bound(),
         n_bytes,
         [&](FirstVisitToBlock first_visit,
             StorageBlockBuffer* buffer,
             MutableBuffer dst,
             EditOffset slot_edit_offset) {
+          BATT_CHECK_EQ(buffer->slot_count() == 0, first_visit);
           if (first_visit) {
             this->mem_table_.attach_block_buffer(buffer);
           }
@@ -409,7 +407,6 @@ class BasicMemTable<StorageT, AllocationTrackerT>::PerOpStorageContext
  private:
   BasicMemTable& mem_table_;
   StorageWriterContext& storage_writer_context_;
-  i64 total_size_before_;
 };
 
 /** \brief Returns the lower bound EditOffset included in the passed MemTable.

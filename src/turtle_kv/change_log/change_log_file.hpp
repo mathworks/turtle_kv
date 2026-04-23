@@ -12,14 +12,15 @@
 #include <turtle_kv/api_types.hpp>
 #include <turtle_kv/change_log/change_log_block.hpp>
 #include <turtle_kv/change_log/change_log_file_metrics.hpp>
-#include <turtle_kv/change_log/change_log_read_lock.hpp>
 #include <turtle_kv/file_utils.hpp>
 
+#include <turtle_kv/import/bit_ops.hpp>
 #include <turtle_kv/import/buffer.hpp>
 #include <turtle_kv/import/constants.hpp>
 #include <turtle_kv/import/int_types.hpp>
 #include <turtle_kv/import/interval.hpp>
 #include <turtle_kv/import/optional.hpp>
+#include <turtle_kv/import/slice.hpp>
 #include <turtle_kv/import/status.hpp>
 
 #include <llfs/config.hpp>
@@ -35,6 +36,7 @@
 #include <batteries/cpu_align.hpp>
 #include <batteries/interval.hpp>
 #include <batteries/metrics/metric_collectors.hpp>
+#include <batteries/operators.hpp>
 #include <batteries/pointers.hpp>
 #include <batteries/shared_ptr.hpp>
 #include <batteries/small_vec.hpp>
@@ -46,20 +48,16 @@
 #include <memory>
 #include <unordered_set>
 
-#if BATT_PLATFORM_IS_LINUX
-#include <limits.h>
-#endif
-
 namespace turtle_kv {
 
 class ChangeLogFile
 {
-  friend class ChangeLogReadLock;
+  friend class ChangeLogWriter;
 
  public:
   using ReadLockCounter = batt::CpuCacheLineIsolated<std::atomic<i64>>;
-  using ReadLock = ChangeLogReadLock;
   using Metrics = ChangeLogFileMetrics;
+  using BlockBuffer = ChangeLogBlock;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -84,9 +82,133 @@ class ChangeLogFile
 
     void pack_to(PackedConfig* packed_config) const noexcept;
 
-    FileOffset block_offset_end() const noexcept
+    /** \brief Returns the file offset corresponding to the end of the last block.
+     */
+    FileOffset last_block_end_offset() const noexcept
     {
-      return FileOffset{this->block0_offset + (this->block_size * this->block_count)};
+      return this->block_offset_from_index(BlockIndex{this->block_count});
+    }
+
+    /** \brief Returns the file offset of the beginning of the specific block.
+     */
+    FileOffset block_offset_from_index(BlockIndex block_index) const noexcept
+    {
+      return FileOffset{this->block0_offset + (this->block_size * block_index)};
+    }
+
+    /** \brief Returns the index of the block that *ends* at `block_end_offset`.
+     */
+    BlockIndex block_index_from_end_offset(FileOffset block_end_offset) const noexcept
+    {
+      if (block_end_offset == this->block0_offset) {
+        return BlockIndex{this->block_count - 1};
+      }
+
+      FileOffset block_begin_offset{block_end_offset - this->block_size};
+      BlockIndex block_index{(block_begin_offset - this->block0_offset) / this->block_size};
+
+      BATT_CHECK_EQ(block_begin_offset, this->block_offset_from_index(block_index))
+          << "The passed `block_end_offset` must be aligned to the block size!"
+          << BATT_INSPECT(this->block_size) << BATT_INSPECT(block_end_offset)
+          << BATT_INSPECT(block_index);
+
+      return block_index;
+    }
+
+    /** \brief Increments the passed block index variable, with no wrap-around.
+     */
+    BlockIndex& increment_no_wrap(BlockIndex& block_index) const noexcept
+    {
+      block_index = BlockIndex{block_index + 1};
+      return block_index;
+    }
+
+    /** \brief Increments the passed block index variable, applying wrap-around.
+     */
+    BlockIndex& increment_with_wrap(BlockIndex& block_index) const noexcept
+    {
+      if (this->increment_no_wrap(block_index) == this->block_count) {
+        block_index = BlockIndex{0};
+      }
+      return block_index;
+    }
+
+    /** \brief Increments the lower bound of the passed interval, wrapping around at
+     * this->block_count while maintaining the size of the interval.
+     */
+    Interval<BlockIndex>& increment_lower_bound(Interval<BlockIndex>& block_range) const noexcept
+    {
+      this->check_invariants(block_range);
+      auto on_scope_exit = batt::finally([&] {
+        this->check_invariants(block_range);
+      });
+
+      this->increment_no_wrap(block_range.lower_bound);
+
+      return this->wrap_block_range(block_range);
+    }
+
+    /** \brief If the lower bound is this->block_count, shifts upper and lower bound down by
+     * block_count.
+     */
+    Interval<BlockIndex>& wrap_block_range(Interval<BlockIndex>& block_range) const noexcept
+    {
+      BATT_CHECK_LT(block_range.lower_bound, this->block_count * 2);
+
+      if (block_range.lower_bound >= this->block_count) {
+        block_range.lower_bound = BlockIndex{block_range.lower_bound - this->block_count};
+        block_range.upper_bound = BlockIndex{block_range.upper_bound - this->block_count};
+      }
+      return block_range;
+    }
+
+    /** \brief Increments the upper bound of the passed interval.
+     */
+    Interval<BlockIndex>& increment_upper_bound(Interval<BlockIndex>& block_range) const noexcept
+    {
+      this->check_invariants(block_range);
+      auto on_scope_exit = batt::finally([&] {
+        this->check_invariants(block_range);
+      });
+
+      this->increment_no_wrap(block_range.upper_bound);
+
+      return block_range;
+    }
+
+    Interval<BlockIndex>& increment_block_range(Interval<BlockIndex>& block_range) const noexcept
+    {
+      this->check_invariants(block_range);
+      auto on_scope_exit = batt::finally([&] {
+        this->check_invariants(block_range);
+      });
+
+      this->increment_no_wrap(block_range.lower_bound);
+      this->increment_no_wrap(block_range.upper_bound);
+
+      return this->wrap_block_range(block_range);
+    }
+
+    /** \brief Returns the upper bound of the passed interval, with wrap-around.
+     */
+    BlockIndex wrapped_upper_bound(const Interval<BlockIndex>& block_range) const noexcept
+    {
+      this->check_invariants(block_range);
+      if (block_range.upper_bound < this->block_count) {
+        return block_range.upper_bound;
+      }
+      const BlockIndex wrapped{block_range.upper_bound - this->block_count};
+      BATT_CHECK_LE(wrapped, this->block_count);
+      return wrapped;
+    }
+
+    /** \brief Panics if the passed interval is not well formed for this configuration.
+     */
+    void check_invariants(const Interval<BlockIndex>& block_range) const noexcept
+    {
+      BATT_CHECK_LT(block_range.lower_bound, this->block_count);
+      BATT_CHECK_LE(block_range.lower_bound, block_range.upper_bound);
+      BATT_CHECK_LE(block_range.upper_bound - block_range.lower_bound, this->block_count);
     }
   };
 
@@ -155,57 +277,16 @@ class ChangeLogFile
   template <typename SerializeFn = batt::Status(boost::intrusive_ptr<ChangeLogBlock>)>
   batt::Status read_blocks(SerializeFn process_block);
 
-  StatusOr<ReadLock> append(batt::Grant& grant, batt::SmallVecBase<ConstBuffer>& data) noexcept;
-
-  Interval<i64> active_blocks() noexcept
+  FileByteCount capacity() const
   {
-    return {this->lower_bound_.load(), this->upper_bound_.load()};
+    return FileByteCount{this->config_.block_count * this->config_.block_size};
   }
 
-  i64 active_block_count() const
+  auto size() const
   {
-    return this->upper_bound_.load() - this->lower_bound_.load();
-  }
-
-  i64 size() const
-  {
-    return this->active_block_count() * this->config_.block_size;
-  }
-
-  i64 capacity() const
-  {
-    return this->config_.block_count * this->config_.block_size;
-  }
-
-  i64 max_block_count() const
-  {
-    return this->config_.block_count;
-  }
-
-  i64 block_size() const
-  {
-    return this->config_.block_size;
-  }
-
-  i64 space() const
-  {
-    return this->capacity() - this->size();
-  }
-
-  u64 available_block_tokens() const
-  {
-    return this->free_block_tokens_.available();
-  }
-
-  u64 in_use_block_tokens() const
-  {
-    return this->in_use_block_tokens_.size();
-  }
-
-  u64 reserved_block_tokens() const
-  {
-    return this->config_.block_count -
-           (this->available_block_tokens() + this->in_use_block_tokens());
+    // TODO [tastolfi 2026-04-20] fix this to be accurate
+    //
+    return this->capacity();
   }
 
   const Metrics& metrics() const
@@ -213,24 +294,18 @@ class ChangeLogFile
     return this->metrics_;
   }
 
+  Metrics& metrics()
+  {
+    return this->metrics_;
+  }
+
+  llfs::IoRing::File& file() noexcept
+  {
+    return this->file_;
+  }
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
-  template <typename Fn = void(i64 block_i, ReadLockCounter& counter)>
-  void for_block_range(const Interval<i64>& block_range, Fn&& fn) noexcept;
-
-  void lock_for_read(const Interval<i64>& block_range) noexcept;
-
-  void unlock_for_read(const Interval<i64>& block_range) noexcept;
-
-  void update_lower_bound() noexcept;
-
-  /** \brief Marks grant as in use by adding grant to this->in_use_block_tokens_.
-   * Returns a ReadLock on the range block_range.
-   */
-  ReadLock set_block_range_in_use(batt::Grant& grant, const Interval<i64>& block_range) noexcept;
-
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-
   std::unique_ptr<llfs::ScopedIoRing> io_ring_;
 
   llfs::IoRing::File file_;
@@ -238,79 +313,62 @@ class ChangeLogFile
   Config config_;
 
   Metrics metrics_;
-
-  const i64 last_block_offset_ = this->config_.block_offset_end();
-
-  const usize max_batch_size_ =
-#if BATT_PLATFORM_IS_LINUX
-      IOV_MAX;
-#else
-      2 * kMiB / this->config_.block_size;
-#endif
-
-  batt::Grant::Issuer free_block_tokens_{BATT_CHECKED_CAST(u64, this->config_.block_count.value())};
-
-  batt::Grant in_use_block_tokens_{BATT_OK_RESULT_OR_PANIC(
-      this->free_block_tokens_.issue_grant(0, batt::WaitForResource::kFalse))};
-
-  std::atomic<i64> lower_bound_{0};
-  std::atomic<i64> upper_bound_{0};
-
-  std::unique_ptr<ReadLockCounter[]> read_lock_counter_per_block_{
-      new ReadLockCounter[this->config_.block_count]};
-
-  absl::Mutex lower_bound_mutex_;
-
-  u64 total_bytes_written_ = 0;
-
-  batt::RateMetric<u64, /*seconds=*/100> write_throughput_;
 };
 
+BATT_OBJECT_PRINT_IMPL((inline), ChangeLogFile::Config, (block_size, block_count, block0_offset))
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 // TODO: [Gabe Bornstein 1/16/26] Do I need to update other ChangeLogFile member data? Like lower,
 // upper bound? They aren't recovered from ::open.
 //
 template <typename SerializeFn>
 batt::Status ChangeLogFile::read_blocks(SerializeFn process_block)
 {
-  i64 blocks_read = 0;
-  batt::Status status = batt::OkStatus();
+  BATT_ASSIGN_OK_RESULT(const i64 file_size, llfs::sizeof_fd(this->file_.get_fd()));
+
   std::unordered_set<i64> corrupted_block_offsets;
-  while (status.ok()) {
-    // The offset of where we are writing to our buffer.
-    //
-    i64 curr_block_offset = blocks_read * this->config_.block_size;
+  i64 file_offset = this->config_.block0_offset;
 
-    // The offset of where we are reading from the Change Log File.
-    //
-    i64 curr_file_offset = this->config_.block0_offset + curr_block_offset;
+  for (i64 blocks_read = 0; blocks_read < this->config_.block_count; ++blocks_read) {
+    //----- --- -- -  -  -   -
 
+    // If the next read spans the end of the file, then we have data loss!
+    //
+    if (file_offset < file_size && file_offset + this->config_.block_size > file_size) {
+      return batt::StatusCode::kDataLoss;
+    }
+
+    // If the file ends on a block boundary, then assume this is as far as we've written.
+    //
+    if (file_offset == file_size) {
+      break;
+    }
+
+    // Allocate a buffer for the next block to read.
+    //
     ChangeLogBlock::ScopedMemory block_memory =
         ChangeLogBlock::allocate_aligned(this->config_.block_size);
 
-    batt::Status read_status = this->file_.read_all(curr_file_offset, block_memory.buffer());
+    // Read the block!
+    //
+    batt::Status read_status = this->file_.read_all(file_offset, block_memory.buffer());
+    BATT_REQUIRE_OK(read_status);
+    file_offset += this->config_.block_size;
 
-    if (!read_status.ok()) {
-      LOG(INFO) << "Recovered " << blocks_read
-                << " blocks. Stopped reading with status:" << BATT_INSPECT(read_status);
-      return batt::OkStatus();
-    }
-
-    batt::StatusOr<batt::Grant> buffer_grant =
-        this->reserve_blocks(BlockCount{1}, batt::WaitForResource::kFalse);
-
-    BATT_REQUIRE_OK(buffer_grant);
-
+    // Recover the block from the read data; this will perform data integrity checks.
+    //
     StatusOr<boost::intrusive_ptr<ChangeLogBlock>> block =
-        ChangeLogBlock::recover(std::move(block_memory), std::move(*buffer_grant));
+        ChangeLogBlock::recover(std::move(block_memory));
 
     if (block.status() == batt::StatusCode::kOutOfRange) {
-      LOG(INFO) << "Recovered " << blocks_read
-                << " blocks. Stopped reading with status:" << BATT_INSPECT(block.status())
-                << BATT_INSPECT(curr_block_offset) << BATT_INSPECT(curr_file_offset);
+      VLOG(1) << "Recovered " << blocks_read
+              << " blocks. Stopped reading with status:" << BATT_INSPECT(block.status())
+              << BATT_INSPECT(file_offset) << BATT_INSPECT(file_offset);
 
       return batt::OkStatus();
+
     } else if (block.status() == batt::StatusCode::kDataLoss) {
-      LOG(INFO) << "Data loss detected at block offset " << curr_block_offset
+      LOG(INFO) << "Data loss detected at block offset " << file_offset
                 << ". Continuing to read subsequent blocks.";
 
       // TODO: [Gabe Bornstein 4/3/26] We fail de-referencing this block if it's corrupted.
@@ -344,19 +402,12 @@ batt::Status ChangeLogFile::read_blocks(SerializeFn process_block)
         // block, we need to discard the current block
         //
         if (curr_block_offset_upper_bound >= offset) {
-          LOG(INFO) << "Discarding block at offset " << curr_block_offset
+          LOG(INFO) << "Discarding block at offset " << file_offset
                     << " due to prior data loss at offset " << offset;
           continue;
         }
       }
     }
-
-    // TODO: [Gabe Bornstein 4/13/26] We're planning on removing ReadLocks. This code will need to
-    // be removed once that happens.
-    //
-    Interval<i64> block_range{blocks_read, blocks_read + 1};
-    (*block)->set_read_lock(this->set_block_range_in_use((*block)->get_grant(), block_range));
-    // this->upper_bound_.fetch_add(1);
 
     // `process_block` is responsible for determining when to stop reading.
     //
@@ -366,37 +417,8 @@ batt::Status ChangeLogFile::read_blocks(SerializeFn process_block)
     } else if (!process_status.ok()) {
       return process_status;
     }
-    ++blocks_read;
   }
   return batt::OkStatus();
-}
-
-// #=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
-
-template <typename Fn>
-inline void ChangeLogFile::for_block_range(const Interval<i64>& block_range, Fn&& fn) noexcept
-{
-  BATT_CHECK_GE(block_range.lower_bound, 0);
-  BATT_CHECK_GE(block_range.upper_bound, 0);
-  BATT_CHECK_LE(block_range.lower_bound, block_range.upper_bound);
-
-  i64 block_i = block_range.lower_bound;
-  i64 first_addr = block_range.lower_bound % this->config_.block_count;
-  i64 count = block_range.size();
-  BATT_CHECK_GE(count, 0);
-
-  while (count != 0) {
-    BATT_CHECK_LT(first_addr, this->config_.block_count);
-
-    fn(block_i, this->read_lock_counter_per_block_[first_addr]);
-
-    --count;
-    ++block_i;
-    ++first_addr;
-    if (first_addr == this->config_.block_count) {
-      first_addr = 0;
-    }
-  }
 }
 
 }  // namespace turtle_kv

@@ -9,11 +9,219 @@
 #include <turtle_kv/change_log/change_log_writer.hpp>
 //
 
+#include <turtle_kv/util/small_queue.hpp>
+
 #include <chrono>
 #include <cstdlib>
 #include <random>
 
 namespace turtle_kv {
+
+constexpr usize kStaticQueueSize = 16;
+
+namespace {
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void release_blocks(SmallQueueBase<ChangeLogBlock*>* blocks) noexcept
+{
+  for (ChangeLogBlock* p_block : *blocks) {
+    p_block->remove_ref(1);
+  }
+  blocks->clear();
+}
+
+}  // namespace
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+struct ChangeLogWriter::CollectedBlocksState {
+  /** \brief Blocks that have been collected from appender threads; these are waiting to be placed
+   * in the change log file by transferring to PreparedBlocksState.
+   */
+  SmallQueue<BlockBuffer*, kStaticQueueSize> blocks;
+
+  //----- --- -- -  -  -   -
+
+  ~CollectedBlocksState() noexcept
+  {
+    release_blocks(&this->blocks);
+  }
+
+  bool empty() const noexcept
+  {
+    return this->blocks.empty();
+  }
+};
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+struct ChangeLogWriter::PreparedBlocksState {
+  /** \brief The position in the file where the next write will take place.
+   */
+  FileOffset file_offset;
+
+  /** \brief The unwritten portions of the prepared blocks.  There is exactly one element in
+   * `block_chunks` for each element in `blocks` (below).
+   */
+  SmallQueue<ConstBuffer, kStaticQueueSize> block_chunks;
+
+  /** \brief The blocks currently prepared for write.
+   */
+  SmallQueue<BlockBuffer*, kStaticQueueSize> blocks;
+
+  //----- --- -- -  -  -   -
+
+  explicit PreparedBlocksState(const ChangeLogFile::Config& config,
+                               const ActiveBlocksState& active_blocks) noexcept;
+
+  ~PreparedBlocksState() noexcept
+  {
+    release_blocks(&this->blocks);
+  }
+
+  bool empty() const noexcept
+  {
+    BATT_CHECK_EQ(this->block_chunks.empty(), this->blocks.empty());
+    return this->block_chunks.empty();
+  }
+
+  void check_invariants(const ChangeLogFile::Config& config) const noexcept
+  {
+    BATT_CHECK_LT(this->file_offset, config.last_block_end_offset())
+        << "file_offset must be before the end of the last block!";
+
+    BATT_CHECK_EQ(this->block_chunks.size(), this->blocks.size())
+        << "The elements of block_chunks and blocks must line up!";
+
+    if (!this->block_chunks.empty()) {
+      BATT_CHECK_GT(this->block_chunks.front().size(), 0)
+          << "Empty chunks must be removed from the front of the queue!";
+    }
+  }
+};
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+struct ChangeLogWriter::WrittenBlocksState {
+  /** \brief The (block-size-unit) offset within the file of the first block in the queue.
+   */
+  Optional<BlockIndex> block_index;
+
+  /** \brief Blocks known to have been written, but not yet added to the active blocks state.
+   */
+  SmallQueue<BlockBuffer*, kStaticQueueSize> blocks;
+
+  //----- --- -- -  -  -   -
+
+  ~WrittenBlocksState() noexcept
+  {
+    release_blocks(&this->blocks);
+  }
+
+  bool empty() const noexcept
+  {
+    return this->blocks.empty();
+  }
+
+  void check_invariants(const ChangeLogFile::Config& config) const noexcept
+  {
+    BATT_CHECK_IMPLIES(!this->blocks.empty(), this->block_index)
+        << "If there are written blocks, then block_index must be set!";
+
+    BATT_CHECK_LT(this->block_index.value_or(BlockIndex{0}), config.block_count)
+        << "block_index must be strictly less than the block count!";
+  }
+};
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+struct ChangeLogWriter::ActiveBlocksState {
+  /** \brief The (logical) interval of active block indices.
+   *
+   * lower_bound: the "trim position" -- this is the position in the file, not the logical offset.
+   * upper_bound: the "flush position" -- this is the position in the file (not logical offset) one
+   *     past the *last* known written and untrimmed block.
+   */
+  Interval<BlockIndex> block_range;
+
+  /** \brief Blocks with edit offset upper bound less than or equal to this value can be
+   * safely overwritten.
+   */
+  EditOffset trim_edit_offset;
+
+  /** \brief For each block index in the file, the known upper bound edit offset of slots in that
+   * block.
+   */
+  std::unique_ptr<i64[]> block_upper_bounds;
+
+  /** \brief When blocks are transferred from `WrittenBlocksState` to `ActiveBlocksState`, we move
+   * their grant form the BlockBuffer to this shared grant pool.
+   */
+  batt::Grant in_use_block_grant;
+
+  //----- --- -- -  -  -   -
+
+  explicit ActiveBlocksState(const ChangeLogFile::Config& config,
+                             batt::Grant::Issuer& block_grant_pool,
+                             const Interval<BlockIndex>& active_block_range,
+                             const Slice<EditOffset>& active_blocks_upper_bounds) noexcept
+      : block_range{active_block_range}
+      , trim_edit_offset{0 /*TODO [tastolfi 2026-04-20] - pass this in*/}
+      , block_upper_bounds{new i64[config.block_count]}
+      , in_use_block_grant{
+            BATT_OK_RESULT_OR_PANIC(block_grant_pool.issue_grant(0, batt::WaitForResource::kFalse))}
+  {
+    config.check_invariants(this->block_range);
+
+    BATT_CHECK_EQ(active_blocks_upper_bounds.size(), (usize)this->block_range.size());
+
+    Interval<BlockIndex> uninitialized = this->block_range;
+
+    for (const EditOffset& block_upper_bound : active_blocks_upper_bounds) {
+      this->block_upper_bounds[uninitialized.lower_bound] = block_upper_bound.value();
+      config.increment_lower_bound(uninitialized);
+    }
+
+    this->in_use_block_grant.subsume(BATT_OK_RESULT_OR_PANIC(
+        block_grant_pool.issue_grant(active_block_range.size(), batt::WaitForResource::kFalse)));
+  }
+
+  void check_invariants(const ChangeLogFile::Config& config) const noexcept
+  {
+    config.check_invariants(this->block_range);
+    BATT_CHECK_EQ((usize)this->block_range.size(), in_use_block_grant.size())
+        << "in_use_block_grant must exactly cover the active block interval";
+  }
+};
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+/*explicit*/ ChangeLogWriter::PreparedBlocksState::PreparedBlocksState(
+    const ChangeLogFile::Config& config,
+    const ActiveBlocksState& active_blocks) noexcept
+{
+  BlockIndex next_block_to_write = config.wrapped_upper_bound(active_blocks.block_range);
+  this->file_offset = config.block_offset_from_index(next_block_to_write);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+/*static*/ void ChangeLogWriter::check_invariants(const ChangeLogFile::Config& config,
+                                                  const WrittenBlocksState& written_blocks,
+                                                  const ActiveBlocksState& active_blocks) noexcept
+{
+  if (written_blocks.block_index.has_value()) {
+    const i64 block_i = *written_blocks.block_index;
+
+    BATT_CHECK(block_i == active_blocks.block_range.upper_bound ||
+               block_i + config.block_count == active_blocks.block_range.upper_bound)
+        << "The WrittenBlocksState::block_index must agree with "
+           "ActiveBlocksState::active_upper_bound_block!"
+        << BATT_INSPECT(block_i) << BATT_INSPECT(active_blocks.block_range.upper_bound)
+        << BATT_INSPECT(config.block_count);
+  }
+}
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 // class ChangeLogWriter::Context
@@ -92,7 +300,12 @@ void ChangeLogWriter::Context::push_buffer(BlockBuffer*& buffer,
 
   BATT_ASSIGN_OK_RESULT(std::unique_ptr<ChangeLogFile> log_file, ChangeLogFile::open(path));
 
-  return {std::make_unique<ChangeLogWriter>(std::move(log_file), options)};
+  // TODO [tastolfi 2026-04-20] pass real values for active blocks params!
+  //
+  return {std::make_unique<ChangeLogWriter>(std::move(log_file),
+                                            options,
+                                            make_interval(BlockIndex{0}, BlockIndex{0}),
+                                            Slice<EditOffset>{})};
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -106,16 +319,32 @@ void ChangeLogWriter::Context::push_buffer(BlockBuffer*& buffer,
 
   BATT_ASSIGN_OK_RESULT(std::unique_ptr<ChangeLogFile> log_file, ChangeLogFile::open(path));
 
-  return {std::make_unique<ChangeLogWriter>(std::move(log_file), options)};
+  // TODO [tastolfi 2026-04-20] pass real values for active blocks params!
+  //
+  return {std::make_unique<ChangeLogWriter>(std::move(log_file),
+                                            options,
+                                            make_interval(BlockIndex{0}, BlockIndex{0}),
+                                            Slice<EditOffset>{})};
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-/*explicit*/ ChangeLogWriter::ChangeLogWriter(std::unique_ptr<ChangeLogFile>&& change_log,
-                                              const Options& options) noexcept
+/*explicit*/ ChangeLogWriter::ChangeLogWriter(
+    std::unique_ptr<ChangeLogFile>&& change_log,
+    const Options& options,
+    const Interval<BlockIndex>& active_block_range,
+    const Slice<EditOffset>& active_blocks_upper_bounds) noexcept
     : change_log_{std::move(change_log)}
     , options_{options}
 {
+  {
+    batt::ScopedLock<State> locked_state{this->state_};
+    locked_state->active_blocks_state_ =
+        std::make_unique<ActiveBlocksState>(this->config(),
+                                            this->free_block_tokens_,
+                                            active_block_range,
+                                            active_blocks_upper_bounds);
+  }
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -125,7 +354,11 @@ ChangeLogWriter::~ChangeLogWriter() noexcept
   this->halt();
   this->join();
 
-  ChangeLogWriter::remove_buffer_refs(this->poll_updates());
+  // Collect and release any remaining block buffers.
+  {
+    CollectedBlocksState collected;
+    this->collect_blocks(collected).IgnoreError();
+  }
 
   this->state_.with_lock([](State& state) {
     state.check_ready_to_shut_down();
@@ -151,6 +384,7 @@ void ChangeLogWriter::start(batt::Task::executor_type&& executor) noexcept
 void ChangeLogWriter::halt() noexcept
 {
   this->halt_requested_.store(true);
+  this->free_block_tokens_.close();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -207,23 +441,116 @@ void ChangeLogWriter::remove_context(Context& context) noexcept
 //
 auto ChangeLogWriter::allocate_buffer(EditOffset offset) noexcept -> StatusOr<BlockBuffer*>
 {
-  BATT_ASSIGN_OK_RESULT(
-      batt::Grant buffer_grant,
-      this->change_log_->reserve_blocks(BlockCount{1}, batt::WaitForResource::kTrue));
+  BATT_ASSIGN_OK_RESULT(batt::Grant buffer_grant,
+                        this->free_block_tokens_.issue_grant(1, batt::WaitForResource::kTrue));
 
-  return BlockBuffer::allocate(offset,
-                               std::move(buffer_grant),
-                               this->change_log_->config().block_size);
+  this->change_log_->metrics().reserved_blocks_count.add(buffer_grant.size());
+
+  return BlockBuffer::allocate(offset, std::move(buffer_grant), this->config().block_size);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-auto ChangeLogWriter::poll_updates() noexcept -> batt::SmallVec<BlockBuffer*, 8>
+void ChangeLogWriter::writer_task_main() noexcept
+{
+  VLOG(1) << "entered ChangeLogWriter::writer_task_main";
+
+  Status status = [this]() -> Status {
+    // Use an RNG to select delay (with jitter) for polling.
+    //
+    std::default_random_engine rng{std::random_device{}()};
+
+    BATT_CHECK_LE(this->options_.min_delay_usec, this->options_.max_delay_usec);
+
+    std::uniform_int_distribution<i64> pick_delay_usec{this->options_.min_delay_usec,
+                                                       this->options_.max_delay_usec};
+
+    // The number of consecutive times `poll_updates()` has been called without returning any data
+    // to write.
+    //
+    usize inactive_count = 0;
+
+    // Set after each write to force a longer polling delay when collected buffers don't contain
+    // enough data (see ChangeLogWriter::kMinBlockDensityTargetPct).
+    //
+    bool force_sleep = false;
+
+    CollectedBlocksState collected;
+    PreparedBlocksState prepared{this->config(), *this->state_.lock()->active_blocks_state_};
+    WrittenBlocksState written;
+
+    for (;;) {
+      // Collect BlockBuffers from writer contexts.
+      //
+      if (!force_sleep) {
+        BATT_REQUIRE_OK(this->collect_blocks(collected));
+      }
+
+      BATT_ASSIGN_OK_RESULT(BlockBufferStats prepare_stats,
+                            this->prepare_blocks(collected, prepared));
+
+      // If there are no updates, then sleep before polling again (unless halt requested).
+      //
+      if ((force_sleep || prepared.empty()) && this->halt_requested_.load() == false) {
+        force_sleep = false;
+        inactive_count += 1;
+        this->metrics_.sleep_count.add(1);
+
+        // If we get in here, then we have no indication that there is any data available for
+        // appending; in this case, enter our timed polling loop.
+        //
+        const i64 delay_usec = pick_delay_usec(rng);
+        batt::Task::sleep(std::chrono::microseconds(delay_usec));
+
+        // After allowing other tasks to run, we should immediately poll updates again to see if we
+        // have more data.
+        //
+        continue;
+      }
+
+      VLOG(2) << "writer_task awakes!" << BATT_INSPECT(inactive_count);
+      inactive_count = 0;
+
+      BATT_ASSIGN_OK_RESULT(BlockBufferStats write_stats, this->write_blocks(prepared, written));
+
+      const BlockBufferStats block_stats = prepare_stats + write_stats;
+
+      // Force a sleep if the collected buffers weren't full enough to hit the target density.
+      //
+      force_sleep = block_stats.is_under_target();
+
+      // "Activate" the written blocks by adding them to the active blocks state; this allows
+      // accurate trimming and reclamation of storage resources.
+      {
+        batt::ScopedLock<State> locked_state{this->state_};
+        BATT_REQUIRE_OK(this->activate_blocks(written, *locked_state->active_blocks_state_));
+      }
+
+      // If halt is requested and we don't appear to be making any progress, then return.
+      //
+      if (this->halt_requested_.load()     //
+          && block_stats.total_bytes == 0  //
+          && collected.empty()             //
+          && prepared.empty()) {
+        return OkStatus();
+      }
+
+      VLOG(2) << "done writing!  polling for more";
+    }
+  }();
+
+  if (VLOG_IS_ON(1) || (!status.ok() && !this->halt_requested_.load())) {
+    LOG(INFO) << "ChangeLogWriter::writer_task exiting with status=" << status;
+  }
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Status ChangeLogWriter::collect_blocks(CollectedBlocksState& output) noexcept
 {
   this->metrics_.poll_count.add(1);
 
-  batt::SmallVec<BlockBuffer*, 8> update_buffers;
-  batt::SmallVec<BlockBuffer*, 8> buffer_stacks;
+  batt::SmallVec<BlockBuffer*, kStaticQueueSize> buffer_stacks;
   {
     batt::ScopedLock<State> locked_state{this->state_};
 
@@ -254,150 +581,311 @@ auto ChangeLogWriter::poll_updates() noexcept -> batt::SmallVec<BlockBuffer*, 8>
     //
     for (BlockBuffer* current = head; current != nullptr;) {
       BlockBuffer* const next = current->swap_next(nullptr);
-      update_buffers.emplace_back(current);
+      output.blocks.push_back(current);
       current = next;
     }
   }
 
-  return update_buffers;
+  return OkStatus();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-void ChangeLogWriter::writer_task_main() noexcept
+auto ChangeLogWriter::prepare_blocks(CollectedBlocksState& input,
+                                     PreparedBlocksState& output) noexcept
+    -> StatusOr<BlockBufferStats>
 {
-  VLOG(1) << "entered ChangeLogWriter::writer_task_main";
+  BlockBufferStats stats;
 
-  Status status = [this]() -> Status {
-    // Use an RNG to select delay (with jitter) for polling.
-    //
-    std::default_random_engine rng{std::random_device{}()};
-
-    BATT_CHECK_LE(this->options_.min_delay_usec, this->options_.max_delay_usec);
-
-    std::uniform_int_distribution<i64> pick_delay_usec{this->options_.min_delay_usec,
-                                                       this->options_.max_delay_usec};
-
-    // The number of consecutive times `poll_updates()` has been called without returning any data
-    // to write.
-    //
-    usize inactive_count = 0;
-
-    // Set after each write to force a longer polling delay when collected buffers don't contain
-    // enough data (see ChangeLogWriter::kMinBlockDensityTargetPct).
-    //
-    bool force_sleep = false;
-
-    for (;;) {
-      batt::SmallVec<BlockBuffer*, 8> update_buffers =
-          !force_sleep ? this->poll_updates() : batt::SmallVec<BlockBuffer*, 8>{};
-
-      // If there are no updates, then sleep before polling again.
-      //
-      if (update_buffers.empty()) {
-        inactive_count += 1;
-        this->metrics_.sleep_count.add(1);
-
-        // If we get in here, then we have no indication that there is any data available for
-        // appending; in this case, enter our timed polling loop.
-        //
-        const i64 delay_usec = pick_delay_usec(rng);
-        batt::Task::sleep(std::chrono::microseconds(delay_usec));
-
-        if (this->halt_requested_.load()) {
-          return batt::OkStatus();
-        }
-
-        // After allowing other tasks to run, we should immediately poll updates again to see if we
-        // have more data.
-        //
-        continue;
-      }
-
-      VLOG(2) << "writer_task awakes!" << BATT_INSPECT(inactive_count);
-      inactive_count = 0;
-
-      BATT_ASSIGN_OK_RESULT(WriteOpStats stats, this->write_buffers(update_buffers));
-
-      // Force a sleep if the collected buffers weren't full enough to hit the target density.
-      //
-      force_sleep = (stats.user_bytes_written * 100 <
-                     Self::kMinBlockDensityTargetPct * stats.total_bytes_written);
-
-      VLOG(2) << "done writing!  polling for more";
-    }
-  }();
-
-  // If we are exiting cleanly, poll one more time and flush any buffers we find.
-  //
-  if (status.ok()) {
-    status = this->write_buffers(this->poll_updates()).status();
+  if (input.blocks.empty()) {
+    return {stats};
   }
 
-  if (VLOG_IS_ON(1) || (!status.ok() && !this->halt_requested_.load())) {
-    LOG(INFO) << "ChangeLogWriter::writer_task exiting with status=" << status;
-  }
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-auto ChangeLogWriter::write_buffers(const batt::SmallVecBase<BlockBuffer*>& update_buffers) noexcept
-    -> StatusOr<WriteOpStats>
-{
-  batt::Grant grant = BATT_OK_RESULT_OR_PANIC(
-      this->change_log_->reserve_blocks(BlockCount{0}, batt::WaitForResource::kFalse));
-
-  // Don't release any buffers until we have appended as much data as we can.
+  // Sanity checks.
   //
+  output.check_invariants(this->config());
+
   auto on_scope_exit = batt::finally([&] {
-    // After `direct_append` (below); now it is OK to free buffers.
-    //
-    ChangeLogWriter::remove_buffer_refs(update_buffers);
+    output.check_invariants(this->config());
   });
 
-  // Add all to the grant.
+  // Keep track of how much space there is at the current write offset (output.file_offset), so we
+  // don't run past the end of the last block.
   //
-  WriteOpStats stats;
+  i64 space_in_file = this->config().last_block_end_offset() - output.file_offset;
 
-  batt::SmallVec<ConstBuffer, 32> to_append;
-  for (BlockBuffer* buffer : update_buffers) {
-    BATT_CHECK_NOT_NULLPTR(buffer);
-    BATT_REQUIRE_OK(buffer->verify());
+  // Add as many blocks as we can.
+  //
+  while (!input.blocks.empty() && space_in_file >= this->config().block_size &&
+         output.block_chunks.size() < this->max_batch_size_) {
+    //----- --- -- -  -  -   -
+    BlockBuffer* const next_block = input.blocks.front();
 
-    stats.user_bytes_written += buffer->slots_total_size();
-    stats.total_bytes_written += buffer->block_size();
+    BATT_CHECK_EQ(next_block->block_size(), (usize)this->config().block_size);
 
-    grant.subsume(buffer->consume_grant());
-    to_append.emplace_back(buffer->prepare_to_flush());
+    space_in_file -= this->config().block_size;
+
+    stats.user_bytes += next_block->slots_total_size();
+    stats.total_bytes += next_block->block_size();
+
+    output.blocks.push_back(next_block);
+    output.block_chunks.push_back(next_block->prepare_to_flush());
+    input.blocks.pop_front();
   }
 
-  this->metrics_.received_block_byte_count.add(stats.total_bytes_written);
-  this->metrics_.received_user_byte_count.add(stats.user_bytes_written);
+  this->metrics_.received_user_byte_count.add(stats.user_bytes);
+  this->metrics_.received_block_byte_count.add(stats.total_bytes);
 
-  VLOG(2) << "have " << to_append.size() << " buffers to write;"
-          << BATT_INSPECT(stats.user_bytes_written) << BATT_INSPECT(stats.total_bytes_written)
-          << BATT_INSPECT((double)stats.user_bytes_written / (double)stats.total_bytes_written);
+  return {stats};
+}
 
-  // If we have some data to append to the WAL Volume, do it now.
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+auto ChangeLogWriter::write_blocks(PreparedBlocksState& input, WrittenBlocksState& output) noexcept
+    -> StatusOr<BlockBufferStats>
+{
+  // Sanity checks.
   //
-  if (!to_append.empty()) {
-    BATT_CHECK_EQ(grant.size(), to_append.size());
+  input.check_invariants(this->config());
+  output.check_invariants(this->config());
 
-    StatusOr<ChangeLogFile::ReadLock> read_lock = this->change_log_->append(grant, to_append);
-    BATT_REQUIRE_OK(read_lock);
+  auto on_scope_exit = batt::finally([&] {
+    input.check_invariants(this->config());
+    output.check_invariants(this->config());
+  });
 
-    this->metrics_.write_count.add(1);
-    this->metrics_.written_block_byte_count.add(stats.total_bytes_written);
-    this->metrics_.written_user_byte_count.add(stats.user_bytes_written);
+  BATT_CHECK_LE(input.block_chunks.size(), this->max_batch_size_) << "Too many prepared blocks!";
 
-    usize i = 0;
-    for (BlockBuffer* buffer : update_buffers) {
-      buffer->set_read_lock(read_lock->lock_subrange(i, 1));
-      ++i;
+  // Write!
+  //
+  this->metrics_.write_count.add(1);
+  BATT_ASSIGN_OK_RESULT(  //
+      i32 n_written,
+      batt::Task::await<StatusOr<i32>>([&](auto&& handler) {
+        this->change_log_->file().async_write_some(input.file_offset,
+                                                   batt::as_slice(input.block_chunks),
+                                                   BATT_FORWARD(handler));
+      }));
+
+  // Collect stats on the blocks that were written.
+  //
+  BlockBufferStats stats;
+
+  // Consume however many bytes were written.
+  //
+  while (n_written > 0) {
+    BATT_CHECK(!input.block_chunks.empty())
+        << "More bytes written than were passed to async_write_some!";
+
+    ConstBuffer& next_chunk = input.block_chunks.front();
+    const usize n_to_consume = std::min<usize>(next_chunk.size(), n_written);
+
+    next_chunk += n_to_consume;
+    n_written -= n_to_consume;
+    input.file_offset = FileOffset{input.file_offset + BATT_CHECKED_CAST(i64, n_to_consume)};
+
+    BATT_CHECK_LE(input.file_offset, this->config().last_block_end_offset())
+        << "Wrote past the end of the last block!";
+
+    // Wrap-around at the end of the file.
+    //
+    if (input.file_offset == this->config().last_block_end_offset()) {
+      input.file_offset = this->config().block0_offset;
+
+      BATT_CHECK_EQ(n_written, 0)
+          << "write_blocks should never write data that wraps around to the file start!";
+    }
+
+    // When the prepared chunk at the front of the input is fully consumed, remove it and transfer
+    // its BlockBuffer to the output state.
+    //
+    if (next_chunk.size() == 0) {
+      BlockBuffer* const block = input.blocks.front();
+
+      stats.user_bytes += block->slots_total_size();
+      stats.total_bytes += block->block_size();
+
+      if (output.blocks.empty()) {
+        const BlockIndex written_block_index =
+            this->config().block_index_from_end_offset(input.file_offset);
+
+        // Update or verify the output block index.
+        //
+        if (output.block_index.has_value()) {
+          BATT_CHECK_EQ(*output.block_index, written_block_index)
+              << BATT_INSPECT(input.file_offset);
+        } else {
+          output.block_index = written_block_index;
+        }
+      }
+
+      // No need to touch the block's ref count; just push, pop and keep going.
+      //
+      output.blocks.push_back(block);
+      input.blocks.pop_front();
+      input.block_chunks.pop_front();
     }
   }
 
+  this->metrics_.written_user_byte_count.add(stats.user_bytes);
+  this->metrics_.written_block_byte_count.add(stats.total_bytes);
+
   return {stats};
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Status ChangeLogWriter::activate_blocks(WrittenBlocksState& input,
+                                        ActiveBlocksState& output) noexcept
+{
+  if (input.blocks.empty()) {
+    return OkStatus();
+  }
+
+  const ChangeLogFile::Config& cfg = this->config();
+
+  // Sanity checks.
+  //
+  input.check_invariants(cfg);
+  output.check_invariants(cfg);
+  check_invariants(cfg, input, output);
+
+  VLOG(1) << "ChangeLogWriter::activate_blocks entered --"
+          << BATT_INSPECT(output.in_use_block_grant.size());
+
+  auto on_scope_exit = batt::finally([&] {
+    input.check_invariants(cfg);
+    output.check_invariants(cfg);
+    check_invariants(cfg, input, output);
+    BATT_CHECK(input.blocks.empty());
+
+    VLOG(1) << "ChangeLogWriter::activate_blocks returned--"
+            << BATT_INSPECT(output.in_use_block_grant.size());
+  });
+
+  // We must consume the entire input.
+  //
+  while (!input.blocks.empty()) {
+    BlockBuffer* const next_block = input.blocks.front();
+
+    auto on_loop_body_exit = batt::finally([&] {
+      // Remove the first element and release the block each time we reach the end of the loop body.
+      //
+      input.blocks.front() = nullptr;
+      input.blocks.pop_front();
+      next_block->remove_ref(1);
+
+      // Advance to the next block index, with wrap-around.
+      //
+      cfg.increment_with_wrap(*input.block_index);
+    });
+
+    // IMPORTANT: consume the block grant before doing anything else, so we don't leak the block.
+    //
+    batt::Grant block_grant = next_block->consume_grant();
+    BATT_CHECK_EQ(block_grant.size(), 1);
+
+    VLOG(1) << BATT_INSPECT(output.block_range) << BATT_INSPECT(output.trim_edit_offset)
+            << BATT_INSPECT(next_block->edit_offset_lower_bound())
+            << BATT_INSPECT(next_block->edit_offset_upper_bound());
+
+    // If there are no active blocks and the trim point is already past the next block, just
+    // increment the block range and keep going.
+    //
+    if (output.block_range.empty() &&
+        output.trim_edit_offset >= next_block->edit_offset_upper_bound()) {
+      VLOG(1) << "discarding already-trimmed block that was just written;"
+              << BATT_INSPECT(output.trim_edit_offset) << BATT_INSPECT(output.block_range)
+              << BATT_INSPECT(next_block->edit_offset_lower_bound())
+              << BATT_INSPECT(next_block->edit_offset_upper_bound());
+      cfg.increment_block_range(output.block_range);
+      continue;
+    }
+
+    // Update active blocks edit offset upper bound.
+    //
+    output.block_upper_bounds[*input.block_index] = next_block->edit_offset_upper_bound().value();
+
+    // Transfer grant ownership to the in_use_block_grant.
+    //
+    output.in_use_block_grant.subsume(std::move(block_grant));
+
+    // No wrap-around for active_upper_bound_block, because it must stay >= the lower bound.
+    //
+    cfg.increment_upper_bound(output.block_range);
+  }
+
+  return OkStatus();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Status ChangeLogWriter::trim(EditOffset new_trim_edit_offset)
+{
+  VLOG(1) << "ChangeLogWriter::trim(" << new_trim_edit_offset << ")";
+
+  // Release any grant count after we exit the critical section below, to avoid double-locking.
+  //
+  Optional<batt::Grant> released_grant;
+
+  const ChangeLogFile::Config& cfg = this->config();
+  {
+    batt::ScopedLock<State> locked_state{this->state_};
+    ActiveBlocksState& s = *locked_state->active_blocks_state_;
+
+    // Sanity checks.
+    //
+    s.check_invariants(cfg);
+    auto on_scope_exit = batt::finally([&] {
+      s.check_invariants(cfg);
+    });
+
+    // Do nothing if the new trim offset isn't greater than the current one.
+    //
+    if (new_trim_edit_offset <= s.trim_edit_offset) {
+      return OkStatus();
+    }
+    s.trim_edit_offset = new_trim_edit_offset;
+
+    // Keep track of how many blocks are newly trimmed.
+    //
+    u64 n_trimmed = 0;
+
+    // Step through the active blocks until we reach the end or find one whose upper bound is above
+    // the trim offset.
+    //
+    while (!s.block_range.empty()) {
+      // Stop at the first block whose upper bound is after the trim offset.
+      //
+      if (EditOffset{s.block_upper_bounds[s.block_range.lower_bound]} > new_trim_edit_offset) {
+        break;
+      }
+
+      ++n_trimmed;
+
+      // Advance the active lower bound, with wrap-around.
+      //
+      cfg.increment_lower_bound(s.block_range);
+    }
+
+    VLOG(1) << BATT_INSPECT(n_trimmed);
+
+    // Release any trimmed blocks.
+    //
+    if (n_trimmed != 0) {
+      released_grant.emplace(BATT_OK_RESULT_OR_PANIC(s.in_use_block_grant.spend(n_trimmed)));
+    }
+
+    VLOG(1) << BATT_INSPECT(s.in_use_block_grant.size());
+  }
+  return OkStatus();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+ChangeLogWriter::State::~State() noexcept
+{
+  this->check_ready_to_shut_down();
 }
 
 }  // namespace turtle_kv

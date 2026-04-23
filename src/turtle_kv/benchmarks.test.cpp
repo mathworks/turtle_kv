@@ -15,6 +15,7 @@
 #include <batteries/constants.hpp>
 #include <batteries/env.hpp>
 #include <batteries/int_types.hpp>
+#include <batteries/seq/loop_control.hpp>
 
 #include <chrono>
 #include <filesystem>
@@ -45,7 +46,6 @@ class BenchmarksTest : public ::testing::Test
     this->read_params();
     this->create_kv_store();
     this->open_kv_store();
-    this->insert_data();
   }
 
   void load_data_file()
@@ -71,6 +71,9 @@ class BenchmarksTest : public ::testing::Test
     config.change_log_size_bytes =
         getenv_as<usize>("WAL_MB").value_or(default_config.change_log_size_bytes / kMiB) * kMiB;
 
+    config.tree_options.set_leaf_size(
+        getenv_as<usize>("LEAF_KB").value_or(config.tree_options.leaf_size() / kKiB) * kKiB);
+
     options.cache_size_bytes =
         getenv_as<usize>("CACHE_MB").value_or(default_options.cache_size_bytes / kMiB) * kMiB;
 
@@ -79,7 +82,8 @@ class BenchmarksTest : public ::testing::Test
 
     LOG(INFO) << "wal=" << batt::dump_size(config.change_log_size_bytes)
               << " cache=" << batt::dump_size(options.cache_size_bytes)
-              << " chi=" << options.initial_checkpoint_distance;
+              << " chi=" << options.initial_checkpoint_distance
+              << BATT_INSPECT(config.tree_options);
   }
 
   void create_kv_store()
@@ -96,31 +100,28 @@ class BenchmarksTest : public ::testing::Test
     this->kv_store->set_checkpoint_distance(64);
   }
 
-  void insert_data()
+  void insert_data(bool sorted)
   {
-    LOG(INFO) << "Inserting" << BATT_INSPECT(n_keys);
+    LOG(INFO) << "Inserting" << BATT_INSPECT(n_keys) << BATT_INSPECT(sorted);
 
-    max_inserted_pos = 0;
+    if (sorted) {
+      this->update_sorted_data();
+    }
+
+    this->max_inserted_pos = 0;
     auto load_start_time = std::chrono::steady_clock::now();
-    usize data_pos = 0;
-    u64 bytes_inserted = 0;
 
     LOG(INFO) << BATT_INSPECT(key_len) << BATT_INSPECT(value_len);
 
-    for (usize i = 0; i < n_keys; ++i) {
-      if (data_pos + step_size > data_str.size()) {
-        BATT_CHECK_NE(data_pos, 0);
-        data_pos = 0;
-      }
-      const char* p_data = &data_str[data_pos];
-      Status status = kv_store->put(KeyView{p_data, key_len},
-                                    ValueView::from_str(std::string_view{p_data, value_len}));
+    const auto insert_fn = [this](const std::string_view& key, const std::string_view& value) {
+      Status status = this->kv_store->put(key, ValueView::from_str(value));
+      BATT_CHECK_OK(status);
+    };
 
-      ASSERT_TRUE(status.ok()) << BATT_INSPECT(status);
-
-      max_inserted_pos = std::max(max_inserted_pos, data_pos);
-      bytes_inserted += (key_len + value_len);
-      ++data_pos;
+    if (sorted) {
+      this->visit_sorted_data(insert_fn);
+    } else {
+      this->visit_random_data(insert_fn);
     }
 
     auto load_finish_time = std::chrono::steady_clock::now();
@@ -128,9 +129,83 @@ class BenchmarksTest : public ::testing::Test
         std::chrono::duration_cast<std::chrono::nanoseconds>(load_finish_time - load_start_time)
             .count();
 
+    const u64 bytes_inserted = (this->key_len + this->value_len) * this->n_keys;
+
     LOG(INFO) << "Insert finished in " << (load_time_nanos / 1e6) << " ms -- "
               << ((double)n_keys) / load_time_nanos * 1e6 << " kops/sec"
               << BATT_INSPECT(batt::dump_size(bytes_inserted));
+  }
+
+  template <std::invocable<const std::string_view& /*key*/, const std::string_view& /*value*/> Fn>
+  void visit_random_data(Fn&& fn)
+  {
+    usize data_pos = 0;
+
+    for (usize i = 0; i < this->n_keys; ++i) {
+      if (data_pos + this->step_size > this->data_str.size()) {
+        BATT_CHECK_NE(data_pos, 0);
+        data_pos = data_pos + this->step_size - this->data_str.size();
+        BATT_CHECK_LE(data_pos + this->step_size, this->data_str.size());
+      }
+      const char* p_data = &this->data_str[data_pos];
+
+      const std::string_view key{p_data, this->key_len};
+      const std::string_view value{p_data, this->value_len};
+
+      BATT_INVOKE_LOOP_FN((fn, key, value));
+
+      ++data_pos;
+    }
+  }
+
+  template <std::invocable<const std::string_view& /*key*/, const std::string_view& /*value*/> Fn>
+  void visit_sorted_data(Fn&& fn)
+  {
+    this->update_sorted_data();
+
+    const char* p_data = this->sorted_data.get();
+    for (usize i = 0; i < this->n_keys; ++i) {
+      const std::string_view key{p_data, this->key_len};
+      const std::string_view value{p_data, this->value_len};
+
+      BATT_INVOKE_LOOP_FN((fn, key, value));
+
+      p_data += this->key_len;
+    }
+  }
+
+  void update_sorted_data()
+  {
+    if (this->sorted_data == nullptr || this->key_len != this->sorted_key_len ||
+        this->value_len != this->sorted_value_len) {
+      //----- --- -- -  -  -   -
+      // Lazily initialize the sorted data.
+      //
+      BATT_CHECK_EQ(std::max(this->key_len, this->value_len), this->step_size);
+
+      this->sorted_data_size = this->n_keys * this->step_size;
+      this->sorted_data.reset(new char[this->sorted_data_size]);
+
+      std::vector<std::string_view> to_sort;
+
+      this->visit_random_data(
+          [&](const std::string_view& key, const std::string_view& value [[maybe_unused]]) {
+            to_sort.emplace_back(key);
+          });
+
+      std::sort(to_sort.begin(), to_sort.end());
+
+      char* dst = sorted_data.get();
+      for (usize i = 0; i < this->n_keys; ++i) {
+        BATT_CHECK_EQ(to_sort[i].size(), this->key_len);
+        std::memcpy(dst, to_sort[i].data(), to_sort[i].size());
+        dst += to_sort[i].size();
+      }
+
+      this->sorted_key_len = this->key_len;
+      this->sorted_value_len = this->value_len;
+      //----- --- -- -  -  -   -
+    }
   }
 
   void checkpoint()
@@ -146,6 +221,10 @@ class BenchmarksTest : public ::testing::Test
   std::filesystem::path data_file = "/mnt/kv-bakeoff/random_bytes.bin";
   std::filesystem::path kv_store_dir = "/mnt/kv-bakeoff/turtle_kv_benchmark";
   std::string data_str;
+  std::unique_ptr<char[]> sorted_data{nullptr};
+  usize sorted_data_size = 0;
+  usize sorted_key_len = 0;
+  usize sorted_value_len = 0;
   const KVStore::Config default_config = KVStore::Config::with_default_values();
   const KVStore::RuntimeOptions default_options = KVStore::RuntimeOptions::with_default_values();
   KVStore::Config config = default_config;
@@ -160,8 +239,17 @@ class BenchmarksTest : public ::testing::Test
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-TEST_F(BenchmarksTest, ThreadScalingCacheBound)
+TEST_F(BenchmarksTest, RandomInsertOrder)
 {
+  this->insert_data(/*sorted=*/false);
+  this->checkpoint();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+TEST_F(BenchmarksTest, SortedInsertOrder)
+{
+  this->insert_data(/*sorted=*/true);
   this->checkpoint();
 }
 

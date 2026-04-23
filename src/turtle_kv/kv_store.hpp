@@ -161,8 +161,14 @@ class KVStore : public Table
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  /** \brief Start shutting down the KVStore.
+   *
+   * This initiates, but does not wait for the completion of, shutdown.  See also KVStore::join.
+   */
   void halt();
 
+  /** \brief Waits for the KVStore to finish shutting down.
+   */
   void join();
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -224,8 +230,17 @@ class KVStore : public Table
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
   struct State {
+    /** \brief The active MemTable; this is where new edits are inserted/buffered.
+     */
     boost::intrusive_ptr<MemTable> mem_table_;
+
+    /** \brief Finalized MemTables which are still in-scope; i.e., their edit offset upper bound is
+     * after that of this_>base_checkpoint_.  Stored in oldest(front)-to-newest(back) order.
+     */
     std::vector<boost::intrusive_ptr<MemTable>> deltas_;
+
+    /** \brief The most recent checkpoint; covers everything older than the deltas.
+     */
     Optional<Checkpoint> base_checkpoint_;
   };
 
@@ -233,6 +248,8 @@ class KVStore : public Table
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  /** \brief (internal use only) KVStore instances must be created via `KVStore::open`.
+   */
   explicit KVStore(batt::TaskScheduler& task_scheduler,
                    batt::WorkerPool& worker_pool,
                    llfs::ScopedIoRing&& scoped_io_ring,
@@ -276,8 +293,15 @@ class KVStore : public Table
    */
   Status hand_off_finalized_mem_table(boost::intrusive_ptr<MemTable>&& old_mem_table);
 
-  void wait_for_new_mem_table(EditOffset target_edit_offset);
+  /** \brief Blocks the caller until either the KVStore is `halt()`-ed or a new MemTable with
+   * `edit_offset_lower_bound() >= target_edit_offset` is activated.
+   */
+  Status wait_for_new_mem_table(EditOffset target_edit_offset);
 
+  /** \brief The entry point of a background task whose sole purpose is to report metrics and other
+   * diagnostic information as `BATT_DEBUG_INFO` (so it will be printed when the debug info signal
+   * is trapped).
+   */
   void info_task_main() noexcept;
 
   template <typename Fn>

@@ -44,8 +44,7 @@ namespace turtle_kv {
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 /*static*/ StatusOr<boost::intrusive_ptr<ChangeLogBlock>> ChangeLogBlock::recover(
-    ChangeLogBlock::ScopedMemory memory,
-    batt::Grant&& grant)
+    ChangeLogBlock::ScopedMemory memory)
 {
   ChangeLogBlock* block = reinterpret_cast<ChangeLogBlock*>(memory.data());
 
@@ -71,7 +70,7 @@ namespace turtle_kv {
     return {batt::StatusCode::kDataLoss};
   }
 
-  block->init_ephemeral_state(std::move(grant));
+  block->init_ephemeral_state(RecoveryChecksPassed{});
 
   // ref_count is 2 after reading from the change log. We want to initialize it to 1.
   //
@@ -135,8 +134,12 @@ void ChangeLogBlock::remove_ref(i32 count) noexcept
     // Load the ref count as a sanity check and with acquire order to complete the fence.
     //
     BATT_CHECK_EQ(0, this->ref_count_.load(std::memory_order_acquire));
+
+    //----- --- -- -  -  -   -
     ChangeLogBlock::free_allocated(this);
+    //----- --- -- -  -  -   -
   }
+  BATT_CHECK_NE(old_count, 0);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -201,7 +204,8 @@ ConstBuffer ChangeLogBlock::prepare_to_flush() noexcept
 //
 batt::Grant ChangeLogBlock::consume_grant() noexcept
 {
-  return std::move(this->ephemeral_state().grant_);
+  BATT_CHECK(batt::is_case<batt::Grant>(this->ephemeral_state().token_));
+  return std::move(std::get<batt::Grant>(this->ephemeral_state().token_));
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -240,24 +244,6 @@ void ChangeLogBlock::check_buffer_invariant() const noexcept
       << BATT_INSPECT(sizeof(Self)) << BATT_INSPECT(this->slots_total_size())
       << BATT_INSPECT(this->space_) << BATT_INSPECT(sizeof(SlotInfo))
       << BATT_INSPECT(this->slot_count_);
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-void ChangeLogBlock::set_read_lock(ChangeLogReadLock&& read_lock) noexcept
-{
-  this->ephemeral_state().read_lock_.set_value(
-      boost::intrusive_ptr<ChangeLogReadLock>{new ChangeLogReadLock{std::move(read_lock)}});
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-StatusOr<Interval<i64>> ChangeLogBlock::await_flush_begin() noexcept
-{
-  BATT_ASSIGN_OK_RESULT(boost::intrusive_ptr<ChangeLogReadLock> p_read_lock,
-                        this->ephemeral_state().read_lock_.await());
-
-  return p_read_lock->block_range();
 }
 
 }  // namespace turtle_kv

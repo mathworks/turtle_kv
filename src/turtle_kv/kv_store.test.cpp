@@ -163,6 +163,8 @@ class KVStoreTest : public ::testing::Test
 //
 TEST_F(KVStoreTest, CreateAndOpen)
 {
+  constexpr bool kQuiet = true;
+
   batt::StatusOr<std::filesystem::path> root = turtle_kv::data_root();
   ASSERT_TRUE(root.ok());
 
@@ -188,8 +190,10 @@ TEST_F(KVStoreTest, CreateAndOpen)
       }
       tree_options.set_size_tiered(size_tiered);
 
-      LOG(INFO) << BATT_INSPECT(tree_options.filter_bits_per_key())
-                << BATT_INSPECT(tree_options.filter_page_size());
+      if constexpr (!kQuiet) {
+        LOG(INFO) << BATT_INSPECT(tree_options.filter_bits_per_key())
+                  << BATT_INSPECT(tree_options.filter_page_size());
+      }
 
       auto runtime_options = KVStore::RuntimeOptions::with_default_values();
       runtime_options.use_threaded_checkpoint_pipeline = true;
@@ -202,7 +206,9 @@ TEST_F(KVStoreTest, CreateAndOpen)
                  "data/workloads/workload-e.txt",
              }) {
           if (size_tiered && std::strstr(workload_file, "workload-e")) {
-            LOG(INFO) << "Skipping workload-e (scans) for size-tiered config";
+            if constexpr (!kQuiet) {
+              LOG(INFO) << "Skipping workload-e (scans) for size-tiered config";
+            }
             continue;
           }
 
@@ -253,25 +259,28 @@ TEST_F(KVStoreTest, CreateAndOpen)
 
           EXPECT_GT(op_count, 100000);
 
-          LOG(INFO) << "--";
-          LOG(INFO) << workload_file;
-          LOG(INFO) << BATT_INSPECT(op_count) << BATT_INSPECT(kv_store.metrics().checkpoint_count);
-          {
-            auto& m = kv_store.metrics();
-            LOG(INFO) << BATT_INSPECT(m.avg_edits_per_batch());
-            LOG(INFO) << BATT_INSPECT(m.compact_batch_latency);
-            LOG(INFO) << BATT_INSPECT(m.apply_batch_latency);
-            LOG(INFO) << BATT_INSPECT(m.finalize_checkpoint_latency);
-            LOG(INFO) << BATT_INSPECT(m.append_job_latency);
-          }
+          if constexpr (!kQuiet) {
+            LOG(INFO) << "--";
+            LOG(INFO) << workload_file;
+            LOG(INFO) << BATT_INSPECT(op_count)
+                      << BATT_INSPECT(kv_store.metrics().checkpoint_count);
+            {
+              auto& m = kv_store.metrics();
+              LOG(INFO) << BATT_INSPECT(m.avg_edits_per_batch());
+              LOG(INFO) << BATT_INSPECT(m.compact_batch_latency);
+              LOG(INFO) << BATT_INSPECT(m.apply_batch_latency);
+              LOG(INFO) << BATT_INSPECT(m.finalize_checkpoint_latency);
+              LOG(INFO) << BATT_INSPECT(m.append_job_latency);
+            }
 
-          for (usize i = 1; i < time_points.size(); ++i) {
-            double elapsed = (time_points[i].seconds - time_points[i - 1].seconds);
-            double rate =
-                (time_points[i].op_count - time_points[i - 1].op_count) / std::max(1e-10, elapsed);
+            for (usize i = 1; i < time_points.size(); ++i) {
+              double elapsed = (time_points[i].seconds - time_points[i - 1].seconds);
+              double rate = (time_points[i].op_count - time_points[i - 1].op_count) /
+                            std::max(1e-10, elapsed);
 
-            LOG(INFO) << BATT_INSPECT(chi) << " | " << time_points[i].label << ": " << rate
-                      << " ops/sec";
+              LOG(INFO) << BATT_INSPECT(chi) << " | " << time_points[i].label << ": " << rate
+                        << " ops/sec";
+            }
           }
         }
       }

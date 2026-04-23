@@ -123,7 +123,7 @@ class ChangeLogReader
     // If there's no slots to process, return early.
     //
     if (block_iterators.empty()) {
-      LOG(INFO) << "No slots to be processed in change log.";
+      VLOG(1) << "No slots to be processed in change log.";
       return batt::OkStatus();
     }
 

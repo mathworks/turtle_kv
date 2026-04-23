@@ -31,11 +31,14 @@ concept MemTableStorageBlockBuffer =
 template <typename T>
 concept MemTableStorageWriterContext = requires(
     T& context,
+    EditOffset min_edit_offset_lower_bound,
     usize byte_count,
     void (*serialize_fn)(FirstVisitToBlock, typename T::BlockBuffer*, MutableBuffer, EditOffset)) {
   requires MemTableStorageBlockBuffer<typename T::BlockBuffer>;
 
-  { context.append_slot(byte_count, serialize_fn) } -> std::same_as<Status>;
+  {
+    context.append_slot(min_edit_offset_lower_bound, byte_count, serialize_fn)
+  } -> std::same_as<Status>;
 };
 
 template <typename T>
