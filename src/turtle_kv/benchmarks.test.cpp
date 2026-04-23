@@ -68,6 +68,9 @@ class BenchmarksTest : public ::testing::Test
     value_len = getenv_as<usize>("VL").value_or(100);
     step_size = std::max(key_len, value_len);
 
+    config.tree_options.set_key_size_hint(key_len);
+    config.tree_options.set_value_size_hint(value_len);
+
     config.change_log_size_bytes =
         getenv_as<usize>("WAL_MB").value_or(default_config.change_log_size_bytes / kMiB) * kMiB;
 
