@@ -224,6 +224,12 @@ class ChangeLogFile
     little_i64 block_count;
     little_i64 block0_offset;
 
+    // TODO: [Gabe Bornstein 4/23/26] Add enough info to initialize ChangeLogWriter during recover.
+    // Determine where/when it makes sense to update this information.
+    //
+    // Interval<BlockIndex>& active_block_range;
+    // Slice<EditOffset>& active_blocks_upper_bounds;
+
     u8 reserved_[4096 - 32];
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
