@@ -165,8 +165,6 @@ TEST_F(KVStoreTest, CreateAndOpen)
 {
   constexpr bool kQuiet = true;
 
-  LOG(INFO) << BATT_INSPECT(turtle_kv::free_all_blocks());
-
   batt::StatusOr<std::filesystem::path> root = turtle_kv::data_root();
   ASSERT_TRUE(root.ok());
 

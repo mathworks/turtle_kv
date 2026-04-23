@@ -457,20 +457,11 @@ BasicMemTable<StorageT, AllocationTrackerT>::BatchCompactor::consume_next() noex
     for (; !this->scanner_.is_done(); this->scanner_.advance()) {
       const MemTableValueEntry& entry = this->scanner_.get_value();
 
-      //----- --- -- -  -  -   -
-      // TODO [tastolfi 2026-04-21] REMOVE THIS!!!
-      BATT_CHECK_LT(this->prev_key_, entry.key_view());
-      //----- --- -- -  -  -   -
-
       EditView edit{entry.key_view(), entry.value_view()};
       total_size += packed_size_of(edit);
 
       if (total_size < this->byte_size_limit_) {
         edits_out.emplace_back(edit);
-        //----- --- -- -  -  -   -
-        // TODO [tastolfi 2026-04-21] REMOVE THIS!!!
-        this->prev_key_ = entry.key_view();
-        //----- --- -- -  -  -   -
       } else {
         break;
       }

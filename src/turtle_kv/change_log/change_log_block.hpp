@@ -28,8 +28,6 @@
 
 namespace turtle_kv {
 
-usize free_all_blocks();
-
 /** \brief A per-thread/task buffer that receives formatted slot data.
  *
  * Instances of Buffer are created via placement-new at the beginning of aligned memory regions
@@ -42,7 +40,7 @@ class ChangeLogBlock
  public:
   using Self = ChangeLogBlock;
 
-  static constexpr usize kDefaultAlign = 512;
+  static constexpr usize kDefaultAlign = 4096;
   static constexpr usize kDefaultSize = 8192;
   static constexpr usize kMinSize = 512;
 
@@ -346,8 +344,6 @@ class ChangeLogBlock
    * _current_ ready region is returned; the rest is released to the Grant::Issuer pool.
    */
   batt::Grant consume_grant() noexcept;
-
-  bool release_grant() noexcept;  // TODO [tastolfi 2026-04-21] remove
 
   /** \brief Perform basic sanity checks to make sure this is a valid ChangeLogBlock object.
    */

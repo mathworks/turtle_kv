@@ -390,6 +390,7 @@ class BasicMemTable<StorageT, AllocationTrackerT>::PerOpStorageContext
   Status store_data(usize n_bytes, SerializeFn&& serialize_fn) noexcept
   {
     return this->storage_writer_context_.append_slot(
+        this->mem_table_.edit_offset_lower_bound(),
         n_bytes,
         [&](FirstVisitToBlock first_visit,
             StorageBlockBuffer* buffer,
@@ -467,11 +468,6 @@ class BasicMemTable<StorageT, AllocationTrackerT>::BatchCompactor
   u64 batch_count_;
 
   ARTScanner scanner_;
-
-  //----- --- -- -  -  -   -
-  // TODO [tastolfi 2026-04-21] REMOVE!!!
-  std::string_view prev_key_;
-  //----- --- -- -  -  -   -
 };
 
 using MemTable = BasicMemTable<MemTableChangeLogStorage, MemTablePageCacheAllocationTracker>;

@@ -104,6 +104,7 @@ TEST_F(ChangeLogTest, WriterBasicOperations)
   //
   std::string test_data = "Hello, ChangeLog!";
   Status write_status = context.append_slot(
+      /*min_edit_offset_lower_bound=*/EditOffset{0},
       test_data.size(),
       [&test_data, this](FirstVisitToBlock first_visit,
                          ChangeLogBlock* block,
@@ -157,6 +158,7 @@ TEST_F(ChangeLogTest, WriteAndReadMultipleSlots)
     //
     for (size_t i = 0; i < test_data.size(); ++i) {
       Status write_status = context.append_slot(
+          /*min_edit_offset_lower_bound=*/EditOffset{0},
           test_data[i].size(),
           [&data = test_data[i], this](FirstVisitToBlock first_visit,
                                        ChangeLogBlock* block,
@@ -256,6 +258,7 @@ TEST_F(ChangeLogTest, ConcurrentWritesMultipleContexts)
           std::string data = "Thread " + std::to_string(thread_id) + " Slot " + std::to_string(i);
 
           Status write_status = context.append_slot(
+              /*min_edit_offset_lower_bound=*/EditOffset{0},
               data.size(),
               [&data, &offsets](FirstVisitToBlock,
                                 ChangeLogBlock* block,
@@ -354,6 +357,7 @@ TEST_F(ChangeLogTest, BlockBoundaryConditions)
 
   for (int i = 0; i < num_appends; ++i) {
     Status write_status = context.append_slot(
+        /*min_edit_offset_lower_bound=*/EditOffset{0},
         large_data.size(),
         [&large_data, &writer, i, this](FirstVisitToBlock first_visit,
                                         ChangeLogBlock* block,
@@ -463,6 +467,7 @@ TEST_F(ChangeLogTest, ExceedCapacityWrapAround)
       std::string slot_data(slot_size, 'A');
 
       Status write_status = context.append_slot(
+          /*min_edit_offset_lower_bound=*/EditOffset{0},
           slot_data.size(),
           [&slot_data, &writer, &offsets](FirstVisitToBlock,
                                           ChangeLogBlock* block,
@@ -572,6 +577,7 @@ TEST_F(ChangeLogTest, CorruptBlockInMiddle)
     //
     for (int i = 0; i < num_blocks_to_write; ++i) {
       Status write_status = context.append_slot(
+          /*min_edit_offset_lower_bound=*/EditOffset{0},
           test_data[i].size(),
           [&data = test_data[i],
            i](FirstVisitToBlock, ChangeLogBlock* block, MutableBuffer buffer, EditOffset offset) {

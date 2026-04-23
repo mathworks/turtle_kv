@@ -3,7 +3,6 @@
 
 #include <llfs/page_cache_slot.hpp>
 
-#include <batteries/env.hpp>  // TODO [tastolfi 2026-04-21] remove
 #include <batteries/require.hpp>
 
 #include <xxhash.h>
@@ -11,37 +10,6 @@
 #include <pcg_random.hpp>
 
 namespace turtle_kv {
-
-//----- --- -- -  -  -   -
-// TODO [tastolfi 2026-04-21] REMOVE!!!
-//
-bool defer_block_free()
-{
-  static bool cache_ = [] {
-    const bool defer_block_free = batt::getenv_as<bool>("defer_block_free").value_or(false);
-    LOG(INFO) << BATT_INSPECT(defer_block_free);
-    return defer_block_free;
-  }();
-  return cache_;
-}
-
-std::atomic<ChangeLogBlock*> free_pool{nullptr};
-
-usize free_all_blocks()
-{
-  usize count = 0;
-  ChangeLogBlock* head = free_pool.exchange(nullptr);
-  while (head) {
-    auto* next = head->swap_next(nullptr);
-    ChangeLogBlock::free_allocated(head);
-    ++count;
-    head = next;
-  }
-  return count;
-}
-//
-// TODO [tastolfi 2026-04-21] REMOVE!!!
-//----- --- -- -  -  -   -
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
@@ -168,20 +136,7 @@ void ChangeLogBlock::remove_ref(i32 count) noexcept
     BATT_CHECK_EQ(0, this->ref_count_.load(std::memory_order_acquire));
 
     //----- --- -- -  -  -   -
-    // TODO [tastolfi 2026-04-21] revert this
-    if (defer_block_free()) {
-      this->release_grant();
-      ChangeLogBlock* observed_head = free_pool.load();
-      for (;;) {
-        this->set_next(observed_head);
-        if (free_pool.compare_exchange_weak(observed_head, this)) {
-          break;
-        }
-      }
-    } else {
-      ChangeLogBlock::free_allocated(this);
-    }
-    // TODO [tastolfi 2026-04-21] (end revert)
+    ChangeLogBlock::free_allocated(this);
     //----- --- -- -  -  -   -
   }
   BATT_CHECK_NE(old_count, 0);
@@ -243,18 +198,6 @@ ConstBuffer ChangeLogBlock::prepare_to_flush() noexcept
       << "The last slot must end before the start of the SlotInfo array!";
 
   return ConstBuffer{(const void*)this, this->block_size()};
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-// TODO [tastolfi 2026-04-21] probably remove
-//
-bool ChangeLogBlock::release_grant() noexcept
-{
-  if (!batt::is_case<batt::Grant>(this->ephemeral_state().token_)) {
-    return false;
-  }
-  std::get<batt::Grant>(this->ephemeral_state().token_).spend_all();
-  return true;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

@@ -154,38 +154,41 @@ class MemTableTest : public ::testing::Test
 
     if (!expect_overflow) {
       EXPECT_CALL(this->storage_writer_context,
-                  append_slot(/*byte_count*/ Ge(key.size() + value.size()),
+                  append_slot(/*min_edit_offset_lower_bound=*/Eq(
+                                  this->mem_table->edit_offset_lower_bound()),
+                              /*byte_count=*/Ge(key.size() + value.size()),
                               /*callback=*/::testing::_))
-          .WillOnce(
-              Invoke([this, dst_block_buffer](usize byte_count, auto&& callback_fn) -> Status {
-                // Determine whether this is the first visit, and if so, set expectations that the
-                // MemTable will add/remove a ref count.
-                //
-                auto first_visit = FirstVisitToBlock{this->next_edit_offset == 0};
-                if (first_visit) {
-                  EXPECT_CALL(*dst_block_buffer, add_ref(1))  //
-                      .WillOnce(Return());
+          .WillOnce(Invoke([this, dst_block_buffer](EditOffset /*min_edit_offset_lower_bound*/,
+                                                    usize byte_count,
+                                                    auto&& callback_fn) -> Status {
+            // Determine whether this is the first visit, and if so, set expectations that the
+            // MemTable will add/remove a ref count.
+            //
+            auto first_visit = FirstVisitToBlock{this->next_edit_offset == 0};
+            if (first_visit) {
+              EXPECT_CALL(*dst_block_buffer, add_ref(1))  //
+                  .WillOnce(Return());
 
-                  EXPECT_CALL(*dst_block_buffer, block_size())  //
-                      .WillRepeatedly(Return(0));
+              EXPECT_CALL(*dst_block_buffer, block_size())  //
+                  .WillRepeatedly(Return(0));
 
-                  EXPECT_CALL(*dst_block_buffer, remove_ref(1))  //
-                      .WillOnce(Return());
-                }
+              EXPECT_CALL(*dst_block_buffer, remove_ref(1))  //
+                  .WillOnce(Return());
+            }
 
-                // Invoke MemTable's callback.
-                //
-                callback_fn(first_visit,
-                            dst_block_buffer,
-                            this->stable_string_store.allocate(byte_count),
-                            EditOffset{this->next_edit_offset});
+            // Invoke MemTable's callback.
+            //
+            callback_fn(first_visit,
+                        dst_block_buffer,
+                        this->stable_string_store.allocate(byte_count),
+                        EditOffset{this->next_edit_offset});
 
-                // Update the fake EditOffset.
-                //
-                this->next_edit_offset += byte_count;
+            // Update the fake EditOffset.
+            //
+            this->next_edit_offset += byte_count;
 
-                return OkStatus();
-              }));
+            return OkStatus();
+          }));
     }
 
     Status status = this->mem_table->put(this->storage_writer_context, key, value);

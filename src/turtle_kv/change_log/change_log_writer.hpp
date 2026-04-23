@@ -165,7 +165,9 @@ class ChangeLogWriter
     template <typename SerializeFn>
       requires std::
           invocable<const SerializeFn&, FirstVisitToBlock, BlockBuffer*, MutableBuffer, EditOffset>
-        Status append_slot(usize byte_size, const SerializeFn& fn) noexcept;
+        Status append_slot(EditOffset min_edit_offset_lower_bound,
+                           usize byte_size,
+                           const SerializeFn& fn) noexcept;
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
    private:
@@ -468,7 +470,8 @@ class ChangeLogWriter
 template <typename SerializeFn>
   requires std::
       invocable<const SerializeFn&, FirstVisitToBlock, ChangeLogBlock*, MutableBuffer, EditOffset>
-    inline Status ChangeLogWriter::Context::append_slot(usize byte_size,
+    inline Status ChangeLogWriter::Context::append_slot(EditOffset min_edit_offset_lower_bound,
+                                                        usize byte_size,
                                                         const SerializeFn& serialize_fn) noexcept
 {
   Context& context = *this;
@@ -484,7 +487,10 @@ template <typename SerializeFn>
 
   // Make sure there is a clean break between blocks every 2^kBlockClusterLimitBits.
   //
-  const EditOffset min_edit_offset_lower_bound{slot_edit_offset.value() & kBlockClusterMask};
+  min_edit_offset_lower_bound = EditOffset{
+      std::max(min_edit_offset_lower_bound.value(),  //
+               slot_edit_offset.value() & kBlockClusterMask),
+  };
 
   // Grab a private buffer.
   //

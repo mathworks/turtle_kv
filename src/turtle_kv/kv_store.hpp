@@ -230,13 +230,18 @@ class KVStore : public Table
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
   struct State {
+    /** \brief The active MemTable; this is where new edits are inserted/buffered.
+     */
     boost::intrusive_ptr<MemTable> mem_table_;
 
+    /** \brief Finalized MemTables which are still in-scope; i.e., their edit offset upper bound is
+     * after that of this_>base_checkpoint_.  Stored in oldest(front)-to-newest(back) order.
+     */
     std::vector<boost::intrusive_ptr<MemTable>> deltas_;
 
+    /** \brief The most recent checkpoint; covers everything older than the deltas.
+     */
     Optional<Checkpoint> base_checkpoint_;
-
-    std::shared_ptr<const State> prev_checkpoint_state_;
   };
 
   static_assert(std::default_initializable<State>);
@@ -329,11 +334,6 @@ class KVStore : public Table
                      ChangeLogBlock* block,
                      EditOffset edit_offset,
                      ConstBuffer payload);
-
-  //----- --- -- -  -  -   -
-  // TODO [tastolfi 2026-04-21] REMOVE?
-  StatusOr<ValueView> get_impl(const State& state, const KeyView& key, bool no_invalidate) noexcept;
-  //----- --- -- -  -  -   -
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
