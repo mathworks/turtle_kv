@@ -663,6 +663,41 @@ TEST_F(BenchmarksTest, SortedInsertOrderThreads)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+TEST_F(BenchmarksTest, MemTableGetThreads)
+{
+  this->thread_scaling([this](BenchmarkContext& context) {
+    // Setup
+    //
+    if (context.thread_i == 0) {
+      context.before_trial = [this, &context] {
+        this->create_kv_store();
+        this->open_kv_store();
+        this->insert_data(/*sorted=*/false);
+
+        auto& kv_store_metrics = this->kv_store->metrics();
+
+        context.add_count_metric_delta("found_in_mem_table",
+                                       kv_store_metrics.all_mem_tables_get_count);
+
+        context.add_count_metric_delta("found_in_checkpoint",
+                                       kv_store_metrics.checkpoint_get_count);
+      };
+      context.after_trial = [&context] {
+        context.custom_metrics.clear();
+      };
+    }
+
+    // Workload
+    //
+    for (auto _ : context) {
+      this->random_gets(context);
+      this->kv_store->reset_thread_context();
+    }
+  });
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 TEST_F(BenchmarksTest, CheckpointGetThreads)
 {
   this->thread_scaling([this](BenchmarkContext& context) {
@@ -704,7 +739,7 @@ TEST_F(BenchmarksTest, CheckpointGetThreads)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-TEST_F(BenchmarksTest, MemTableGetThreads)
+TEST_F(BenchmarksTest, CheckpointGetThreadsEvictionPause)
 {
   this->thread_scaling([this](BenchmarkContext& context) {
     // Setup
@@ -714,6 +749,7 @@ TEST_F(BenchmarksTest, MemTableGetThreads)
         this->create_kv_store();
         this->open_kv_store();
         this->insert_data(/*sorted=*/false);
+        this->checkpoint();
 
         auto& kv_store_metrics = this->kv_store->metrics();
 
@@ -722,8 +758,17 @@ TEST_F(BenchmarksTest, MemTableGetThreads)
 
         context.add_count_metric_delta("found_in_checkpoint",
                                        kv_store_metrics.checkpoint_get_count);
+
+        auto& cache_slot_pool_metrics = llfs::PageCacheSlot::Pool::Metrics::instance();
+
+        context.add_count_metric_delta("pin_count", cache_slot_pool_metrics.pin_count);
+        context.add_count_metric_delta("unpin_count", cache_slot_pool_metrics.unpin_count);
+
+        this->kv_store->reset_thread_context();
+        llfs::PageCacheSlot::eviction_pause() = true;
       };
       context.after_trial = [&context] {
+        llfs::PageCacheSlot::eviction_pause() = false;
         context.custom_metrics.clear();
       };
     }
