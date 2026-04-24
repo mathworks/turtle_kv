@@ -51,6 +51,16 @@ class Movable
     return this->value_;
   }
 
+  T& ref() noexcept
+  {
+    return this->value_;
+  }
+
+  const T& cref() const noexcept
+  {
+    return this->value_;
+  }
+
   template <typename U>
     requires(std::is_convertible_v<U, T>)
   Movable& operator=(const U& new_value)

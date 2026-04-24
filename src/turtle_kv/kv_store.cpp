@@ -1516,7 +1516,7 @@ void KVStore::collect_stats(
     std::function<void(std::string_view /*name*/, double /*value*/)> fn) const noexcept
 {
   //----- --- -- -  -  -   -
-  const auto emit_latency = [&fn](std::string_view name, const LatencyMetric& metric) {
+  const auto emit_latency = [&fn](std::string_view name, const auto /*LatencyMetric*/& metric) {
     fn(batt::to_string(name, ".count"), metric.count.get());
     fn(batt::to_string(name, ".seconds"), metric.total_seconds());
   };

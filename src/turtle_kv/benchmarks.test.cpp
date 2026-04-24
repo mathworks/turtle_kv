@@ -12,14 +12,23 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <turtle_kv/util/print_csv.hpp>
+
 #include <batteries/constants.hpp>
+#include <batteries/do_nothing.hpp>
 #include <batteries/env.hpp>
 #include <batteries/int_types.hpp>
 #include <batteries/seq/loop_control.hpp>
+#include <batteries/stream_util.hpp>
 
+#include <boost/iterator/iterator_facade.hpp>
+
+#include <atomic>
+#include <barrier>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 
 namespace {
 
@@ -29,11 +38,257 @@ using namespace batt::constants;
 using batt::getenv_as;
 using batt::Status;
 using batt::StatusOr;
+using batt::to_string;
 
 using turtle_kv::EditOffset;
 using turtle_kv::KeyView;
 using turtle_kv::KVStore;
+using turtle_kv::Movable;
 using turtle_kv::ValueView;
+
+using Clock = std::chrono::steady_clock;
+using Duration = Clock::duration;
+using TimePoint = Clock::time_point;
+using Barrier = std::barrier<batt::DoNothing>;
+
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+//
+class BenchmarkMetric
+{
+ public:
+  BenchmarkMetric(const BenchmarkMetric&) = delete;
+  BenchmarkMetric& operator=(const BenchmarkMetric&) = delete;
+
+  virtual ~BenchmarkMetric() = default;
+
+  virtual std::string name() = 0;
+
+  virtual std::string value() = 0;
+
+  virtual void start_collecting() = 0;
+
+  virtual void stop_collecting() = 0;
+
+ protected:
+  BenchmarkMetric() = default;
+};
+
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+//
+template <typename T>
+class FastCountDelta : public BenchmarkMetric
+{
+ public:
+  explicit FastCountDelta(std::string name, turtle_kv::FastCountMetric<T>& metric) noexcept
+      : name_{std::move(name)}
+      , metric_{metric}
+  {
+  }
+
+  std::string name() override
+  {
+    return this->name_;
+  }
+
+  std::string value() override
+  {
+    return batt::to_string(this->delta_value_);
+  }
+
+  void start_collecting() override
+  {
+    this->start_value_ = this->metric_.get();
+  }
+
+  void stop_collecting() override
+  {
+    this->delta_value_ = this->metric_.get() - this->start_value_;
+  }
+
+ private:
+  std::string name_;
+  turtle_kv::FastCountMetric<T>& metric_;
+  T start_value_;
+  T delta_value_;
+};
+
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+//
+class BenchmarkContext
+{
+ public:
+  using Self = BenchmarkContext;
+
+  struct TrialResult {
+    TimePoint begin_time;
+    TimePoint end_time;
+    std::vector<std::pair<std::string, std::string>> metrics;
+
+    Duration duration() const
+    {
+      return this->end_time - this->begin_time;
+    }
+  };
+
+  struct ScopedTrial {
+    Movable<BenchmarkContext*> context_{nullptr};
+    Movable<isize> trial_i_{0};
+
+    ScopedTrial(const ScopedTrial&) = delete;
+    ScopedTrial& operator=(const ScopedTrial&) = delete;
+
+    ScopedTrial(ScopedTrial&&) = default;
+    ScopedTrial& operator=(ScopedTrial&&) = default;
+
+    ScopedTrial(BenchmarkContext* context, isize trial_i) noexcept
+        : context_{context}
+        , trial_i_{trial_i}
+    {
+      this->context_.ref()->trial_sync.arrive_and_wait();
+      this->context_.ref()->before_trial();
+      this->context_.ref()->trial_sync.arrive_and_wait();
+      for (const auto& p_metric : this->context_.ref()->custom_metrics) {
+        p_metric->start_collecting();
+      }
+      this->context_.ref()->trial_sync.arrive_and_wait();
+
+      VLOG(1) << "trial started: " << this->trial_i_;
+      this->result().begin_time = Clock::now();
+    }
+
+    ~ScopedTrial() noexcept
+    {
+      if (this->context_.ref() && this->trial_i_ < this->context_.ref()->n_trials) {
+        this->result().end_time = Clock::now();
+        VLOG(1) << "trial finished: " << this->trial_i_;
+        this->context_.ref()->trial_sync.arrive_and_wait();
+        for (const auto& p_metric : this->context_.ref()->custom_metrics) {
+          p_metric->stop_collecting();
+          this->result().metrics.push_back(std::make_pair(p_metric->name(), p_metric->value()));
+        }
+        this->context_.ref()->trial_sync.arrive_and_wait();
+        this->context_.ref()->after_trial();
+      }
+    }
+
+    TrialResult& result() const
+    {
+      return this->context_.cref()->trial_results[this->trial_i_];
+    }
+  };
+
+  class iterator
+      : public boost::iterator_facade<        //
+            iterator,                         // <- Derived
+            ScopedTrial,                      // <- Value
+            std::random_access_iterator_tag,  // <- CategoryOrTraversal
+            ScopedTrial,                      // <- Reference
+            isize                             // <- Difference
+            >
+  {
+   public:
+    using Self = iterator;
+    using iterator_category = std::random_access_iterator_tag;
+    using value_type = ScopedTrial;
+    using reference = ScopedTrial;
+
+    explicit iterator(BenchmarkContext* context, isize trial_i) noexcept
+        : context{context}
+        , trial_i{trial_i}
+    {
+    }
+
+    ScopedTrial dereference() const
+    {
+      return ScopedTrial{this->context, this->trial_i};
+    }
+
+    bool equal(const Self& other) const
+    {
+      return this->context == other.context && this->trial_i == other.trial_i;
+    }
+
+    void increment()
+    {
+      BATT_CHECK_LT(this->trial_i, this->context->n_trials);
+      ++this->trial_i;
+    }
+
+    void decrement()
+    {
+      BATT_CHECK_GT(this->trial_i, 0);
+      --this->trial_i;
+    }
+
+    void advance(isize delta)
+    {
+      this->trial_i += delta;
+      BATT_CHECK_IN_RANGE(0, this->trial_i, this->context->n_trials + 1);
+    }
+
+    isize distance_to(const Self& other) const
+    {
+      return other.trial_i - this->trial_i;
+    }
+
+    //----- --- -- -  -  -   -
+    BenchmarkContext* context = nullptr;
+    isize trial_i = 0;
+  };
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  BenchmarkContext(const BenchmarkContext&) = delete;
+  BenchmarkContext& operator=(const BenchmarkContext&) = delete;
+
+  explicit BenchmarkContext(const char* test_name,
+                            usize thread_i,
+                            usize n_threads,
+                            Barrier& trial_sync) noexcept
+      : test_name{test_name}
+      , thread_i{thread_i}
+      , n_threads{n_threads}
+      , n_trials{3}
+      , trial_results(this->n_trials)
+      , trial_sync{trial_sync}
+  {
+  }
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  iterator begin()
+  {
+    return iterator{this, 0};
+  }
+
+  iterator end()
+  {
+    return iterator{this, this->n_trials};
+  }
+
+  Duration avg_duration() const
+  {
+    Duration d = std::chrono::seconds(0);
+    for (auto& r : this->trial_results) {
+      d += r.duration();
+    }
+    return d / this->trial_results.size();
+  }
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  const char* test_name = "(not set)";
+  usize thread_i = 0;
+  usize n_threads = 0;
+  isize n_trials = 0;
+  std::vector<TrialResult> trial_results;
+  Barrier& trial_sync;
+
+  std::function<void()> before_trial = batt::DoNothing{};
+  std::function<void()> after_trial = batt::DoNothing{};
+
+  std::vector<std::unique_ptr<BenchmarkMetric>> custom_metrics;
+};
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 //
@@ -44,8 +299,14 @@ class BenchmarksTest : public ::testing::Test
   {
     this->load_data_file();
     this->read_params();
-    this->create_kv_store();
-    this->open_kv_store();
+  }
+
+  const char* test_name() const
+  {
+    const ::testing::TestInfo* const test_info =
+        ::testing::UnitTest::GetInstance()->current_test_info();
+
+    return test_info->name();
   }
 
   void load_data_file()
@@ -103,18 +364,13 @@ class BenchmarksTest : public ::testing::Test
     this->kv_store->set_checkpoint_distance(64);
   }
 
-  void insert_data(bool sorted)
+  void insert_data(bool sorted, usize shard_i = 0, usize n_shards = 1)
   {
-    LOG(INFO) << "Inserting" << BATT_INSPECT(n_keys) << BATT_INSPECT(sorted);
-
     if (sorted) {
       this->update_sorted_data();
     }
 
     this->max_inserted_pos = 0;
-    auto load_start_time = std::chrono::steady_clock::now();
-
-    LOG(INFO) << BATT_INSPECT(key_len) << BATT_INSPECT(value_len);
 
     const auto insert_fn = [this](const std::string_view& key, const std::string_view& value) {
       Status status = this->kv_store->put(key, ValueView::from_str(value));
@@ -122,29 +378,27 @@ class BenchmarksTest : public ::testing::Test
     };
 
     if (sorted) {
-      this->visit_sorted_data(insert_fn);
+      this->visit_sorted_data(insert_fn, shard_i, n_shards);
     } else {
-      this->visit_random_data(insert_fn);
+      this->visit_random_data(insert_fn, shard_i, n_shards);
     }
+  }
 
-    auto load_finish_time = std::chrono::steady_clock::now();
-    double load_time_nanos =
-        std::chrono::duration_cast<std::chrono::nanoseconds>(load_finish_time - load_start_time)
-            .count();
-
-    const u64 bytes_inserted = (this->key_len + this->value_len) * this->n_keys;
-
-    LOG(INFO) << "Insert finished in " << (load_time_nanos / 1e6) << " ms -- "
-              << ((double)n_keys) / load_time_nanos * 1e6 << " kops/sec"
-              << BATT_INSPECT(batt::dump_size(bytes_inserted));
+  usize shard_begin(usize shard_i, usize n_shards)
+  {
+    usize shard_size = this->n_keys / n_shards;
+    usize remainder = this->n_keys % n_shards;
+    return shard_i * shard_size + std::min(shard_i, remainder);
   }
 
   template <std::invocable<const std::string_view& /*key*/, const std::string_view& /*value*/> Fn>
-  void visit_random_data(Fn&& fn)
+  void visit_random_data(Fn&& fn, usize shard_i = 0, usize n_shards = 1)
   {
-    usize data_pos = 0;
+    usize start_i = this->shard_begin(shard_i, n_shards);
+    usize end_i = this->shard_begin(shard_i + 1, n_shards);
+    usize data_pos = start_i % this->data_str.size();
 
-    for (usize i = 0; i < this->n_keys; ++i) {
+    for (usize i = start_i; i < end_i; ++i) {
       if (data_pos + this->step_size > this->data_str.size()) {
         BATT_CHECK_NE(data_pos, 0);
         data_pos = data_pos + this->step_size - this->data_str.size();
@@ -161,13 +415,21 @@ class BenchmarksTest : public ::testing::Test
     }
   }
 
+  std::string_view get_inserted_key(usize i) const
+  {
+    return std::string_view{this->data_str.data() + i, this->key_len};
+  }
+
   template <std::invocable<const std::string_view& /*key*/, const std::string_view& /*value*/> Fn>
-  void visit_sorted_data(Fn&& fn)
+  void visit_sorted_data(Fn&& fn, usize shard_i = 0, usize n_shards = 1)
   {
     this->update_sorted_data();
 
-    const char* p_data = this->sorted_data.get();
-    for (usize i = 0; i < this->n_keys; ++i) {
+    usize start_i = this->shard_begin(shard_i, n_shards);
+    usize end_i = this->shard_begin(shard_i + 1, n_shards);
+    const char* p_data = this->sorted_data.get() + start_i * this->key_len;
+
+    for (usize i = start_i; i < end_i; ++i) {
       const std::string_view key{p_data, this->key_len};
       const std::string_view value{p_data, this->value_len};
 
@@ -181,9 +443,6 @@ class BenchmarksTest : public ::testing::Test
   {
     if (this->sorted_data == nullptr || this->key_len != this->sorted_key_len ||
         this->value_len != this->sorted_value_len) {
-      //----- --- -- -  -  -   -
-      // Lazily initialize the sorted data.
-      //
       BATT_CHECK_EQ(std::max(this->key_len, this->value_len), this->step_size);
 
       this->sorted_data_size = this->n_keys * this->step_size;
@@ -207,16 +466,99 @@ class BenchmarksTest : public ::testing::Test
 
       this->sorted_key_len = this->key_len;
       this->sorted_value_len = this->value_len;
-      //----- --- -- -  -  -   -
     }
   }
 
   void checkpoint()
   {
-    LOG(INFO) << "Forcing checkpoint...";
     EditOffset checkpoint_offset = BATT_OK_RESULT_OR_PANIC(kv_store->force_checkpoint());
     BATT_CHECK_OK(kv_store->wait_for_checkpoint(checkpoint_offset));
-    LOG(INFO) << "Checkpoint committed at " << checkpoint_offset;
+  }
+
+  template <std::invocable<BenchmarkContext&> Fn>
+  void thread_scaling(Fn&& fn)
+  {
+    const usize n_proc = getenv_as<usize>("T").value_or(std::thread::hardware_concurrency());
+
+    std::vector<std::vector<std::pair<std::string, std::string>>> rows;
+
+    usize n_threads = 1;
+    for (;;) {
+      Barrier start_point{(i32)n_threads};
+      std::vector<std::thread> threads;
+      std::vector<Duration> thread_duration(n_threads);
+      std::vector<std::vector<std::vector<std::pair<std::string, std::string>>>> thread_metrics(
+          n_threads);
+
+      const auto run_thread =
+          [this, &start_point, &thread_duration, &thread_metrics, &fn, n_threads](usize thread_i) {
+            BenchmarkContext context{this->test_name(), thread_i, n_threads, start_point};
+            fn(context);
+            thread_duration[thread_i] = context.avg_duration();
+
+            for (auto& r : context.trial_results) {
+              thread_metrics[thread_i].push_back(r.metrics);
+            }
+          };
+
+      for (usize thread_i = 1; thread_i < n_threads; ++thread_i) {
+        threads.emplace_back(
+            [this, &start_point, &thread_duration, &fn, thread_i, n_threads, &run_thread] {
+              run_thread(thread_i);
+            });
+      }
+
+      run_thread(0);
+
+      for (std::thread& t : threads) {
+        t.join();
+      }
+
+      Duration duration = *std::max_element(thread_duration.begin(), thread_duration.end());
+
+      double rate = (double)(this->n_keys) * 1e6 /
+                    (double)std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count();
+
+      auto& row = rows.emplace_back();
+
+      row.emplace_back("test_name", this->test_name());
+      row.emplace_back("N", to_string(this->n_keys));
+      row.emplace_back("n_threads", to_string(n_threads));
+      row.emplace_back("rate(kops/sec)", to_string(rate));
+
+      for (usize thread_i = 0; thread_i < n_threads; ++thread_i) {
+        for (usize trial_i = 0; trial_i < thread_metrics[thread_i].size(); ++trial_i) {
+          for (const auto& [name, value] : thread_metrics[thread_i][trial_i]) {
+            row.emplace_back(to_string(name, ".", thread_i, ".", trial_i), value);
+          }
+        }
+      }
+
+      if (n_threads == n_proc) {
+        break;
+      }
+
+      n_threads =
+          std::min<usize>(n_proc, n_threads + std::max<usize>(batt::log2_floor(n_threads), 1));
+    }
+
+    turtle_kv::print_csv(std::cout, rows);
+
+    // std::cout << batt::dump_range(duration_per_threads, batt::Pretty::True) << std::endl;
+  }
+
+  void random_gets(usize thread_i = 0, usize n_threads = 1)
+  {
+    std::default_random_engine rng{std::random_device{}()};
+    std::uniform_int_distribution<usize> pick_i{0, this->n_keys - 1};
+
+    usize start_i = this->shard_begin(thread_i, n_threads);
+    usize end_i = this->shard_begin(thread_i + 1, n_threads);
+
+    for (usize i = start_i; i < end_i; ++i) {
+      KeyView key = this->get_inserted_key(pick_i(rng));
+      BATT_CHECK_OK(this->kv_store->get(key));
+    }
   }
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -242,18 +584,146 @@ class BenchmarksTest : public ::testing::Test
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-TEST_F(BenchmarksTest, RandomInsertOrder)
+TEST_F(BenchmarksTest, RandomInsertOrderThreads)
 {
-  this->insert_data(/*sorted=*/false);
-  this->checkpoint();
+  this->thread_scaling([this](auto& context) {
+    // Setup
+    //
+    if (context.thread_i == 0) {
+      context.before_trial = [this] {
+        this->create_kv_store();
+        this->open_kv_store();
+      };
+    }
+
+    // Benchmark (per thread)
+    //
+    for (auto _ : context) {
+      this->insert_data(/*sorted=*/false);
+    }
+  });
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-TEST_F(BenchmarksTest, SortedInsertOrder)
+TEST_F(BenchmarksTest, SortedInsertOrderThreads)
 {
-  this->insert_data(/*sorted=*/true);
-  this->checkpoint();
+  this->update_sorted_data();
+
+  this->thread_scaling([this](BenchmarkContext& context) {
+    // Setup
+    //
+    if (context.thread_i == 0) {
+      context.before_trial = [this] {
+        this->create_kv_store();
+        this->open_kv_store();
+      };
+    }
+
+    // Benchmark (per thread)
+    //
+    for (auto _ : context) {
+      this->insert_data(/*sorted=*/true);
+    }
+  });
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+TEST_F(BenchmarksTest, CheckpointGetThreads)
+{
+  this->thread_scaling([this](BenchmarkContext& context) {
+    // Setup
+    //
+    if (context.thread_i == 0) {
+      context.before_trial = [this, &context] {
+        this->create_kv_store();
+        this->open_kv_store();
+        this->insert_data(/*sorted=*/false);
+        this->checkpoint();
+
+        // auto& m = this->kv_store->metrics();
+        // auto& c = llfs::PageCacheSlot::Pool::Metrics::instance();
+        //  std::cerr << BATT_INSPECT(m.mem_table_get_count) << BATT_INSPECT(m.checkpoint_get_count)
+        //            << BATT_INSPECT(c.pin_count) << BATT_INSPECT(c.unpin_count) << std::endl;
+        auto& c = llfs::PageCacheSlot::Pool::Metrics::instance();
+
+        context.custom_metrics.push_back(
+            std::make_unique<FastCountDelta<i64>>("pin_count", c.pin_count));
+
+        context.custom_metrics.push_back(
+            std::make_unique<FastCountDelta<i64>>("unpin_count", c.pin_count));
+      };
+      context.after_trial = [this] {
+        this->kv_store->reset_thread_context();
+      };
+    }
+
+    for (auto _ : context) {
+      this->random_gets(context.thread_i, context.n_threads);
+    }
+
+    if (context.thread_i == 0) {
+      // auto& m = this->kv_store->metrics();
+      // gauto& c = llfs::PageCacheSlot::Pool::Metrics::instance();
+      // std::cerr << BATT_INSPECT(m.mem_table_get_count) << BATT_INSPECT(m.checkpoint_get_count)
+      //           << BATT_INSPECT(c.pin_count) << BATT_INSPECT(c.unpin_count) << std::endl;
+    }
+  });
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+TEST_F(BenchmarksTest, MemTableGetThreads)
+{
+  this->thread_scaling([this](BenchmarkContext& context) {
+    // Setup
+    //
+    if (context.thread_i == 0) {
+      context.before_trial = [this] {
+        this->create_kv_store();
+        this->open_kv_store();
+        this->insert_data(/*sorted=*/false);
+
+        // auto& m = this->kv_store->metrics();
+        //  std::cerr << BATT_INSPECT(m.mem_table_get_count) << BATT_INSPECT(m.checkpoint_get_count)
+        //            << BATT_INSPECT(c.pin_count) << BATT_INSPECT(c.unpin_count) << std::endl;
+      };
+      context.after_trial = [this] {
+        this->kv_store->reset_thread_context();
+      };
+    }
+
+    for (auto _ : context) {
+      this->random_gets(context.thread_i, context.n_threads);
+    }
+
+    if (context.thread_i == 0) {
+      // auto& m = this->kv_store->metrics();
+      // auto& c = llfs::PageCacheSlot::Pool::Metrics::instance();
+      // std::cerr << BATT_INSPECT(m.mem_table_get_count) << BATT_INSPECT(m.checkpoint_get_count)
+      //          << BATT_INSPECT(c.pin_count) << BATT_INSPECT(c.unpin_count) << std::endl;
+    }
+  });
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+TEST_F(BenchmarksTest, TestContext)
+{
+  Barrier b{1};
+  BenchmarkContext context{this->test_name(), 0, 1, b};
+
+  LOG(INFO) << "before";
+  for (auto _ : context) {
+    LOG(INFO) << " a trial";
+  }
+  LOG(INFO) << "after";
+
+  for (const auto& trial_result : context.trial_results) {
+    LOG(INFO) << BATT_INSPECT(trial_result.duration());
+  }
+  LOG(INFO) << BATT_INSPECT(context.avg_duration());
 }
 
 }  // namespace
