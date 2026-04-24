@@ -45,6 +45,7 @@ template <MemTableStorage StorageT, MemTableAllocationTracker AllocationTrackerT
     , block_list_mutex_{}
     , block_buffers_{}
 {
+  BATT_CHECK_LT(this->edit_offset_upper_bound_.load(), this->edit_offset_lower_bound_.value());
   this->metrics_.alloc_count.add(1);
   this->metrics_.count_stats.update(this->metrics_.alloc_count.get() -
                                     this->metrics_.free_count.get());
@@ -143,14 +144,17 @@ StatusOr<i64> BasicMemTable<StorageT, AllocationTrackerT>::prepare_edit(i64 pack
   }
 
   //----- --- -- -  -  -   -
-  // The prepare did not succeed; revert the prepare.
+  // The prepare did not succeed; try to revert the prepare so a smaller edit might succeed.
   //
   const i64 observed_value = this->prepared_bytes_total_->fetch_sub(packed_edit_size);
 
-  // If we observe the finalized bit to be set, then wake any threads waiting inside
-  // MemTable::finalize().
+  // If observed_value has the finalized bit set, then we need to update committed_bytes_total_,
+  // since there may be a thread blocked inside MemTable::finalize() waiting on
+  // committed_bytes_total_.  First re-apply the prepare, then commit.
   //
   if ((observed_value & Self::kFinalizedMask) != 0) {
+    this->prepared_bytes_total_->fetch_add(packed_edit_size);
+    this->committed_bytes_total_->fetch_add(packed_edit_size);
     this->committed_bytes_total_->notify_all();
   }
 

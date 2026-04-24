@@ -75,11 +75,13 @@ class BenchmarkMetric
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 //
-template <typename T>
-class FastCountDelta : public BenchmarkMetric
+template <typename MetricT>
+class CountMetricDelta : public BenchmarkMetric
 {
  public:
-  explicit FastCountDelta(std::string name, turtle_kv::FastCountMetric<T>& metric) noexcept
+  using ValueT = std::decay_t<decltype(std::declval<MetricT&>().get())>;
+
+  explicit CountMetricDelta(std::string name, MetricT& metric) noexcept
       : name_{std::move(name)}
       , metric_{metric}
   {
@@ -107,9 +109,9 @@ class FastCountDelta : public BenchmarkMetric
 
  private:
   std::string name_;
-  turtle_kv::FastCountMetric<T>& metric_;
-  T start_value_;
-  T delta_value_;
+  MetricT& metric_;
+  ValueT start_value_;
+  ValueT delta_value_;
 };
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
@@ -144,12 +146,17 @@ class BenchmarkContext
         : context_{context}
         , trial_i_{trial_i}
     {
+      //----- --- -- -  -  -   -
       this->context_.ref()->trial_sync.arrive_and_wait();
       this->context_.ref()->before_trial();
+
+      //----- --- -- -  -  -   -
       this->context_.ref()->trial_sync.arrive_and_wait();
       for (const auto& p_metric : this->context_.ref()->custom_metrics) {
         p_metric->start_collecting();
       }
+
+      //----- --- -- -  -  -   -
       this->context_.ref()->trial_sync.arrive_and_wait();
 
       VLOG(1) << "trial started: " << this->trial_i_;
@@ -161,13 +168,20 @@ class BenchmarkContext
       if (this->context_.ref() && this->trial_i_ < this->context_.ref()->n_trials) {
         this->result().end_time = Clock::now();
         VLOG(1) << "trial finished: " << this->trial_i_;
+
+        //----- --- -- -  -  -   -
         this->context_.ref()->trial_sync.arrive_and_wait();
         for (const auto& p_metric : this->context_.ref()->custom_metrics) {
           p_metric->stop_collecting();
           this->result().metrics.push_back(std::make_pair(p_metric->name(), p_metric->value()));
         }
+
+        //----- --- -- -  -  -   -
         this->context_.ref()->trial_sync.arrive_and_wait();
         this->context_.ref()->after_trial();
+
+        //----- --- -- -  -  -   -
+        this->context_.ref()->trial_sync.arrive_and_wait();
       }
     }
 
@@ -275,6 +289,13 @@ class BenchmarkContext
     return d / this->trial_results.size();
   }
 
+  template <typename MetricT>
+  void add_count_metric_delta(std::string name, MetricT& count_metric)
+  {
+    this->custom_metrics.emplace_back(
+        std::make_unique<CountMetricDelta<MetricT>>(std::move(name), count_metric));
+  }
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   const char* test_name = "(not set)";
@@ -367,7 +388,7 @@ class BenchmarksTest : public ::testing::Test
   void insert_data(bool sorted, usize shard_i = 0, usize n_shards = 1)
   {
     if (sorted) {
-      this->update_sorted_data();
+      this->require_sorted_data();
     }
 
     this->max_inserted_pos = 0;
@@ -382,6 +403,11 @@ class BenchmarksTest : public ::testing::Test
     } else {
       this->visit_random_data(insert_fn, shard_i, n_shards);
     }
+  }
+
+  void insert_data(BenchmarkContext& context, bool sorted)
+  {
+    this->insert_data(sorted, context.thread_i, context.n_threads);
   }
 
   usize shard_begin(usize shard_i, usize n_shards)
@@ -423,7 +449,7 @@ class BenchmarksTest : public ::testing::Test
   template <std::invocable<const std::string_view& /*key*/, const std::string_view& /*value*/> Fn>
   void visit_sorted_data(Fn&& fn, usize shard_i = 0, usize n_shards = 1)
   {
-    this->update_sorted_data();
+    this->require_sorted_data();
 
     usize start_i = this->shard_begin(shard_i, n_shards);
     usize end_i = this->shard_begin(shard_i + 1, n_shards);
@@ -439,7 +465,7 @@ class BenchmarksTest : public ::testing::Test
     }
   }
 
-  void update_sorted_data()
+  void require_sorted_data()
   {
     if (this->sorted_data == nullptr || this->key_len != this->sorted_key_len ||
         this->value_len != this->sorted_value_len) {
@@ -508,6 +534,8 @@ class BenchmarksTest : public ::testing::Test
             });
       }
 
+      LOG(INFO) << BATT_INSPECT(n_threads);
+
       run_thread(0);
 
       for (std::thread& t : threads) {
@@ -561,6 +589,11 @@ class BenchmarksTest : public ::testing::Test
     }
   }
 
+  void random_gets(BenchmarkContext& context)
+  {
+    this->random_gets(context.thread_i, context.n_threads);
+  }
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   std::filesystem::path data_file = "/mnt/kv-bakeoff/random_bytes.bin";
@@ -596,10 +629,10 @@ TEST_F(BenchmarksTest, RandomInsertOrderThreads)
       };
     }
 
-    // Benchmark (per thread)
+    // Workload
     //
     for (auto _ : context) {
-      this->insert_data(/*sorted=*/false);
+      this->insert_data(context, /*sorted=*/false);
     }
   });
 }
@@ -608,7 +641,7 @@ TEST_F(BenchmarksTest, RandomInsertOrderThreads)
 //
 TEST_F(BenchmarksTest, SortedInsertOrderThreads)
 {
-  this->update_sorted_data();
+  this->require_sorted_data();
 
   this->thread_scaling([this](BenchmarkContext& context) {
     // Setup
@@ -620,10 +653,10 @@ TEST_F(BenchmarksTest, SortedInsertOrderThreads)
       };
     }
 
-    // Benchmark (per thread)
+    // Workload
     //
     for (auto _ : context) {
-      this->insert_data(/*sorted=*/true);
+      this->insert_data(context, /*sorted=*/true);
     }
   });
 }
@@ -642,32 +675,29 @@ TEST_F(BenchmarksTest, CheckpointGetThreads)
         this->insert_data(/*sorted=*/false);
         this->checkpoint();
 
-        // auto& m = this->kv_store->metrics();
-        // auto& c = llfs::PageCacheSlot::Pool::Metrics::instance();
-        //  std::cerr << BATT_INSPECT(m.mem_table_get_count) << BATT_INSPECT(m.checkpoint_get_count)
-        //            << BATT_INSPECT(c.pin_count) << BATT_INSPECT(c.unpin_count) << std::endl;
-        auto& c = llfs::PageCacheSlot::Pool::Metrics::instance();
+        auto& kv_store_metrics = this->kv_store->metrics();
 
-        context.custom_metrics.push_back(
-            std::make_unique<FastCountDelta<i64>>("pin_count", c.pin_count));
+        context.add_count_metric_delta("found_in_mem_table",
+                                       kv_store_metrics.all_mem_tables_get_count);
 
-        context.custom_metrics.push_back(
-            std::make_unique<FastCountDelta<i64>>("unpin_count", c.pin_count));
+        context.add_count_metric_delta("found_in_checkpoint",
+                                       kv_store_metrics.checkpoint_get_count);
+
+        auto& cache_slot_pool_metrics = llfs::PageCacheSlot::Pool::Metrics::instance();
+
+        context.add_count_metric_delta("pin_count", cache_slot_pool_metrics.pin_count);
+        context.add_count_metric_delta("unpin_count", cache_slot_pool_metrics.unpin_count);
       };
-      context.after_trial = [this] {
-        this->kv_store->reset_thread_context();
+      context.after_trial = [&context] {
+        context.custom_metrics.clear();
       };
     }
 
+    // Workload
+    //
     for (auto _ : context) {
-      this->random_gets(context.thread_i, context.n_threads);
-    }
-
-    if (context.thread_i == 0) {
-      // auto& m = this->kv_store->metrics();
-      // gauto& c = llfs::PageCacheSlot::Pool::Metrics::instance();
-      // std::cerr << BATT_INSPECT(m.mem_table_get_count) << BATT_INSPECT(m.checkpoint_get_count)
-      //           << BATT_INSPECT(c.pin_count) << BATT_INSPECT(c.unpin_count) << std::endl;
+      this->random_gets(context);
+      this->kv_store->reset_thread_context();
     }
   });
 }
@@ -680,29 +710,29 @@ TEST_F(BenchmarksTest, MemTableGetThreads)
     // Setup
     //
     if (context.thread_i == 0) {
-      context.before_trial = [this] {
+      context.before_trial = [this, &context] {
         this->create_kv_store();
         this->open_kv_store();
         this->insert_data(/*sorted=*/false);
 
-        // auto& m = this->kv_store->metrics();
-        //  std::cerr << BATT_INSPECT(m.mem_table_get_count) << BATT_INSPECT(m.checkpoint_get_count)
-        //            << BATT_INSPECT(c.pin_count) << BATT_INSPECT(c.unpin_count) << std::endl;
+        auto& kv_store_metrics = this->kv_store->metrics();
+
+        context.add_count_metric_delta("found_in_mem_table",
+                                       kv_store_metrics.all_mem_tables_get_count);
+
+        context.add_count_metric_delta("found_in_checkpoint",
+                                       kv_store_metrics.checkpoint_get_count);
       };
-      context.after_trial = [this] {
-        this->kv_store->reset_thread_context();
+      context.after_trial = [&context] {
+        context.custom_metrics.clear();
       };
     }
 
+    // Workload
+    //
     for (auto _ : context) {
-      this->random_gets(context.thread_i, context.n_threads);
-    }
-
-    if (context.thread_i == 0) {
-      // auto& m = this->kv_store->metrics();
-      // auto& c = llfs::PageCacheSlot::Pool::Metrics::instance();
-      // std::cerr << BATT_INSPECT(m.mem_table_get_count) << BATT_INSPECT(m.checkpoint_get_count)
-      //          << BATT_INSPECT(c.pin_count) << BATT_INSPECT(c.unpin_count) << std::endl;
+      this->random_gets(context);
+      this->kv_store->reset_thread_context();
     }
   });
 }

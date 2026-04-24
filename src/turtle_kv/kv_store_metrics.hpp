@@ -30,6 +30,14 @@ struct KVStoreMetrics {
   FastCountMetric<u64> checkpoint_get_count{0};
   LatencyMetric checkpoint_get_latency;
 
+  DerivedMetric<u64> all_mem_tables_get_count{[this]() -> u64 {
+    u64 total = this->mem_table_get_count.get();
+    for (const auto& delta_get_count : delta_log2_get_count) {
+      total += delta_get_count.get();
+    }
+    return total;
+  }};
+
   FastCountMetric<u64> scan_count{0};
 
   /** \brief The time it takes to compact a finalized MemTable to produce an update batch.
