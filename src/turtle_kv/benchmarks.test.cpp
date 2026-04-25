@@ -627,6 +627,13 @@ TEST_F(BenchmarksTest, RandomInsertOrderThreads)
         this->create_kv_store();
         this->open_kv_store();
       };
+      context.after_trial = [this] {
+        auto& mem_table = this->kv_store->metrics().mem_table;
+        LOG(INFO) << BATT_INSPECT(mem_table.wait_for_trim_count)
+                  << BATT_INSPECT(mem_table.short_finalize_count)
+                  << BATT_INSPECT(mem_table.finalize_size_stats)
+                  << BATT_INSPECT(mem_table.short_finalize_size_stats);
+      };
     }
 
     // Workload

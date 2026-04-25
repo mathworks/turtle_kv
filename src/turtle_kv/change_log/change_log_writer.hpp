@@ -164,10 +164,27 @@ class ChangeLogWriter
      */
     template <typename SerializeFn>
       requires std::
-          invocable<const SerializeFn&, FirstVisitToBlock, BlockBuffer*, MutableBuffer, EditOffset>
+          invocable<SerializeFn&&, FirstVisitToBlock, BlockBuffer*, MutableBuffer, EditOffset>
         Status append_slot(EditOffset min_edit_offset_lower_bound,
                            usize byte_size,
-                           const SerializeFn& fn) noexcept;
+                           batt::WaitForResource wait_for_resource,
+                           SerializeFn&& fn) noexcept;
+
+    /** \brief Appends the passed payload value as a new slot within some BlockBuffer owned by
+     * this Context. \return the sequence number (index) of the newly formatted slot.
+     */
+    template <typename SerializeFn>
+      requires std::
+          invocable<SerializeFn&&, FirstVisitToBlock, BlockBuffer*, MutableBuffer, EditOffset>
+        Status append_slot(EditOffset min_edit_offset_lower_bound,
+                           usize byte_size,
+                           SerializeFn&& fn) noexcept
+    {
+      return this->append_slot(min_edit_offset_lower_bound,
+                               byte_size,
+                               batt::WaitForResource::kTrue,
+                               BATT_FORWARD(fn));
+    }
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
    private:
@@ -389,7 +406,8 @@ class ChangeLogWriter
   /** \brief Allocates and returns a new BlockBuffer of the configured size.  This function may
    * block waiting to acquire Grant from the Volume (i.e. Volume::reserve).
    */
-  auto allocate_buffer(EditOffset edit_offset_lower_bound) noexcept -> StatusOr<BlockBuffer*>;
+  auto allocate_buffer(EditOffset edit_offset_lower_bound,
+                       batt::WaitForResource wait_for_resource) noexcept -> StatusOr<BlockBuffer*>;
 
   /** \brief The background writer task; continuously polls all associated Contexts for new
    * data. When new data is found, it is merged in index-order and written in batches (as large
@@ -469,10 +487,11 @@ class ChangeLogWriter
 
 template <typename SerializeFn>
   requires std::
-      invocable<const SerializeFn&, FirstVisitToBlock, ChangeLogBlock*, MutableBuffer, EditOffset>
+      invocable<SerializeFn&&, FirstVisitToBlock, ChangeLogBlock*, MutableBuffer, EditOffset>
     inline Status ChangeLogWriter::Context::append_slot(EditOffset min_edit_offset_lower_bound,
                                                         usize byte_size,
-                                                        const SerializeFn& serialize_fn) noexcept
+                                                        batt::WaitForResource wait_for_resource,
+                                                        SerializeFn&& serialize_fn) noexcept
 {
   Context& context = *this;
   ChangeLogWriter& writer = this->writer_;
@@ -518,7 +537,8 @@ template <typename SerializeFn>
     if (no_buffer) {
       VLOG(1) << "ChangeLogWriter::append_slot - allocating new block buffer...";
       BATT_CHECK_GE(slot_edit_offset, min_edit_offset_lower_bound);
-      BATT_ASSIGN_OK_RESULT(block_buffer, writer.allocate_buffer(slot_edit_offset));
+      BATT_ASSIGN_OK_RESULT(block_buffer,
+                            writer.allocate_buffer(slot_edit_offset, wait_for_resource));
       first_visit_to_block = FirstVisitToBlock{true};
       VLOG(1) << "ChangeLogWriter::append_slot - have new buffer!";
     }
@@ -544,7 +564,7 @@ template <typename SerializeFn>
           (slot_edit_offset - block_buffer->edit_offset_lower_bound()).to_slot_delta()));
 
       //----- --- -- -  -  -   -
-      serialize_fn(first_visit_to_block, block_buffer, slot_buffer, slot_edit_offset);
+      BATT_FORWARD(serialize_fn)(first_visit_to_block, block_buffer, slot_buffer, slot_edit_offset);
       //----- --- -- -  -  -   -
 
       bytes_to_commit = space_needed;

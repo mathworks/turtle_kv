@@ -15,6 +15,8 @@
 #include <turtle_kv/import/buffer.hpp>
 #include <turtle_kv/import/status.hpp>
 
+#include <batteries/async/types.hpp>
+
 #include <type_traits>
 
 namespace turtle_kv {
@@ -33,11 +35,12 @@ concept MemTableStorageWriterContext = requires(
     T& context,
     EditOffset min_edit_offset_lower_bound,
     usize byte_count,
+    batt::WaitForResource wait_for_resource,
     void (*serialize_fn)(FirstVisitToBlock, typename T::BlockBuffer*, MutableBuffer, EditOffset)) {
   requires MemTableStorageBlockBuffer<typename T::BlockBuffer>;
 
   {
-    context.append_slot(min_edit_offset_lower_bound, byte_count, serialize_fn)
+    context.append_slot(min_edit_offset_lower_bound, byte_count, wait_for_resource, serialize_fn)
   } -> std::same_as<Status>;
 };
 

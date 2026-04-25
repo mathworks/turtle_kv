@@ -46,7 +46,10 @@ struct MockMemTableStorage {
 
     MOCK_METHOD(Status,
                 append_slot,
-                (EditOffset /*min_edit_offset_lower_bound*/, usize /*byte_count*/, SlotCallbackFn),
+                (EditOffset /*min_edit_offset_lower_bound*/,
+                 usize /*byte_count*/,
+                 batt::WaitForResource,
+                 SlotCallbackFn),
                 ());
   };
 };
