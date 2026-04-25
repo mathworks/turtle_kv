@@ -22,6 +22,9 @@ StatusOr<ValueView> find_key_in_leaf_using_sharded_views(llfs::PageId leaf_page_
                                                          KeyQuery& query,
                                                          usize& item_index_out);
 
+StatusOr<u32> find_key_lower_bound_index_using_sharded_views(llfs::PageId leaf_page_id,
+                                                             KeyQuery& query);
+
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename PageIdT, typename TryPinFullLeafFn, typename LoadFullLeafFn>
@@ -80,6 +83,68 @@ StatusOr<ValueView> find_key_in_leaf_impl(const PageIdT& leaf_page_id,
   return result;
 }
 
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+struct TryPinCachedPageId {
+  auto operator()(const llfs::PageId& leaf_page_id, KeyQuery& query) const
+  {
+    return query.page_loader->try_pin_cached_page(  //
+        leaf_page_id,
+        llfs::PageLoadOptions{
+            LeafPageView::page_layout_id(),
+            llfs::PinPageToJob::kDefault,
+            llfs::LruPriority{kLeafLruPriority},
+        });
+  }
+};
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+struct TryPinCachedPageIdSlot {
+  auto operator()(const llfs::PageIdSlot& leaf_page_id_slot, KeyQuery& query) const
+  {
+    return leaf_page_id_slot.try_pin_through(  //
+        *query.page_loader,
+        llfs::PageLoadOptions{
+            LeafPageView::page_layout_id(),
+            llfs::PinPageToJob::kDefault,
+            llfs::LruPriority{kLeafLruPriority},
+        });
+  }
+};
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+struct LoadFullLeafPageId {
+  auto operator()(const llfs::PageId& leaf_page_id, KeyQuery& query) const
+  {
+    return query.page_loader->load_page(  //
+        leaf_page_id,
+        llfs::PageLoadOptions{
+            LeafPageView::page_layout_id(),
+            llfs::PinPageToJob::kDefault,
+            llfs::OkIfNotFound{false},
+            llfs::LruPriority{kLeafLruPriority},
+        });
+  }
+};
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+struct LoadFullLeafPageIdSlot {
+  auto operator()(const llfs::PageIdSlot& leaf_page_id_slot, KeyQuery& query) const
+  {
+    return leaf_page_id_slot.load_through(  //
+        *query.page_loader,
+        llfs::PageLoadOptions{
+            LeafPageView::page_layout_id(),
+            llfs::PinPageToJob::kDefault,
+            llfs::OkIfNotFound{false},
+            llfs::LruPriority{kLeafLruPriority},
+        });
+  }
+};
+
 }  // namespace
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -88,29 +153,11 @@ StatusOr<ValueView> find_key_in_leaf(llfs::PageId leaf_page_id,
                                      KeyQuery& query,
                                      usize& item_index_out)
 {
-  return find_key_in_leaf_impl(
-      leaf_page_id,
-      query,
-      item_index_out,
-      [](const llfs::PageId& leaf_page_id, KeyQuery& query) {
-        return query.page_loader->try_pin_cached_page(  //
-            leaf_page_id,
-            llfs::PageLoadOptions{
-                LeafPageView::page_layout_id(),
-                llfs::PinPageToJob::kDefault,
-                llfs::LruPriority{kLeafLruPriority},
-            });
-      },
-      [](const llfs::PageId& leaf_page_id, KeyQuery& query) {
-        return query.page_loader->load_page(  //
-            leaf_page_id,
-            llfs::PageLoadOptions{
-                LeafPageView::page_layout_id(),
-                llfs::PinPageToJob::kDefault,
-                llfs::OkIfNotFound{false},
-                llfs::LruPriority{kLeafLruPriority},
-            });
-      });
+  return find_key_in_leaf_impl(leaf_page_id,
+                               query,
+                               item_index_out,
+                               TryPinCachedPageId{},
+                               LoadFullLeafPageId{});
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -119,35 +166,88 @@ StatusOr<ValueView> find_key_in_leaf(const llfs::PageIdSlot& leaf_page_id_slot,
                                      KeyQuery& query,
                                      usize& item_index_out)
 {
-  return find_key_in_leaf_impl(
-      leaf_page_id_slot,
-      query,
-      item_index_out,
-      [](const llfs::PageIdSlot& leaf_page_id_slot, KeyQuery& query) {
-        return leaf_page_id_slot.try_pin_through(  //
-            *query.page_loader,
-            llfs::PageLoadOptions{
-                LeafPageView::page_layout_id(),
-                llfs::PinPageToJob::kDefault,
-                llfs::LruPriority{kLeafLruPriority},
-            });
-      },
-      [](const llfs::PageIdSlot& leaf_page_id_slot, KeyQuery& query) {
-        return leaf_page_id_slot.load_through(  //
-            *query.page_loader,
-            llfs::PageLoadOptions{
-                LeafPageView::page_layout_id(),
-                llfs::PinPageToJob::kDefault,
-                llfs::OkIfNotFound{false},
-                llfs::LruPriority{kLeafLruPriority},
-            });
-      });
+  return find_key_in_leaf_impl(leaf_page_id_slot,
+                               query,
+                               item_index_out,
+                               TryPinCachedPageIdSlot{},
+                               LoadFullLeafPageIdSlot{});
+}
+
+namespace {
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+StatusOr<u32> find_key_lower_bound_index_in_pinned_leaf(llfs::PinnedPage& pinned_page,
+                                                        KeyQuery& query)
+{
+  auto& packed_leaf = PackedLeafPage::view_of(*pinned_page);
+
+  return {BATT_CHECKED_CAST(u32,
+                            std::distance(packed_leaf.items_begin(),  //
+                                          packed_leaf.lower_bound(query.key())))};
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<u32> find_key_lower_bound_index(llfs::PageId leaf_page_id,
-                                         KeyQuery& query)
+template <typename PageIdT, typename TryPinFullLeafFn, typename LoadFullLeafFn>
+StatusOr<u32> find_key_lower_bound_index_impl(const PageIdT& leaf_page_id,
+                                              KeyQuery& query,
+                                              TryPinFullLeafFn&& try_pin_full_leaf_fn,
+                                              LoadFullLeafFn&& load_full_leaf_fn)
+{
+  StatusOr<llfs::PinnedPage> full_pinned_leaf =
+      BATT_FORWARD(try_pin_full_leaf_fn)(leaf_page_id, query);
+
+  // First option: pin the full leaf in the cache; non-blocking/non-loading.
+  //
+  if (full_pinned_leaf.ok()) {
+    return find_key_lower_bound_index_in_pinned_leaf(*full_pinned_leaf, query);
+  }
+
+  // Second option: use sharded views to save I/O.
+  //
+  StatusOr<u32> result = find_key_lower_bound_index_using_sharded_views(leaf_page_id, query);
+
+  // Third options: load the full page.
+  //
+  if (!require_sharded_views() && result.status() == batt::StatusCode::kUnavailable) {
+    BATT_ASSIGN_OK_RESULT(llfs::PinnedPage full_leaf_page,
+                          BATT_FORWARD(load_full_leaf_fn)(leaf_page_id, query));
+
+    return find_key_lower_bound_index_in_pinned_leaf(full_leaf_page, query);
+  }
+
+  return result;
+}
+
+}  // namespace
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+StatusOr<u32> find_key_lower_bound_index(llfs::PageId leaf_page_id, KeyQuery& query)
+{
+  return find_key_lower_bound_index_impl(leaf_page_id,
+                                         query,
+                                         TryPinCachedPageId{},
+                                         LoadFullLeafPageId{});
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+StatusOr<u32> find_key_lower_bound_index(const llfs::PageIdSlot& leaf_page_id, KeyQuery& query)
+{
+  return find_key_lower_bound_index_impl(leaf_page_id,
+                                         query,
+                                         TryPinCachedPageIdSlot{},
+                                         LoadFullLeafPageIdSlot{});
+}
+
+namespace {
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+StatusOr<u32> find_key_lower_bound_index_using_sharded_views(llfs::PageId leaf_page_id,
+                                                             KeyQuery& query)
 {
   const auto default_shard_size = llfs::PageSize{kDefaultLeafShardedViewSize};
 
@@ -215,8 +315,6 @@ StatusOr<u32> find_key_lower_bound_index(llfs::PageId leaf_page_id,
 
   return search_range.lower_bound + std::distance(items_begin, found_item);
 }
-
-namespace {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
