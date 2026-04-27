@@ -876,7 +876,9 @@ Status ChangeLogWriter::trim(EditOffset new_trim_edit_offset)
 
     VLOG(1) << BATT_INSPECT(n_trimmed);
 
-    // Release any trimmed blocks.
+    // Release any trimmed blocks.  IMPORTANT: we release the in use grant all at once rather than
+    // one block at a time, so that any clients blocked waiting for space won't immediately run out
+    // of space.
     //
     if (n_trimmed != 0) {
       released_grant.emplace(BATT_OK_RESULT_OR_PANIC(s.in_use_block_grant.spend(n_trimmed)));
