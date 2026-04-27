@@ -35,6 +35,13 @@ struct KVStoreConfig {
   static Self with_default_values() noexcept;
 };
 
+BATT_OBJECT_PRINT_IMPL((inline),
+                       KVStoreConfig,
+                       (tree_options,  //
+                        initial_capacity_bytes,
+                        max_capacity_bytes,
+                        change_log_size_bytes))
+
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 //
 /** \brief Runtime options for a KVStore object.  This includes only the non-durable configuration

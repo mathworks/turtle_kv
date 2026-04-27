@@ -61,6 +61,7 @@ class TurtleKvRecipe(ConanFile):
         self.requires("glog/0.7.1", **VISIBLE)
         self.requires("llfs/[>=0.43.4 <1]", **VISIBLE)
         self.requires("pcg-cpp/cci.20220409", **VISIBLE)
+        self.requires("yaml-cpp/[>=0.9.0 <1]")
         self.requires("zlib/1.3.1", **OVERRIDE)
 
         # boost/1.88.0 and ninja/1.13.2 depend (exactly) on libbacktrace/cci.20210118

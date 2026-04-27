@@ -18,6 +18,7 @@ target_link_libraries(
   batteries::batteries
   boost::boost
   llfs::llfs
+  yaml-cpp::yaml-cpp
   ${PLATFORM_DEPS}
   )
 
