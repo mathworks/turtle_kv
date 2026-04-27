@@ -45,6 +45,7 @@ template <MemTableStorage StorageT, MemTableAllocationTracker AllocationTrackerT
     , block_list_mutex_{}
     , block_buffers_{}
 {
+  BATT_CHECK_LT(this->edit_offset_upper_bound_.load(), this->edit_offset_lower_bound_.value());
   this->metrics_.alloc_count.add(1);
   this->metrics_.count_stats.update(this->metrics_.alloc_count.get() -
                                     this->metrics_.free_count.get());
@@ -143,14 +144,17 @@ StatusOr<i64> BasicMemTable<StorageT, AllocationTrackerT>::prepare_edit(i64 pack
   }
 
   //----- --- -- -  -  -   -
-  // The prepare did not succeed; revert the prepare.
+  // The prepare did not succeed; try to revert the prepare so a smaller edit might succeed.
   //
   const i64 observed_value = this->prepared_bytes_total_->fetch_sub(packed_edit_size);
 
-  // If we observe the finalized bit to be set, then wake any threads waiting inside
-  // MemTable::finalize().
+  // If observed_value has the finalized bit set, then we need to update committed_bytes_total_,
+  // since there may be a thread blocked inside MemTable::finalize() waiting on
+  // committed_bytes_total_.  First re-apply the prepare, then commit.
   //
   if ((observed_value & Self::kFinalizedMask) != 0) {
+    this->prepared_bytes_total_->fetch_add(packed_edit_size);
+    this->committed_bytes_total_->fetch_add(packed_edit_size);
     this->committed_bytes_total_->notify_all();
   }
 
@@ -225,6 +229,19 @@ bool BasicMemTable<StorageT, AllocationTrackerT>::finalize() noexcept
     BATT_CHECK_GE(finalized_upper_bound, this->edit_offset_lower_bound_);
     this->edit_offset_upper_bound_.store(finalized_upper_bound.value());
     this->edit_offset_upper_bound_.notify_all();
+
+    // Update metrics.
+    //
+    const EditOffsetDelta finalized_size =
+        this->edit_offset_upper_bound() - this->edit_offset_lower_bound();
+
+    this->metrics_.finalize_size_stats.update(finalized_size.value());
+
+    if (this->storage_is_full_.load()) {
+      this->metrics_.storage_full_count.add(1);
+      this->metrics_.storage_full_size_stats.update(finalized_size.value());
+    }
+
   } else {
     // For all other threads that find their way in here, wait until the first has set the true
     // value of edit_offset_upper_bound_.
@@ -283,7 +300,7 @@ Status BasicMemTable<StorageT, AllocationTrackerT>::put_recovered_slot(
   });
 
   if (first_visit) {
-    this->attach_block_buffer(block_buffer);
+    this->attach_block_buffer(block_buffer, LockIsHeld{false});
   }
 
   MemTableRecoveryInserter inserter{
@@ -301,13 +318,17 @@ Status BasicMemTable<StorageT, AllocationTrackerT>::put_recovered_slot(
 //
 template <MemTableStorage StorageT, MemTableAllocationTracker AllocationTrackerT>
 void BasicMemTable<StorageT, AllocationTrackerT>::attach_block_buffer(
-    StorageBlockBuffer* block_buffer)
+    StorageBlockBuffer* block_buffer,
+    LockIsHeld lock_is_held)
 {
   block_buffer->add_ref(1);
   this->metrics_.log_bytes_allocated.add(block_buffer->block_size());
   i64 cache_alloc_delta = 0;
   {
-    absl::MutexLock lock{&this->block_list_mutex_};
+    Optional<absl::MutexLock> lock;
+    if (!lock_is_held) {
+      lock.emplace(&this->block_list_mutex_);
+    }
 
     this->block_size_total_ += block_buffer->block_size();
     this->block_buffers_.emplace_back(block_buffer);

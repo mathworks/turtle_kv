@@ -9,6 +9,8 @@
 #pragma once
 #define TURTLE_KV_MEM_TABLE_HPP
 
+#include <turtle_kv/api_types.hpp>
+
 #include <turtle_kv/mem_table/mem_table_allocation_tracker_impl.hpp>
 #include <turtle_kv/mem_table/mem_table_entry.hpp>
 #include <turtle_kv/mem_table/mem_table_index.hpp>
@@ -281,7 +283,11 @@ class BasicMemTable : public MemTableBase
    */
   void commit_edit(i64 packed_edit_size);
 
-  void attach_block_buffer(StorageBlockBuffer* block_buffer);
+  /** \brief Adds `block_buffer` to `this->block_buffers_` after increasing its ref count by 1 via
+   * `add_ref`.  If the caller is holding a lock on `this->block_list_mutex_`, then `lock_is_held`
+   * must be passed as `LockIsHeld{true}`; otherwise it must be false.
+   */
+  void attach_block_buffer(StorageBlockBuffer* block_buffer, LockIsHeld lock_is_held);
 
   /** \brief Returns the number of bytes to claim (if positive) or release (negative)
    * as external allocation from the AllocationTracker.
@@ -331,12 +337,30 @@ class BasicMemTable : public MemTableBase
   //
   std::atomic<bool> overcommit_triggered_{false};
 
+  // Set to true if this MemTable ever fails an update because the change log reports it is out of
+  // space.
+  //
+  std::atomic<bool> storage_is_full_{false};
+
+  // Incremented by the packed size of an edit before that edit is added to the index.  This signals
+  // to other threads that there is an ongoing update; it also allows the thread that increments
+  // this field to determine whether the MemTable is at capacity (or has been finalized).
+  //
   batt::CpuCacheLineIsolated<std::atomic<i64>> prepared_bytes_total_{0};
 
+  // Incremented by the packed size of an edit once a thread is done adding that edit to the index.
+  // In some cases this field is incremented even when an edit is rejected post-finalization; see
+  // comments in the definition of `prepare_edit` for more details.
+  //
   batt::CpuCacheLineIsolated<std::atomic<i64>> committed_bytes_total_{0};
 
+  // Protects `this->block_buffers_`.
+  //
   absl::Mutex block_list_mutex_;
 
+  // The block buffers that hold packed key/value updates for this MemTable.  A ref count to each is
+  // held to make sure the memory stays in scope for as long as the MemTable needs it.
+  //
   batt::SmallVec<StorageBlockBuffer*, Self::kBlockListPreAllocSize> block_buffers_;
 
   // The total size (in bytes) of all change log block buffers owned by this MemTable.
@@ -385,25 +409,100 @@ class BasicMemTable<StorageT, AllocationTrackerT>::PerOpStorageContext
   {
   }
 
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
   template <typename SerializeFn>
     requires(std::invocable<SerializeFn, MutableBuffer, EditOffset>)
   Status store_data(usize n_bytes, SerializeFn&& serialize_fn) noexcept
   {
-    return this->storage_writer_context_.append_slot(
-        this->mem_table_.edit_offset_lower_bound(),
-        n_bytes,
-        [&](FirstVisitToBlock first_visit,
-            StorageBlockBuffer* buffer,
-            MutableBuffer dst,
-            EditOffset slot_edit_offset) {
-          BATT_CHECK_EQ(buffer->slot_count() == 0, first_visit);
-          if (first_visit) {
-            this->mem_table_.attach_block_buffer(buffer);
-          }
-          serialize_fn(dst, slot_edit_offset);
-        });
+    // Must be set to true before calling attach_block_buffer *iff* this function is holding a lock
+    // on the block_list_mutex_.
+    //
+    bool holding_lock = false;
+
+    // Set to true in the loop below if this thread observes the MemTable to have at least one
+    // attached block buffers.
+    //
+    bool observed_attached_buffers = false;
+
+    // Fills the prepared slot with the key/value update data.
+    //
+    const auto write_slot_data = [this, &serialize_fn, &holding_lock](FirstVisitToBlock first_visit,
+                                                                      StorageBlockBuffer* buffer,
+                                                                      MutableBuffer dst,
+                                                                      EditOffset slot_edit_offset) {
+      BATT_CHECK_EQ(buffer->slot_count() == 0, first_visit);
+      if (first_visit) {
+        this->mem_table_.attach_block_buffer(buffer, LockIsHeld{holding_lock});
+      }
+      serialize_fn(dst, slot_edit_offset);
+    };
+
+    // We first attempt to append the log without doing any waiting.  If this fails, we may be able
+    // to retry after waiting for the log to be trimmed, so the logic below is wrapped in a loop.
+    //
+    for (;;) {
+      // Happy path: append the slot without waiting.
+      //
+      Status status =
+          this->storage_writer_context_.append_slot(this->mem_table_.edit_offset_lower_bound(),
+                                                    n_bytes,
+                                                    batt::WaitForResource::kFalse,
+                                                    write_slot_data);
+
+      // Great!  Nothing like success, baby.
+      //
+      if (status.ok()) {
+        return status;
+      }
+
+      // If this isn't our first time through the loop, we may have already observed there to be
+      // block buffers attached to the MemTable.  If this is the case, then it is pointless to wait,
+      // since this MemTable itself may be the very thing preventing trim from happening.  Update
+      // metrics and fail.
+      //
+      if (observed_attached_buffers) {
+        this->mem_table_.storage_is_full_.store(true);
+        this->mem_table_.metrics_.storage_full_count.add(1);
+        return status;
+      }
+
+      // One thread will acquire a lock, others will block at this point.
+      //
+      absl::MutexLock lock{&this->mem_table_.block_list_mutex_};
+
+      // If there are no block buffers attached to the MemTable, then we may just have to wait until
+      // the checkpoint update pipeline catches up.  If there are block buffers attached, then its
+      // possible this thread may have been blocked acquiring the lock while the first thread did a
+      // blocking `append_slot`.  In this case, it makes sense to try again, since the same trim
+      // that freed up space in the log to unblock the first thread is likely to have also freed up
+      // enough space for this thread to succeed as well.  Note that we have observed block buffers
+      // attached, and retry.
+      //
+      if (!this->mem_table_.block_buffers_.empty()) {
+        observed_attached_buffers = true;
+        continue;
+      }
+
+      // Since we might end up calling MemTable::attach_block_buffers while holding
+      // `block_list_mutex_`, set `holding_lock` to true so we don't try to re-lock inside
+      // `write_slot_data`.
+      //
+      holding_lock = true;
+
+      this->mem_table_.metrics_.wait_for_trim_count.add(1);
+
+      // Wait for the log to be trimmed, then write the slot.  Never retry on this path, because
+      // there is no reason to.
+      //
+      return this->storage_writer_context_.append_slot(this->mem_table_.edit_offset_lower_bound(),
+                                                       n_bytes,
+                                                       batt::WaitForResource::kTrue,
+                                                       write_slot_data);
+    }
   }
 
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
   BasicMemTable& mem_table_;
   StorageWriterContext& storage_writer_context_;

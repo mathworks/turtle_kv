@@ -149,6 +149,8 @@ class MemTableTest : public ::testing::Test
                             const ValueView& value,
                             MockBlockBuffer* dst_block_buffer)
   {
+    BATT_DEBUG_INFO(BATT_INSPECT(this->next_edit_offset));
+
     const usize item_size = this->update_max_item_size(key, value);
     const bool expect_overflow = (this->estimate_batch_count(item_size) > this->max_batch_count);
 
@@ -157,9 +159,11 @@ class MemTableTest : public ::testing::Test
                   append_slot(/*min_edit_offset_lower_bound=*/Eq(
                                   this->mem_table->edit_offset_lower_bound()),
                               /*byte_count=*/Ge(key.size() + value.size()),
+                              /*wait_for_resource=*/::testing::_,
                               /*callback=*/::testing::_))
           .WillOnce(Invoke([this, dst_block_buffer](EditOffset /*min_edit_offset_lower_bound*/,
                                                     usize byte_count,
+                                                    batt::WaitForResource,
                                                     auto&& callback_fn) -> Status {
             // Determine whether this is the first visit, and if so, set expectations that the
             // MemTable will add/remove a ref count.
@@ -183,9 +187,10 @@ class MemTableTest : public ::testing::Test
                         this->stable_string_store.allocate(byte_count),
                         EditOffset{this->next_edit_offset});
 
-            // Update the fake EditOffset.
+            // Update the fake EditOffset and slot count.
             //
             this->next_edit_offset += byte_count;
+            dst_block_buffer->fake_slot_count_ += 1;
 
             return OkStatus();
           }));

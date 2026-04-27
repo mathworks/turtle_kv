@@ -636,7 +636,8 @@ Status KVStore::put(const KeyView& key, const ValueView& value) noexcept /*overr
 
       // On success and unrecoverable errors, just return immediately.
       //
-      if (status != batt::StatusCode::kResourceExhausted) {
+      if (status != batt::StatusCode::kResourceExhausted &&
+          status != batt::StatusCode::kGrantUnavailable) {
         return status;
       }
 
@@ -1447,9 +1448,11 @@ Status KVStore::commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_jo
                                                   .offset = checkpoint_slot_range->upper_bound,
                                               }));
 
-  // Save the checkpoint edit upper bound before we move ownership to this->state_.
+  // Trim the change log.  IMPORTANT: this must come before we enter the Writer critical section
+  // below; otherwise we could deadlock! (this thread waits for reader to exit which is waiting for
+  // change log grant to be released which can't happen until this thread calls trim)
   //
-  const EditOffset edit_upper_bound = checkpoint_job->edit_offset_upper_bound;
+  BATT_REQUIRE_OK(this->change_log_writer_->trim(checkpoint_job->edit_offset_upper_bound));
 
   // Update the base checkpoint and clear deltas.
   //
@@ -1503,10 +1506,6 @@ Status KVStore::commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_jo
     BATT_REQUIRE_OK(this->checkpoint_log_->trim(*prev_checkpoint_slot));
   }
 
-  // Trim the change log.
-  //
-  BATT_REQUIRE_OK(this->change_log_writer_->trim(edit_upper_bound));
-
   return OkStatus();
 }
 
@@ -1516,7 +1515,7 @@ void KVStore::collect_stats(
     std::function<void(std::string_view /*name*/, double /*value*/)> fn) const noexcept
 {
   //----- --- -- -  -  -   -
-  const auto emit_latency = [&fn](std::string_view name, const LatencyMetric& metric) {
+  const auto emit_latency = [&fn](std::string_view name, const auto /*LatencyMetric*/& metric) {
     fn(batt::to_string(name, ".count"), metric.count.get());
     fn(batt::to_string(name, ".seconds"), metric.total_seconds());
   };

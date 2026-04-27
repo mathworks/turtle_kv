@@ -23,6 +23,28 @@ struct MemTableMetrics {
   CountMetric<i64> log_bytes_allocated{0};
   CountMetric<i64> log_bytes_freed{0};
 
+  /** \brief The number of times a MemTable did a blocking ChangeLog append_slot operation after
+   * failing a non-blocking one due to ChangeLog space exhaustion.
+   */
+  CountMetric<i64> wait_for_trim_count{0};
+
+  /** \brief The number of times a MemTable had to be finalized before it hit the limit, due to
+   * running out of ChangeLog space.
+   */
+  CountMetric<i64> storage_full_count{0};
+
+  /** \brief Samples the byte size of the MemTable (total packed updates) when finalized for any
+   * reason.
+   */
+  StatsMetric<i64> finalize_size_stats;
+
+  /** \brief Samples the byte size of the MemTable (total packed updates) when finalized due to
+   * running out of space in the ChangeLog.
+   */
+  StatsMetric<i64> storage_full_size_stats;
+
+  /** \brief Metrics about page cache overcommit events.
+   */
   OvercommitMetrics& overcommit;
 
   //----- --- -- -  -  -   -

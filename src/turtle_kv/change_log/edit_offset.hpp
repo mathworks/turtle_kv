@@ -21,7 +21,7 @@ class WrappedInt
 {
  public:
   using Self = WrappedInt;
-  using IntT = i64;
+  using IntT = Int;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 

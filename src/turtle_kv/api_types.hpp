@@ -19,15 +19,16 @@
 
 namespace turtle_kv {
 
-BATT_STRONG_TYPEDEF(usize, TotalEditsSize);
-BATT_STRONG_TYPEDEF(usize, TotalSlotsSize);
+BATT_STRONG_TYPEDEF(bool, IsLastInGroup);
+BATT_STRONG_TYPEDEF(bool, IsSizeTiered);
+BATT_STRONG_TYPEDEF(bool, LockIsHeld);
 BATT_STRONG_TYPEDEF(bool, RemoveExisting);
-BATT_STRONG_TYPEDEF(i64, BlockSize);
 BATT_STRONG_TYPEDEF(i64, BlockCount);
 BATT_STRONG_TYPEDEF(i64, BlockIndex);
-BATT_STRONG_TYPEDEF(bool, IsSizeTiered);
-BATT_STRONG_TYPEDEF(bool, IsLastInGroup);
+BATT_STRONG_TYPEDEF(i64, BlockSize);
 BATT_STRONG_TYPEDEF(usize, IndexInGroup);
+BATT_STRONG_TYPEDEF(usize, TotalEditsSize);
+BATT_STRONG_TYPEDEF(usize, TotalSlotsSize);
 
 using llfs::FileByteCount;
 using llfs::FileOffset;

@@ -1,4 +1,13 @@
+//=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
+//
+// Part of the TurtleKV Project, under Apache License v2.0.
+// See https://www.apache.org/licenses/LICENSE-2.0 for license information.
+// SPDX short identifier: Apache-2.0
+//
+//+++++++++++-+-+--+----- --- -- -  -  -   -
+
 #pragma once
+#define TURTLE_KV_KV_STORE_METRICS_HPP
 
 #include <turtle_kv/config.hpp>
 //
@@ -29,6 +38,18 @@ struct KVStoreMetrics {
   LatencyMetric delta_get_latency;
   FastCountMetric<u64> checkpoint_get_count{0};
   LatencyMetric checkpoint_get_latency;
+
+#if defined(BATT_VERSION)
+#if BATT_VERSION >= BATT_MAKE_VERSION(0, 69, 0)
+  DerivedMetric<u64> all_mem_tables_get_count{[this]() -> u64 {
+    u64 total = this->mem_table_get_count.get();
+    for (const auto& delta_get_count : delta_log2_get_count) {
+      total += delta_get_count.get();
+    }
+    return total;
+  }};
+#endif
+#endif
 
   FastCountMetric<u64> scan_count{0};
 

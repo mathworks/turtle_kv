@@ -439,10 +439,12 @@ void ChangeLogWriter::remove_context(Context& context) noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-auto ChangeLogWriter::allocate_buffer(EditOffset offset) noexcept -> StatusOr<BlockBuffer*>
+auto ChangeLogWriter::allocate_buffer(EditOffset offset,
+                                      batt::WaitForResource wait_for_resource) noexcept
+    -> StatusOr<BlockBuffer*>
 {
   BATT_ASSIGN_OK_RESULT(batt::Grant buffer_grant,
-                        this->free_block_tokens_.issue_grant(1, batt::WaitForResource::kTrue));
+                        this->free_block_tokens_.issue_grant(1, wait_for_resource));
 
   this->change_log_->metrics().reserved_blocks_count.add(buffer_grant.size());
 
@@ -654,7 +656,7 @@ auto ChangeLogWriter::write_blocks(PreparedBlocksState& input, WrittenBlocksStat
     output.check_invariants(this->config());
   });
 
-  BATT_CHECK_LT(input.block_chunks.size(), this->max_batch_size_) << "Too many prepared blocks!";
+  BATT_CHECK_LE(input.block_chunks.size(), this->max_batch_size_) << "Too many prepared blocks!";
 
   // Write!
   //
