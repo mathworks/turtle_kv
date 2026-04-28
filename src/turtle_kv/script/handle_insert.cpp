@@ -53,10 +53,9 @@ Status handle_insert(ScriptContext& context [[maybe_unused]], const YAML::Node& 
   }
 
   auto duration = std::chrono::steady_clock::now() - start_time;
+  double elapsed_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count();
 
-  LOG(INFO) << "  elapsed: " << duration << ", "
-            << (double)count * 1e6 /
-                   (double)std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count()
+  LOG(INFO) << "  elapsed: " << elapsed_ns / 1e9 << "s, " << (double)count * 1e6 / elapsed_ns
             << " kops/sec";
 
   return OkStatus();
