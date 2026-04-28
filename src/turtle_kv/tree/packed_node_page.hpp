@@ -50,7 +50,7 @@ struct PackedNodePage {
 
   static constexpr u8 kFlagSizeTiered = 0x80;
   static constexpr u8 kPivotCountMask = 0x7f;  // Needs to be at least 64
-  static constexpr u16 kSegmentStartsFiltered = 0x8000;
+  static constexpr u16 kSegmentStartsLive = 0x8000;
 
   using Key = PackedNodePageKey;
   using SegmentFilters = llfs::PackedPointer<llfs::PackedArray<little_u32>, little_u16>;
@@ -123,7 +123,7 @@ struct PackedNodePage {
 
     struct SegmentFilterData {
       Slice<const little_u32> values;
-      bool start_is_filtered;
+      bool start_is_live;
     };
 
     struct Segment {
