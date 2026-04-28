@@ -156,11 +156,6 @@ struct InMemoryNode {
         return !this->filter.live_at_index(index);
       }
 
-      bool is_unfiltered() const
-      {
-        return !this->filter.dropped_total();
-      }
-
       u32 live_lower_bound(const SegmentedLevel&, u32 item_i) const
       {
         return this->filter.live_lower_bound(item_i);
@@ -173,22 +168,17 @@ struct InMemoryNode {
 
       usize num_cut_points() const
       {
-        Slice<const Interval<u32>> dropped_ranges = this->filter.dropped();
+        Slice<const Interval<u32>> live_ranges = this->filter.live();
 
-        // There will be no filter cut points if no items are dropped.
-        //
-        if (!this->filter.dropped_total()) {
-          BATT_CHECK(dropped_ranges.empty());
-          return 0;
-        }
-        BATT_CHECK(!dropped_ranges.empty());
-
-        // If the first element is filtered out, don't include 0 as a cut point, only include the
+        // If the first element is live, don't include 0 as a cut point, only include the
         // upper bound.
         //
-        bool first_element_filtered = dropped_ranges[0].lower_bound == 0;
+        bool first_element_live = !live_ranges.empty() && live_ranges.front().lower_bound ==
+                                                              PiecewiseFilter<u32>::kMinLowerBound;
+        bool ends_at_max = !live_ranges.empty() &&
+                           live_ranges.back().upper_bound == PiecewiseFilter<u32>::kMaxUpperBound;
 
-        return dropped_ranges.size() * 2 - (first_element_filtered ? 1 : 0);
+        return live_ranges.size() * 2 - (first_element_live ? 1 : 0) - (ends_at_max ? 1 : 0);
       }
 
       //+++++++++++-+-+--+----- --- -- -  -  -   -

@@ -2404,9 +2404,10 @@ bool InMemoryNode::UpdateBuffer::Segment::is_inactive() const
 {
   const bool inactive = this->active_pivots.is_empty();
   if (inactive) {
-    Slice<const Interval<u32>> filter_dropped_ranges = this->filter.dropped();
-    BATT_CHECK_EQ(filter_dropped_ranges.size(), 1);
-    BATT_CHECK_EQ(filter_dropped_ranges[0].lower_bound, 0);
+    Slice<const Interval<u32>> live_ranges = this->filter.live();
+    BATT_CHECK_EQ(live_ranges.size(), 1) << BATT_INSPECT(live_ranges);
+    BATT_CHECK_EQ(live_ranges[0].upper_bound, PiecewiseFilter<u32>::kMaxUpperBound)
+        << BATT_INSPECT(live_ranges);
   }
   return inactive;
 }
