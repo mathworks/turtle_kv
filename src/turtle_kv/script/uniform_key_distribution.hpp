@@ -34,15 +34,24 @@ inline constexpr std::array<u64, 64> kHashSeeds = {
     0x0ed678ccbd246356ull, 0xc2d3489afc4edcd6ull, 0xc482a884240966c6ull, 0x19b952db37267518ull,
 };
 
-class UniformKeyDistribution : public KeyDistribution
+class UniformInsertKeyDistribution : public KeyDistribution
 {
  public:
-  KeyView get_key(usize ordinal, SmallVecBase<char>& key_buffer, usize key_size) override
+  explicit UniformInsertKeyDistribution(usize key_size) noexcept : key_buffer_(key_size)
   {
-    key_buffer.resize(key_size);
+  }
 
-    char* p_dst = key_buffer.data();
-    usize dst_n = key_size;
+  KeyView get_next(KeySet& inserted_keys) override
+  {
+    return inserted_keys.insert_key(this->format_key(this->count_.fetch_add(1))).first;
+  }
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+ private:
+  KeyView format_key(usize ordinal)
+  {
+    char* p_dst = this->key_buffer_.data();
+    usize dst_n = this->key_buffer_.size();
 
     for (usize j = 0; j < kHashSeeds.size(); ++j) {
       u64 hash_val = XXH64(&ordinal, sizeof(ordinal), /*seed=*/kHashSeeds[j]);
@@ -58,8 +67,13 @@ class UniformKeyDistribution : public KeyDistribution
       }
     }
 
-    return KeyView{key_buffer.data(), key_buffer.size()};
+    return KeyView{this->key_buffer_.data(), this->key_buffer_.size()};
   }
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  std::atomic<usize> count_{0};
+  SmallVec<char, 64> key_buffer_;
 };
 
 }  // namespace turtle_kv

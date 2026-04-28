@@ -22,18 +22,9 @@ Status handle_create(ScriptContext& context [[maybe_unused]], const YAML::Node& 
 
     if (param_name == "remove_existing") {
       remove_existing = RemoveExisting{param_pair.second.as<bool>()};
-
-    } else if (param_name == "config") {
-      for (const auto& config_pair : param_pair.second) {
-        const std::string config_name = config_pair.first.as<std::string>();
-        const std::string config_value = config_pair.second.as<std::string>();
-
-        BATT_REQUIRE_OK(
-            parse_config(config_name, config_value, &context.config, &context.runtime_options));
-      }
-
     } else {
-      LOG(ERROR) << "bad param:" << BATT_INSPECT(param_pair);
+      LOG(ERROR) << "bad param:" << BATT_INSPECT(param_pair.first)
+                 << BATT_INSPECT(param_pair.second);
       return batt::StatusCode::kInvalidArgument;
     }
   }

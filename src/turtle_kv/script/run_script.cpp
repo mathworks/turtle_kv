@@ -41,6 +41,11 @@ Status run_script(const std::filesystem::path& kv_store_dir [[maybe_unused]],
 
       BATT_REQUIRE_EQ(command_handlers.count(name), 1);
 
+      context.command_stack.push_back(name);
+      auto on_scope_exit = batt::finally([&] {
+        context.command_stack.pop_back();
+      });
+
       Status status = command_handlers[name](context, params);
       BATT_REQUIRE_OK(status);
     }

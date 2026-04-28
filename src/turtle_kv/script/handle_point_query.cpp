@@ -6,18 +6,20 @@
 //
 //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-#include <turtle_kv/script/handle_insert.hpp>
+#include <turtle_kv/script/handle_point_query.hpp>
 //
 
 #include <turtle_kv/script/key_distribution.hpp>
+#include <turtle_kv/script/uniform_key_distribution.hpp>
+#include <turtle_kv/script/zipf_key_distribution.hpp>
 
-#include <memory>
+#include <chrono>
 
 namespace turtle_kv {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status handle_insert(ScriptContext& context [[maybe_unused]], const YAML::Node& params)
+Status handle_point_query(ScriptContext& context [[maybe_unused]], const YAML::Node& params)
 {
   BATT_ASSIGN_OK_RESULT(  //
       std::unique_ptr<KeyDistribution> key_dist,
@@ -29,27 +31,20 @@ Status handle_insert(ScriptContext& context [[maybe_unused]], const YAML::Node& 
       usize count,
       context.parse_param<usize>(params, "count", /*default=*/1));
 
-  BATT_ASSIGN_OK_RESULT(  //
-      usize value_size,
-      context.parse_param<usize>(params,
-                                 "value_size",
-                                 /*default=*/context.config.tree_options.value_size_hint()));
-
   BATT_REQUIRE_NE(key_dist.get(), nullptr);
   BATT_REQUIRE_NE(context.kv_store.get(), nullptr);
 
-  std::string value;
+  std::vector<KeyView> query_keys;
+  for (usize i = 0; i < count; ++i) {
+    query_keys.push_back(key_dist->get_next(context.inserted_keys));
+  }
 
-  LOG(INFO) << "insert(count=" << count << ")";
+  LOG(INFO) << "point_query(count=" << count << ")";
 
   auto start_time = std::chrono::steady_clock::now();
 
-  for (usize i = 0; i < count; ++i) {
-    KeyView key = key_dist->get_next(context.inserted_keys);
-
-    value.assign(value_size, (char)'0' + (i % 64));
-
-    BATT_REQUIRE_OK(context.kv_store->put(key, ValueView::from_str(value)));
+  for (const KeyView& key : query_keys) {
+    BATT_REQUIRE_OK(context.kv_store->get(key));
   }
 
   auto duration = std::chrono::steady_clock::now() - start_time;

@@ -6,7 +6,7 @@ include(${CMAKE_BINARY_DIR}/conan_find_requirements.cmake)
 
 # Enable link-time optimization. NOTE: currently breaks arm64 Linux (M1)
 #
-set(CMAKE_INTERPROCEDURAL_OPTIMIZATION FALSE)
+set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
 
 # The src dir should appear in the include path.
 #
