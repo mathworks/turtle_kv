@@ -9,6 +9,7 @@
 #pragma once
 #define TURTLE_KV_SCRIPT_SCRIPT_CONTEXT_HPP
 
+#include <turtle_kv/script/execution_strategy.hpp>
 #include <turtle_kv/script/key_distribution.hpp>
 #include <turtle_kv/script/key_set.hpp>
 
@@ -16,6 +17,7 @@
 #include <turtle_kv/kv_store_config.hpp>
 
 #include <turtle_kv/import/int_types.hpp>
+#include <turtle_kv/import/slice.hpp>
 #include <turtle_kv/import/status.hpp>
 
 #include <batteries/stream_util.hpp>
@@ -25,10 +27,17 @@
 #include <atomic>
 #include <filesystem>
 #include <memory>
+#include <vector>
 
 namespace turtle_kv {
 
-struct ScriptContext {
+class ScriptContext
+{
+ public:
+  static constexpr usize kDefaultStackSize = 16;
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
   std::filesystem::path kv_store_dir;
 
   std::filesystem::path script_yml;
@@ -41,12 +50,34 @@ struct ScriptContext {
 
   KeySet inserted_keys;
 
-  SmallVec<std::string_view, 16> command_stack;
+  KeySet key_set;
+
+  SmallVec<std::string_view, kDefaultStackSize> command_stack;
+
+  SmallVec<script::ExecutionStrategy*, kDefaultStackSize> exec_stack;
+
+  std::atomic<i64> op_counter{0};
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  Status run(script::ExecutionStrategy* exec, const YAML::Node& steps) noexcept;
+
   template <typename T>
-  StatusOr<T> parse_param(const YAML::Node& params, const char* name, T default_value);
+  StatusOr<T> parse_param(const YAML::Node& params, const char* name, T default_value) noexcept;
+
+  ValueView next_value(const Slice<char>& dst_buffer);
+
+  StatusOr<usize> schedule(std::vector<script::Operation>&& ops) noexcept
+  {
+    return this->exec_stack.back()->schedule(std::move(ops));
+  }
+
+  StatusOr<usize> schedule(script::Operation&& single_op) noexcept
+  {
+    std::vector<script::Operation> vec;
+    vec.emplace_back(std::move(single_op));
+    return this->exec_stack.back()->schedule(std::move(vec));
+  }
 };
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -54,7 +85,7 @@ struct ScriptContext {
 template <typename T>
 inline StatusOr<T> ScriptContext::parse_param(const YAML::Node& params,
                                               const char* name,
-                                              T default_value)
+                                              T default_value) noexcept
 {
   const YAML::Node param_value = params[name];
   if (!param_value.IsDefined()) {

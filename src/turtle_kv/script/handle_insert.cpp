@@ -17,7 +17,7 @@ namespace turtle_kv {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status handle_insert(ScriptContext& context [[maybe_unused]], const YAML::Node& params)
+Status handle_insert(ScriptContext& context, const YAML::Node& params)
 {
   BATT_ASSIGN_OK_RESULT(  //
       std::unique_ptr<KeyDistribution> key_dist,
@@ -40,23 +40,24 @@ Status handle_insert(ScriptContext& context [[maybe_unused]], const YAML::Node& 
 
   std::string value;
 
-  LOG(INFO) << "insert(count=" << count << ")";
+  LOG(INFO) << "insert(count=" << count << ", key_dist=" << key_dist->name()
+            << ", value_size=" << value_size << ")";
 
-  auto start_time = std::chrono::steady_clock::now();
+  std::vector<script::Operation> ops;
 
   for (usize i = 0; i < count; ++i) {
-    KeyView key = key_dist->get_next(context.inserted_keys);
+    KeyView key;
+    usize index;
+    std::tie(key, index) = key_dist->get_next(context.key_set);
 
-    value.assign(value_size, (char)'0' + (i % 64));
-
-    BATT_REQUIRE_OK(context.kv_store->put(key, ValueView::from_str(value)));
+    ops.push_back(script::Insert{
+        .key = key,
+        .index = index,
+        .value_size = value_size,
+    });
   }
 
-  auto duration = std::chrono::steady_clock::now() - start_time;
-  double elapsed_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count();
-
-  LOG(INFO) << "  elapsed: " << elapsed_ns / 1e9 << "s, " << (double)count * 1e6 / elapsed_ns
-            << " kops/sec";
+  BATT_REQUIRE_OK(context.schedule(std::move(ops)));
 
   return OkStatus();
 }

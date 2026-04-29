@@ -9,6 +9,8 @@
 #include <turtle_kv/script/key_set.hpp>
 //
 
+#include <turtle_kv/util/atomic.hpp>
+
 namespace turtle_kv {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -31,20 +33,28 @@ usize KeySet::size() const noexcept
 //
 Optional<KeyView> KeySet::get_key_by_index(usize index) noexcept
 {
-  // If the passed index has not yet been assigned, then there is no key to get; return None.
-  //
-  if (index >= this->size()) {
-    return None;
-  }
-
   // Find the entry for this index.
   //
   KeyEntry* const entry = this->lookup(index);
   BATT_CHECK_NOT_NULLPTR(entry);
 
-  // KeyEntry::get() will block until the key data is fully initialized.
+  // Never block (see wait_for_key_at).
   //
-  return entry->get();
+  return entry->get(batt::WaitForResource::kFalse);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+KeyView KeySet::wait_for_key_at(usize index) noexcept
+{
+  // Find the entry for this index.
+  //
+  KeyEntry* const entry = this->lookup(index);
+  BATT_CHECK_NOT_NULLPTR(entry);
+
+  // Wait until the key is inserted for the given index.
+  //
+  return entry->get(batt::WaitForResource::kTrue).value_or_panic();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -54,6 +64,19 @@ std::pair<KeyView, usize> KeySet::insert_key(const KeyView& key) noexcept
   // Assign a unique index to this insertion.
   //
   const usize index = this->next_index_->fetch_add(1);
+
+  // Success!
+  //
+  return std::make_pair(this->insert_key_at(index, key), index);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+KeyView KeySet::insert_key_at(usize index, const KeyView& key) noexcept
+{
+  // Make sure we don't double-insert for the same index!
+  //
+  atomic_clamp_min(*this->next_index_, index);
 
   // Retrieve the KeyEntry for the assigned index; this may create a new Level.
   //
@@ -65,12 +88,36 @@ std::pair<KeyView, usize> KeySet::insert_key(const KeyView& key) noexcept
 
   // Lock the mutex and place a copy of `key` in the StableStringStore.
   //
-  std::scoped_lock<std::mutex> lock{this->string_store_mutex_};
-  entry->set(this->string_store_.store(key));
+  const std::string_view stored_copy = [&] {
+    std::scoped_lock<std::mutex> lock{this->string_store_mutex_};
+    return this->string_store_.store(key);
+  }();
+  entry->set(stored_copy);
 
-  // Success!
+  return stored_copy;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+KeyView KeySet::insert_key_view_at(usize index, const KeyView& key) noexcept
+{
+  // Make sure we don't double-insert for the same index!
   //
-  return std::make_pair(entry->get(), index);
+  atomic_clamp_min(*this->next_index_, index);
+
+  // Retrieve the KeyEntry for the assigned index; this may create a new Level.
+  //
+  KeyEntry* const entry = this->lookup(index);
+
+  // Sanity check: the entry must not currently hold a key string!
+  //
+  BATT_CHECK_EQ(entry->data_.load(), nullptr);
+
+  // The caller guarantees the lifetime of `key`; don't copy to the stable store.
+  //
+  entry->set(key);
+
+  return key;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -89,7 +136,7 @@ KeySet::KeyEntry* KeySet::lookup(usize index) noexcept
   //  in the same Level.  We use CAS to resolve the race.
   //
   Level* p_level = this->levels_[level_i].load();
-  {
+  if (!p_level) {
     // Cache a pointer to a new Level struct if we create one.
     //
     Level* new_level = nullptr;
@@ -122,8 +169,8 @@ KeySet::KeyEntry* KeySet::lookup(usize index) noexcept
       }
       // else - p_level will be updated with the new value (unless this is a spurious failure)
     }
+    BATT_CHECK_NOT_NULLPTR(p_level);
   }
-  BATT_CHECK_NOT_NULLPTR(p_level);
 
   // Find the offset of this index relative to the start of the level.
   //
@@ -154,15 +201,18 @@ void KeySet::KeyEntry::set(std::string_view s)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-std::string_view KeySet::KeyEntry::get()
+Optional<std::string_view> KeySet::KeyEntry::get(batt::WaitForResource wait_for_resource)
 {
   // Spin until we observe the data_ pointer to be non-null.
   //
   for (;;) {
     const char* data = this->data_.load();
     if (!data) {
-      std::this_thread::yield();
-      continue;
+      if (wait_for_resource == batt::WaitForResource::kTrue) {
+        std::this_thread::yield();
+        continue;
+      }
+      return None;
     }
     return std::string_view{data, this->size_};
   }

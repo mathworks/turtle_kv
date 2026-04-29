@@ -34,24 +34,29 @@ Status handle_point_query(ScriptContext& context [[maybe_unused]], const YAML::N
   BATT_REQUIRE_NE(key_dist.get(), nullptr);
   BATT_REQUIRE_NE(context.kv_store.get(), nullptr);
 
-  std::vector<KeyView> query_keys;
+  std::vector<script::Operation> ops;
+
   for (usize i = 0; i < count; ++i) {
-    query_keys.push_back(key_dist->get_next(context.inserted_keys));
+    ops.push_back(script::PointQuery{
+        .index = key_dist->get_next(context.key_set).second,
+    });
   }
 
   LOG(INFO) << "point_query(count=" << count << ")";
 
-  auto start_time = std::chrono::steady_clock::now();
+  BATT_REQUIRE_OK(context.schedule(std::move(ops)));
 
-  for (const KeyView& key : query_keys) {
-    BATT_REQUIRE_OK(context.kv_store->get(key));
-  }
+  //  auto start_time = std::chrono::steady_clock::now();
 
-  auto duration = std::chrono::steady_clock::now() - start_time;
-  double elapsed_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count();
+  //  for (const KeyView& key : query_keys) {
+  //    BATT_REQUIRE_OK(context.kv_store->get(key));
+  //  }
 
-  LOG(INFO) << "  elapsed: " << elapsed_ns / 1e9 << "s, " << (double)count * 1e6 / elapsed_ns
-            << " kops/sec";
+  //  auto duration = std::chrono::steady_clock::now() - start_time;
+  //  double elapsed_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count();
+
+  //  LOG(INFO) << "  elapsed: " << elapsed_ns / 1e9 << "s, " << (double)count * 1e6 / elapsed_ns
+  //            << " kops/sec";
 
   return OkStatus();
 }

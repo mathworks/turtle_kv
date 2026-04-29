@@ -13,19 +13,20 @@ namespace turtle_kv {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status handle_config(ScriptContext& context [[maybe_unused]], const YAML::Node& params)
+Status handle_config(ScriptContext& context, const YAML::Node& params)
 {
-  RemoveExisting remove_existing{false};
+  std::vector<std::pair<std::string, std::string>> config_pairs;
 
   for (const auto& param_pair : params) {
-    const std::string config_name = param_pair.first.as<std::string>();
-    const std::string config_value = param_pair.second.as<std::string>();
-
-    BATT_REQUIRE_OK(
-        parse_config(config_name, config_value, &context.config, &context.runtime_options));
+    config_pairs.emplace_back(param_pair.first.as<std::string>(),  //
+                              param_pair.second.as<std::string>());
   }
 
-  LOG(INFO) << "config:" << BATT_INSPECT(context.config) << BATT_INSPECT(context.runtime_options);
+  LOG(INFO) << "config:" << BATT_INSPECT_RANGE(config_pairs);
+
+  BATT_REQUIRE_OK(context.schedule(script::Config{
+      .params = std::make_unique<decltype(config_pairs)>(std::move(config_pairs)),
+  }));
 
   return OkStatus();
 }

@@ -21,7 +21,7 @@
 
 namespace turtle_kv {
 
-struct ScriptContext;
+class ScriptContext;
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 //
@@ -41,7 +41,9 @@ class KeyDistribution
 
   virtual ~KeyDistribution() = default;
 
-  virtual KeyView get_next(KeySet& inserted_keys) = 0;
+  virtual std::string_view name() const = 0;
+
+  virtual std::pair<KeyView, usize> get_next(KeySet& key_set) = 0;
 
  protected:
   KeyDistribution() = default;

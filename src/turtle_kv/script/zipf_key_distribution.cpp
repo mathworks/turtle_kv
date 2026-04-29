@@ -30,11 +30,11 @@ namespace turtle_kv {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-KeyView ZipfKeyDistribution::get_next(KeySet& inserted_keys) /*override*/
+std::pair<KeyView, usize> ZipfKeyDistribution::get_next(KeySet& inserted_keys) /*override*/
 {
-  usize index = this->shuffle_[this->pick_index_(this->rng_)];
+  const usize index = this->shuffle_[this->pick_index_(this->rng_)];
 
-  return inserted_keys.get_key_by_index(index).value_or_panic();
+  return std::make_pair(inserted_keys.get_key_by_index(index).value_or_panic(), index);
 }
 
 }  // namespace turtle_kv

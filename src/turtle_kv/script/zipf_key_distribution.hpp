@@ -29,7 +29,12 @@ class ZipfKeyDistribution : public KeyDistribution
                                double alpha,
                                usize max_index) noexcept;
 
-  KeyView get_next(KeySet& inserted_keys) override;
+  std::string_view name() const override
+  {
+    return "zipf";
+  }
+
+  std::pair<KeyView, usize> get_next(KeySet& inserted_keys) override;
 
  private:
   std::default_random_engine rng_;

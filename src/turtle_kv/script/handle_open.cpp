@@ -15,22 +15,9 @@ namespace turtle_kv {
 //
 Status handle_open(ScriptContext& context [[maybe_unused]], const YAML::Node& params)
 {
-  bool invalid_params = false;
+  LOG(INFO) << "open()";
 
-  for (const auto& param_pair : params) {
-    LOG(ERROR) << "bad param:" << BATT_INSPECT(param_pair.first) << BATT_INSPECT(param_pair.second);
-    invalid_params = true;
-  }
-  if (invalid_params) {
-    return batt::StatusCode::kInvalidArgument;
-  }
-
-  LOG(INFO) << "open(" << context.kv_store_dir << ", " << context.config.tree_options << ", "
-            << context.runtime_options << ")";
-
-  BATT_ASSIGN_OK_RESULT(
-      context.kv_store,
-      KVStore::open(context.kv_store_dir, context.config.tree_options, context.runtime_options));
+  BATT_REQUIRE_OK(context.schedule(script::Open{}));
 
   return OkStatus();
 }

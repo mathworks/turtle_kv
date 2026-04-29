@@ -14,6 +14,7 @@
 #include <turtle_kv/import/int_types.hpp>
 #include <turtle_kv/import/optional.hpp>
 
+#include <batteries/async/types.hpp>
 #include <batteries/cpu_align.hpp>
 #include <batteries/math.hpp>
 #include <batteries/stable_string_store.hpp>
@@ -52,11 +53,22 @@ class KeySet
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  void set_size(usize n) noexcept
+  {
+    this->next_index_->store(n);
+  }
+
   usize size() const noexcept;
 
   Optional<KeyView> get_key_by_index(usize index) noexcept;
 
+  KeyView wait_for_key_at(usize index) noexcept;
+
   std::pair<KeyView, usize> insert_key(const KeyView& key) noexcept;
+
+  KeyView insert_key_at(usize index, const KeyView& key) noexcept;
+
+  KeyView insert_key_view_at(usize index, const KeyView& key) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
@@ -70,7 +82,7 @@ class KeySet
 
     void set(std::string_view s);
 
-    std::string_view get();
+    Optional<std::string_view> get(batt::WaitForResource wait_for_resource);
   };
 
   struct Level {

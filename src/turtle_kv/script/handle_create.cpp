@@ -13,26 +13,16 @@ namespace turtle_kv {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status handle_create(ScriptContext& context [[maybe_unused]], const YAML::Node& params)
+Status handle_create(ScriptContext& context, const YAML::Node& params)
 {
-  RemoveExisting remove_existing{false};
+  BATT_ASSIGN_OK_RESULT(bool remove_existing,
+                        context.parse_param<bool>(params, "remove_existing", /*default=*/false));
 
-  for (const auto& param_pair : params) {
-    const std::string param_name = param_pair.first.as<std::string>();
+  LOG(INFO) << "create(remove_existing=" << remove_existing << ")";
 
-    if (param_name == "remove_existing") {
-      remove_existing = RemoveExisting{param_pair.second.as<bool>()};
-    } else {
-      LOG(ERROR) << "bad param:" << BATT_INSPECT(param_pair.first)
-                 << BATT_INSPECT(param_pair.second);
-      return batt::StatusCode::kInvalidArgument;
-    }
-  }
-
-  LOG(INFO) << "create(" << context.kv_store_dir << ", " << context.config
-            << ", remove_existing=" << remove_existing << ")";
-
-  BATT_REQUIRE_OK(KVStore::create(context.kv_store_dir, context.config, remove_existing));
+  BATT_REQUIRE_OK(context.schedule(script::Create{
+      .remove_existing = RemoveExisting{remove_existing},
+  }));
 
   return OkStatus();
 }
