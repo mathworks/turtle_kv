@@ -7,7 +7,7 @@
 //+++++++++++-+-+--+----- --- -- -  -  -   -
 
 #pragma once
-#define TURTLE_KV_SCRIPT_OPERATION_HPP
+#define TURTLE_KV_SCRIPT_OPERATIONS_HPP
 
 #include <turtle_kv/api_types.hpp>
 

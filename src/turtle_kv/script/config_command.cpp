@@ -6,14 +6,15 @@
 //
 //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-#include <turtle_kv/script/handle_config.hpp>
+#include <turtle_kv/script/config_command.hpp>
 //
 
 namespace turtle_kv {
+namespace script {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status handle_config(ScriptContext& context, const YAML::Node& params)
+Status config_command(ScriptContext& context, const YAML::Node& params)
 {
   std::vector<std::pair<std::string, std::string>> config_pairs;
 
@@ -31,4 +32,5 @@ Status handle_config(ScriptContext& context, const YAML::Node& params)
   return OkStatus();
 }
 
+}  // namespace script
 }  // namespace turtle_kv

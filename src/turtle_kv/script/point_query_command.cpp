@@ -6,18 +6,21 @@
 //
 //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-#include <turtle_kv/script/handle_insert.hpp>
+#include <turtle_kv/script/point_query_command.hpp>
 //
 
 #include <turtle_kv/script/key_distribution.hpp>
+#include <turtle_kv/script/uniform_key_distribution.hpp>
+#include <turtle_kv/script/zipf_key_distribution.hpp>
 
-#include <memory>
+#include <chrono>
 
 namespace turtle_kv {
+namespace script {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status handle_insert(ScriptContext& context, const YAML::Node& params)
+Status point_query_command(ScriptContext& context [[maybe_unused]], const YAML::Node& params)
 {
   BATT_ASSIGN_OK_RESULT(  //
       std::unique_ptr<KeyDistribution> key_dist,
@@ -29,37 +32,23 @@ Status handle_insert(ScriptContext& context, const YAML::Node& params)
       usize count,
       context.parse_param<usize>(params, "count", /*default=*/1));
 
-  BATT_ASSIGN_OK_RESULT(  //
-      usize value_size,
-      context.parse_param<usize>(params,
-                                 "value_size",
-                                 /*default=*/context.config.tree_options.value_size_hint()));
-
   BATT_REQUIRE_NE(key_dist.get(), nullptr);
   BATT_REQUIRE_NE(context.kv_store.get(), nullptr);
-
-  std::string value;
-
-  LOG(INFO) << "insert(count=" << count << ", key_dist=" << key_dist->name()
-            << ", value_size=" << value_size << ")";
 
   std::vector<script::Operation> ops;
 
   for (usize i = 0; i < count; ++i) {
-    KeyView key;
-    usize index;
-    std::tie(key, index) = key_dist->get_next(context.key_set);
-
-    ops.push_back(script::Insert{
-        .key = key,
-        .index = index,
-        .value_size = value_size,
+    ops.push_back(script::PointQuery{
+        .index = key_dist->get_next(context.key_set).second,
     });
   }
+
+  LOG(INFO) << "point_query(count=" << count << ")";
 
   BATT_REQUIRE_OK(context.schedule(std::move(ops)));
 
   return OkStatus();
 }
 
+}  // namespace script
 }  // namespace turtle_kv

@@ -9,10 +9,16 @@
 #pragma once
 #define TURTLE_KV_SCRIPT_EXECUTION_STRATEGY_HPP
 
-#include <turtle_kv/script/operation.hpp>
+#include <turtle_kv/script/operations.hpp>
 
 #include <turtle_kv/import/status.hpp>
 
+#include <batteries/cpu_align.hpp>
+#include <batteries/do_nothing.hpp>
+
+#include <atomic>
+#include <barrier>
+#include <thread>
 #include <type_traits>
 #include <vector>
 
@@ -34,6 +40,13 @@ class ExecutionStrategy
 
   virtual ~ExecutionStrategy() = default;
 
+  /** \brief Called right before this ExecutionStrategy is pushed on the stack.
+   */
+  virtual StatusOr<usize> activate(ExecutionStrategy* parent [[maybe_unused]])
+  {
+    return {0};
+  }
+
   /** \brief Adds a series of operations to be executed.
    *
    * \return the number of ops executed
@@ -46,7 +59,7 @@ class ExecutionStrategy
    */
   virtual StatusOr<usize> step() = 0;
 
-  /** \brief Called right before this ExecutionStrategy is popped off the stack.
+  /** \brief Called right after this ExecutionStrategy is popped off the stack.
    *
    * \return the number of ops executed
    */
@@ -154,13 +167,26 @@ class Interleave : public ExecutionStrategy
 class Parallel : public ExecutionStrategy
 {
  public:
-  Parallel() noexcept;
+  explicit Parallel(i32 n_threads) noexcept;
+
+  ~Parallel() noexcept;
+
+  StatusOr<usize> activate(ExecutionStrategy*) override;
 
   StatusOr<usize> schedule(std::vector<Operation>&& ops) override;
 
   StatusOr<usize> step() override;
 
   StatusOr<usize> retire(ExecutionStrategy* parent) override;
+
+ private:
+  ScriptContext& context_;
+  i32 n_threads_;
+  std::barrier<batt::DoNothing> barrier_;
+  std::vector<std::thread> threads_;
+  std::unique_ptr<batt::CpuCacheLineIsolated<std::atomic<i64>>[]> thread_progress_;
+  std::atomic<bool> done_;
+  std::vector<Operation> stage_ops_;
 };
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------

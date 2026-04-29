@@ -6,20 +6,17 @@
 //
 //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-#include <turtle_kv/script/handle_open.hpp>
-//
+#pragma once
+#define TURTLE_KV_SCRIPT_CREATE_COMMAND_HPP
+
+#include <turtle_kv/script/commands.hpp>
 
 namespace turtle_kv {
+namespace script {
 
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-Status handle_open(ScriptContext& context [[maybe_unused]], const YAML::Node& params)
-{
-  LOG(INFO) << "open()";
+Status create_command(ScriptContext& context, const YAML::Node& params);
 
-  BATT_REQUIRE_OK(context.schedule(script::Open{}));
+static_assert(std::is_constructible_v<CommandFn, decltype(&create_command)>);
 
-  return OkStatus();
-}
-
+}  // namespace script
 }  // namespace turtle_kv

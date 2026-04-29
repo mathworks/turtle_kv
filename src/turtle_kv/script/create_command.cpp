@@ -6,14 +6,15 @@
 //
 //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-#include <turtle_kv/script/handle_create.hpp>
+#include <turtle_kv/script/create_command.hpp>
 //
 
 namespace turtle_kv {
+namespace script {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status handle_create(ScriptContext& context, const YAML::Node& params)
+Status create_command(ScriptContext& context, const YAML::Node& params)
 {
   BATT_ASSIGN_OK_RESULT(bool remove_existing,
                         context.parse_param<bool>(params, "remove_existing", /*default=*/false));
@@ -27,4 +28,5 @@ Status handle_create(ScriptContext& context, const YAML::Node& params)
   return OkStatus();
 }
 
+}  // namespace script
 }  // namespace turtle_kv

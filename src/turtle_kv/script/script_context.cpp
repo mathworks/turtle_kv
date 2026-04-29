@@ -9,7 +9,7 @@
 #include <turtle_kv/script/script_context.hpp>
 //
 
-#include <turtle_kv/script/command_handlers.hpp>
+#include <turtle_kv/script/commands.hpp>
 
 #include <cstring>
 
@@ -20,6 +20,7 @@ namespace turtle_kv {
 Status ScriptContext::run(script::ExecutionStrategy* exec, const YAML::Node& script) noexcept
 {
   if (exec) {
+    BATT_REQUIRE_OK(exec->activate(this->exec_stack.empty() ? nullptr : this->exec_stack.back()));
     this->exec_stack.push_back(exec);
   }
   auto on_scope_exit = batt::finally([&] {
@@ -42,7 +43,10 @@ Status ScriptContext::run(script::ExecutionStrategy* exec, const YAML::Node& scr
       const std::string name = pair.first.as<std::string>();
       const YAML::Node& params = pair.second;
 
-      BATT_REQUIRE_EQ(command_handlers.count(name), 1);
+      if (command_handlers.count(name) == 0) {
+        LOG(ERROR) << "command '" << name << "' not found";
+        return batt::StatusCode::kInternal;
+      }
 
       this->command_stack.push_back(name);
       auto on_scope_exit = batt::finally([&] {

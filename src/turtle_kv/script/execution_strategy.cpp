@@ -11,6 +11,8 @@
 
 #include <turtle_kv/script/script_context.hpp>
 
+#include <batteries/checked_cast.hpp>
+
 #include <chrono>
 
 namespace turtle_kv {
@@ -189,14 +191,86 @@ StatusOr<usize> Interleave::retire(ExecutionStrategy* parent) /*override*/
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Parallel::Parallel() noexcept
+Parallel::Parallel(i32 n_threads) noexcept
+    : n_threads_{n_threads}
+    , barrier_{n_threads + 1, batt::DoNothing{}}
+    , threads_{}
+    , thread_progress_{new batt::CpuCacheLineIsolated<std::atomic<i64>>[n_threads]}
+    , done_{false}
 {
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Parallel::~Parallel() noexcept
+{
+  BATT_CHECK(this->threads_.empty());
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+StatusOr<usize> Parallel::activate(ExecutionStrategy*) /*override*/
+{
+  BATT_CHECK(this->threads_.empty());
+
+  this->done_.store(false);
+
+  for (i32 thread_i = 0; thread_i < this->n_threads_; ++thread_i) {
+    this->threads_.emplace_back([thread_i, this] {
+      for (;;) {
+        // Wait for the stage to start.
+        //
+        this->barrier_.arrive_and_wait();
+
+        auto on_scope_exit = batt::finally([&] {
+          // Wait for the stage to finish.
+          //
+          this->barrier_.arrive_and_wait();
+        });
+
+        // If no more stages, exit.
+        //
+        if (this->done_.load()) {
+          break;
+        }
+
+        Status status;
+
+        // Do work.
+        //
+        const i64 kFetchCount = 16;
+        const i64 kStepSize = kFetchCount * this->n_threads_;
+        const i64 op_count = BATT_CHECKED_CAST(i64, this->stage_ops_.size());
+        std::atomic<i64>& progress = *this->thread_progress_[thread_i];
+        for (;;) {
+          i64 next_op_i = progress.fetch_add(kStepSize);
+          if (next_op_i >= op_count) {
+            // Finished with the work for this thread!
+            //
+            break;
+          }
+
+          const i64 last_op_i = std::min(op_count, next_op_i + kStepSize);
+          for (; next_op_i != last_op_i; next_op_i += this->n_threads_) {
+            status.Update(execute_op(this->context_, this->stage_ops_[next_op_i]));
+          }
+        }
+
+        // Steal work.
+        //
+        const i64 kStealCount = 256;
+      }
+    });
+  }
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 StatusOr<usize> Parallel::schedule(std::vector<Operation>&& ops) /*override*/
 {
+  this->stage_ops_.insert(this->stage_ops_.end(),
+                          std::make_move_iterator(ops.begin()),
+                          std::make_move_iterator(ops.end()));
   return {0};
 }
 
@@ -204,13 +278,42 @@ StatusOr<usize> Parallel::schedule(std::vector<Operation>&& ops) /*override*/
 //
 StatusOr<usize> Parallel::step() /*override*/
 {
-  return {0};
+  const usize op_count = this->stage_ops_.size();
+
+  // Reset the progress of all threads.
+  //
+  for (i32 thread_i = 0; thread_i < this->n_threads_; ++thread_i) {
+    this->thread_progress_[thread_i]->store(thread_i);
+  }
+
+  // Go!
+  //
+  this->barrier_.arrive_and_wait();
+
+  // Wait for all threads to finish.
+  //
+  this->barrier_.arrive_and_wait();
+
+  // Clear the ops queue for the last stage.
+  //
+  this->stage_ops_.clear();
+
+  return {op_count};
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 StatusOr<usize> Parallel::retire(ExecutionStrategy* parent) /*override*/
 {
+  this->done_.store(true);
+  this->barrier_.arrive_and_wait();
+
+  for (std::thread& t : this->threads_) {
+    t.join();
+  }
+
+  this->threads_.clear();
+
   return {0};
 }
 
