@@ -345,7 +345,7 @@ struct InMemoryNode {
                                    BatchUpdateContext& update_context,
                                    usize pivot_i,
                                    const CInterval<KeyView>& flush_key_crange,
-                                   Status segment_load_status);
+                                   Status& segment_load_status);
 
       /** \brief Marks the pivot `pivot_i` as completely flushed within this level.
        */
@@ -357,6 +357,8 @@ struct InMemoryNode {
       usize segment_filter_cut_points() const;
 
       void push_front_pivots(usize node_pivot_count);
+
+      StatusOr<ValueView> find_key(const InMemoryNode& node, KeyQuery& query, i32 key_pivot_i) const;
 
       /** \brief Merges this level with a "sibling" level from another node.
        *
@@ -455,6 +457,11 @@ struct InMemoryNode {
         return this->result_set.empty();
       }
 
+      StatusOr<ValueView> find_key(const KeyView& key) const
+      {
+        return this->result_set.find_key(key);
+      }
+
       Level merge(Level&& sibling_level, usize node_pivot_count);
 
       /** \brief Returns the number of segment leaf page build jobs added to the context.
@@ -480,13 +487,24 @@ struct InMemoryNode {
         return as_const_slice(this->levels);
       }
 
-      void add_new_sub_level(std::variant<MergedLevel, SegmentedLevel>&& level)
+      void add_new_sub_level(std::variant<MergedLevel, SegmentedLevel>&& level,
+                             usize push_pivot_count = 0)
       {
+        if (push_pivot_count) {
+          BATT_CHECK(batt::is_case<SegmentedLevel>(level));
+          SegmentedLevel& segmented_sub_level = std::get<SegmentedLevel>(level);
+          segmented_sub_level.push_front_pivots(push_pivot_count);
+        }
+
         this->levels.emplace_back(std::move(level));
       }
 
-      void add_new_sub_level(HybridLevel&& other)
+      void add_new_sub_level(HybridLevel&& other, usize push_pivot_count = 0)
       {
+        if (push_pivot_count) {
+          other.push_front_pivots(push_pivot_count);
+        }
+
         this->levels.insert(this->levels.end(),
                             std::make_move_iterator(other.levels.begin()),
                             std::make_move_iterator(other.levels.end()));
@@ -531,6 +549,8 @@ struct InMemoryNode {
                         BatchUpdateContext& update_context,
                         i32 left_pivot_i,
                         i32 right_pivot_i);
+
+      StatusOr<ValueView> find_key(const InMemoryNode& node, KeyQuery& query, i32 key_pivot_i) const;
 
       Level merge(Level&& sibling_level, usize node_pivot_count);
 
@@ -746,7 +766,7 @@ struct InMemoryNode {
 
   /** \brief Attempt to collapse one level of the tree. Returns the node's single pivot.
    */
-  Subtree try_shrink();
+  Subtree shrink_or_panic();
 
   /** \brief Merge the node in place with its right sibling.
    *

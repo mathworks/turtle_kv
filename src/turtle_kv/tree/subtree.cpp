@@ -317,6 +317,9 @@ Status Subtree::flush_and_shrink(BatchUpdateContext& context) noexcept
 
   usize retries = 0;
 
+  // TODO [vsilai 2026-04-28]: Consider allowing shrink with non-empty levels (pending bytes > 0),
+  // when all the levels of this node and its child will fit in a single buffer.
+  //
   while (!is_root_viable(this->get_viability()) && retries < kMaxPivots) {
     ++retries;
 
@@ -648,7 +651,7 @@ Status Subtree::try_shrink() noexcept
       },
 
       [&](const std::unique_ptr<InMemoryNode>& node) -> StatusOr<Subtree> {
-        return node->try_shrink();
+        return node->shrink_or_panic();
       });
 
   BATT_REQUIRE_OK(new_root);

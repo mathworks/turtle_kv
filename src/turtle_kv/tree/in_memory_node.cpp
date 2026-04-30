@@ -733,11 +733,15 @@ Status InMemoryNode::split_child(BatchUpdateContext& update_context, i32 pivot_i
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Subtree InMemoryNode::try_shrink()
+Subtree InMemoryNode::shrink_or_panic()
 {
   BATT_CHECK_EQ(this->children.size(), 1);
   BATT_CHECK_EQ(this->pending_bytes.size(), 1);
   BATT_CHECK_EQ(this->pending_bytes[0], 0);
+
+  for (const auto& level : this->update_buffer.levels) {
+    BATT_CHECK(batt::is_case<EmptyLevel>(level));
+  }
 
   return {std::move(this->children[0])};
 }
@@ -854,7 +858,7 @@ Status InMemoryNode::try_merge(BatchUpdateContext& context,
   // Concatenate the update buffers.
   //
   BATT_CHECK_EQ(this->update_buffer.levels.size(), sibling->update_buffer.levels.size());
-  
+
   for (usize i = 0; i < this->update_buffer.levels.size(); ++i) {
     batt::case_of(this->update_buffer.levels[i], [&](auto& left_level) {
       this->update_buffer.levels[i] =
@@ -1132,10 +1136,9 @@ usize InMemoryNode::total_segment_filter_cut_points() const
         [](const HybridLevel& hybrid_level) -> usize {
           usize n = 0;
 
-          auto sub_levels = hybrid_level.get_levels();
-          for (auto iter = sub_levels.begin(); iter != sub_levels.end(); ++iter) {
-            if (batt::is_case<SegmentedLevel>(*iter)) {
-              const SegmentedLevel& segmented_sub_level = std::get<SegmentedLevel>(*iter);
+          for (const auto& sub_level : hybrid_level.get_levels()) {
+            if (batt::is_case<SegmentedLevel>(sub_level)) {
+              const SegmentedLevel& segmented_sub_level = std::get<SegmentedLevel>(sub_level);
               n += segmented_sub_level.segment_filter_cut_points();
             }
           }
@@ -1505,36 +1508,13 @@ StatusOr<ValueView> InMemoryNode::find_key_in_level(usize level_i,
         return {batt::StatusCode::kNotFound};
       },
       [&](const MergedLevel& merged_level) -> StatusOr<ValueView> {
-        return merged_level.result_set.find_key(query.key());
+        return merged_level.find_key(query.key());
       },
       [&](const SegmentedLevel& segmented_level) -> StatusOr<ValueView> {
-        return in_segmented_level(*this, segmented_level, *query.page_loader, query.overcommit())
-            .find_key(key_pivot_i, query);
+        return segmented_level.find_key(*this, query, key_pivot_i);
       },
       [&](const HybridLevel& hybrid_level) -> StatusOr<ValueView> {
-        StatusOr<ValueView> result{Status{batt::StatusCode::kNotFound}};
-
-        auto sub_levels = hybrid_level.get_levels();
-        for (auto iter = sub_levels.begin(); iter != sub_levels.end(); ++iter) {
-          result = batt::case_of(
-              *iter,
-              [&](const MergedLevel& merged_sub_level) -> StatusOr<ValueView> {
-                return merged_sub_level.result_set.find_key(query.key());
-              },
-              [&](const SegmentedLevel& segmented_sub_level) -> StatusOr<ValueView> {
-                return in_segmented_level(*this,
-                                          segmented_sub_level,
-                                          *query.page_loader,
-                                          query.overcommit())
-                    .find_key(key_pivot_i, query);
-              });
-
-          if (result.ok()) {
-            return result;
-          }
-        }
-
-        return result;
+        return hybrid_level.find_key(*this, query, key_pivot_i);
       });
 }
 
@@ -1713,21 +1693,12 @@ Level MergedLevel::merge(Level&& sibling_level, usize node_pivot_count)
       [&](MergedLevel& right_merged_level) -> Level {
         return this->concat(std::move(right_merged_level));
       },
-      [&](SegmentedLevel& right_segmented_level) -> Level {
+      [&](auto& right_segmented_or_hybrid_level) -> Level {
         HybridLevel new_hybrid_level;
         new_hybrid_level.add_new_sub_level(std::move(*this));
 
-        right_segmented_level.push_front_pivots(node_pivot_count);
-        new_hybrid_level.add_new_sub_level(std::move(right_segmented_level));
-
-        return new_hybrid_level;
-      },
-      [&](HybridLevel& right_hybrid_level) -> Level {
-        HybridLevel new_hybrid_level;
-        new_hybrid_level.add_new_sub_level(std::move(*this));
-
-        right_hybrid_level.push_front_pivots(node_pivot_count);
-        new_hybrid_level.add_new_sub_level(std::move(right_hybrid_level));
+        new_hybrid_level.add_new_sub_level(std::move(right_segmented_or_hybrid_level),
+                                           node_pivot_count);
 
         return new_hybrid_level;
       });
@@ -1980,7 +1951,7 @@ bool InMemoryNode::UpdateBuffer::SegmentedLevel::set_pivot_items_flushed(
     BatchUpdateContext& update_context,
     usize pivot_i,
     const CInterval<KeyView>& flush_key_crange,
-    Status segment_load_status)
+    Status& segment_load_status)
 {
   segment_load_status.Update(
       in_segmented_level(node, *this, update_context.page_loader, update_context.overcommit)
@@ -2031,6 +2002,16 @@ void InMemoryNode::UpdateBuffer::SegmentedLevel::push_front_pivots(usize node_pi
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+StatusOr<ValueView> InMemoryNode::UpdateBuffer::SegmentedLevel::find_key(const InMemoryNode& node,
+                                                                         KeyQuery& query,
+                                                                         i32 key_pivot_i) const
+{
+  return in_segmented_level(node, *this, *query.page_loader, query.overcommit())
+      .find_key(key_pivot_i, query);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 Level InMemoryNode::UpdateBuffer::SegmentedLevel::merge(Level&& sibling_level,
                                                         usize node_pivot_count)
 {
@@ -2071,8 +2052,7 @@ Level InMemoryNode::UpdateBuffer::SegmentedLevel::merge(Level&& sibling_level,
         HybridLevel new_hybrid_level;
         new_hybrid_level.add_new_sub_level(std::move(*this));
 
-        right_hybrid_level.push_front_pivots(node_pivot_count);
-        new_hybrid_level.add_new_sub_level(std::move(right_hybrid_level));
+        new_hybrid_level.add_new_sub_level(std::move(right_hybrid_level), node_pivot_count);
 
         return new_hybrid_level;
       });
@@ -2274,12 +2254,39 @@ void InMemoryNode::UpdateBuffer::HybridLevel::merge_pivots(InMemoryNode& node,
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+StatusOr<ValueView> InMemoryNode::UpdateBuffer::HybridLevel::find_key(const InMemoryNode& node,
+                                                                      KeyQuery& query,
+                                                                      i32 key_pivot_i) const
+{
+  StatusOr<ValueView> result{Status{batt::StatusCode::kNotFound}};
+
+  // TODO [vsilai 2026-04-28]: Implement a way to avoid iterating through all sub-levels.
+  //
+  for (const auto& sub_level : this->levels) {
+    result = batt::case_of(
+        sub_level,
+        [&](const MergedLevel& merged_sub_level) -> StatusOr<ValueView> {
+          return merged_sub_level.find_key(query.key());
+        },
+        [&](const SegmentedLevel& segmented_sub_level) -> StatusOr<ValueView> {
+          return segmented_sub_level.find_key(node, query, key_pivot_i);
+        });
+
+    if (result.ok() || result.status() != batt::StatusCode::kNotFound) {
+      return result;
+    }
+  }
+
+  return result;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 Level InMemoryNode::UpdateBuffer::HybridLevel::merge(Level&& sibling_level, usize node_pivot_count)
 {
   batt::case_of(
       sibling_level,
       [&](EmptyLevel&) {
-
       },
       [&](MergedLevel& right_merged_level) {
         this->add_new_sub_level(std::move(right_merged_level));
@@ -2304,12 +2311,21 @@ StatusOr<usize> InMemoryNode::UpdateBuffer::HybridLevel::start_serialize(
 {
   usize total_segment_count = 0;
 
-  for (auto iter = this->levels.begin(); iter != this->levels.end(); ++iter) {
-    if (batt::is_case<MergedLevel>(*iter)) {
-      MergedLevel& merged_sub_level = std::get<MergedLevel>(*iter);
-      BATT_ASSIGN_OK_RESULT(usize sub_level_total, merged_sub_level.start_serialize(node, context));
-      total_segment_count += sub_level_total;
-    }
+  for (auto& sub_level : this->levels) {
+    StatusOr<usize> sub_level_segment_count = batt::case_of(
+        sub_level,
+        [&](MergedLevel& merged_sub_level) -> StatusOr<usize> {
+          BATT_ASSIGN_OK_RESULT(usize sub_level_total,
+                                merged_sub_level.start_serialize(node, context));
+          return sub_level_total;
+        },
+        [&](SegmentedLevel& segmented_sub_level) -> StatusOr<usize> {
+          return segmented_sub_level.segment_count();
+        });
+
+    BATT_REQUIRE_OK(sub_level_segment_count);
+
+    total_segment_count += *sub_level_segment_count;
   }
 
   return total_segment_count;
@@ -2323,35 +2339,36 @@ StatusOr<SegmentedLevel> InMemoryNode::UpdateBuffer::HybridLevel::finish_seriali
 {
   static Metrics& r_metrics = InMemoryNode::metrics();
 
-  for (auto iter = this->levels.begin(); iter != this->levels.end(); ++iter) {
-    r_metrics.serialized_nonempty_level_count.add(1);
-    BATT_REQUIRE_OK(batt::case_of(
-        *iter,
-        [&](MergedLevel& merged_sub_level) -> Status {
-          BATT_ASSIGN_OK_RESULT(StatusOr<SegmentedLevel> new_segmented_sub_level,
-                                merged_sub_level.finish_serialize(node, context));
-          *iter = *new_segmented_sub_level;
-          r_metrics.serialized_buffer_segment_count.add(new_segmented_sub_level->segment_count());
-
-          return OkStatus();
-        },
-        [&](SegmentedLevel& segmented_sub_level) {
-          r_metrics.serialized_buffer_segment_count.add(segmented_sub_level.segment_count());
-          return OkStatus();
-        }));
-  }
-
   SegmentedLevel final_segmented_level;
-  for (auto iter = this->levels.begin(); iter != this->levels.end(); ++iter) {
-    BATT_CHECK(batt::is_case<SegmentedLevel>(*iter));
-    SegmentedLevel& segmented_sub_level = std::get<SegmentedLevel>(*iter);
+
+  for (auto& sub_level : this->levels) {
+    r_metrics.serialized_nonempty_level_count.add(1);
+
+    StatusOr<SegmentedLevel> new_segmented_sub_level = batt::case_of(
+        sub_level,
+        [&](MergedLevel& merged_sub_level) -> StatusOr<SegmentedLevel> {
+          return merged_sub_level.finish_serialize(node, context);
+        },
+        [&](SegmentedLevel& segmented_sub_level) -> StatusOr<SegmentedLevel> {
+          r_metrics.serialized_buffer_segment_count.add(segmented_sub_level.segment_count());
+
+          final_segmented_level.segments.insert(
+              final_segmented_level.segments.end(),
+              std::make_move_iterator(segmented_sub_level.segments.begin()),
+              std::make_move_iterator(segmented_sub_level.segments.end()));
+
+          return {std::move(segmented_sub_level)};
+        });
+
+    BATT_REQUIRE_OK(new_segmented_sub_level);
+
     final_segmented_level.segments.insert(
         final_segmented_level.segments.end(),
-        std::make_move_iterator(segmented_sub_level.segments.begin()),
-        std::make_move_iterator(segmented_sub_level.segments.end()));
+        std::make_move_iterator(new_segmented_sub_level->segments.begin()),
+        std::make_move_iterator(new_segmented_sub_level->segments.end()));
   }
 
-  return final_segmented_level;
+  return {std::move(final_segmented_level)};
 }
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
