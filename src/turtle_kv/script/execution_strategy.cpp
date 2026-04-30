@@ -424,14 +424,27 @@ StatusOr<usize> Parallel::retire(ExecutionStrategy* parent) /*override*/
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Concurrent::Concurrent() noexcept
+/*explicit*/ Concurrent::Concurrent(ScriptContext& context) noexcept : context_{context}
 {
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+StatusOr<usize> Concurrent::activate(ExecutionStrategy*) /*override*/
+{
+  return {0};
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 StatusOr<usize> Concurrent::schedule(std::vector<Operation>&& ops) /*override*/
 {
+  this->next_task_.insert(this->next_task_.end(),
+                          std::make_move_iterator(ops.begin()),
+                          std::make_move_iterator(ops.end()));
+
+  ops.clear();
+
   return {0};
 }
 
@@ -439,6 +452,11 @@ StatusOr<usize> Concurrent::schedule(std::vector<Operation>&& ops) /*override*/
 //
 StatusOr<usize> Concurrent::step() /*override*/
 {
+  if (!this->next_task_.empty()) {
+    this->all_tasks_.emplace_back(std::move(this->next_task_));
+    this->next_task_.clear();
+  }
+
   return {0};
 }
 
@@ -446,7 +464,38 @@ StatusOr<usize> Concurrent::step() /*override*/
 //
 StatusOr<usize> Concurrent::retire(ExecutionStrategy* parent) /*override*/
 {
-  return {0};
+  VLOG(1) << "Concurrent::retire; n_tasks=" << this->all_tasks_.size();
+  BATT_CHECK(this->next_task_.empty());
+
+  usize op_count = 0;
+  std::vector<Status> status(this->all_tasks_.size(), OkStatus());
+  std::vector<std::thread> threads;
+
+  for (auto& task_ops : this->all_tasks_) {
+    op_count += task_ops.size();
+    threads.emplace_back([this, p_ops = &task_ops, task_status = &status[threads.size()]] {
+      for (Operation& op : *p_ops) {
+        task_status->Update(execute_op(this->context_, op));
+        if (!task_status->ok()) {
+          break;
+        }
+      }
+    });
+  }
+
+  for (std::thread& t : threads) {
+    t.join();
+  }
+
+  VLOG(1) << "Concurrent tasks finished;" << BATT_INSPECT(op_count);
+
+  this->all_tasks_.clear();
+
+  for (Status& task_status : status) {
+    BATT_REQUIRE_OK(task_status);
+  }
+
+  return {op_count};
 }
 
 }  // namespace script

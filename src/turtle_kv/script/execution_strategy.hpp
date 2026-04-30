@@ -221,13 +221,20 @@ class Parallel : public ExecutionStrategy
 class Concurrent : public ExecutionStrategy
 {
  public:
-  Concurrent() noexcept;
+  explicit Concurrent(ScriptContext& context) noexcept;
+
+  StatusOr<usize> activate(ExecutionStrategy* parent) override;
 
   StatusOr<usize> schedule(std::vector<Operation>&& ops) override;
 
   StatusOr<usize> step() override;
 
   StatusOr<usize> retire(ExecutionStrategy* parent) override;
+
+ private:
+  ScriptContext& context_;
+  std::vector<Operation> next_task_;
+  std::vector<std::vector<Operation>> all_tasks_;
 };
 
 }  // namespace script
