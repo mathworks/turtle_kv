@@ -6,20 +6,19 @@
 //
 //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-#include <turtle_kv/script/handle_point_query.hpp>
+#include <turtle_kv/script/insert_command.hpp>
 //
 
 #include <turtle_kv/script/key_distribution.hpp>
-#include <turtle_kv/script/uniform_key_distribution.hpp>
-#include <turtle_kv/script/zipf_key_distribution.hpp>
 
-#include <chrono>
+#include <memory>
 
 namespace turtle_kv {
+namespace script {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status handle_point_query(ScriptContext& context [[maybe_unused]], const YAML::Node& params)
+Status insert_command(ScriptContext& context, const YAML::Node& params)
 {
   BATT_ASSIGN_OK_RESULT(  //
       std::unique_ptr<KeyDistribution> key_dist,
@@ -31,29 +30,38 @@ Status handle_point_query(ScriptContext& context [[maybe_unused]], const YAML::N
       usize count,
       context.parse_param<usize>(params, "count", /*default=*/1));
 
+  BATT_ASSIGN_OK_RESULT(  //
+      usize value_size,
+      context.parse_param<usize>(params,
+                                 "value_size",
+                                 /*default=*/context.config.tree_options.value_size_hint()));
+
   BATT_REQUIRE_NE(key_dist.get(), nullptr);
   BATT_REQUIRE_NE(context.kv_store.get(), nullptr);
 
-  std::vector<KeyView> query_keys;
+  std::string value;
+
+  LOG(INFO) << "insert(count=" << count << ", key_dist=" << key_dist->name()
+            << ", value_size=" << value_size << ")";
+
+  std::vector<script::Operation> ops;
+
   for (usize i = 0; i < count; ++i) {
-    query_keys.push_back(key_dist->get_next(context.inserted_keys));
+    KeyView key;
+    usize index;
+    std::tie(key, index) = key_dist->get_next(context.key_set);
+
+    ops.push_back(script::Insert{
+        .key = key,
+        .index = index,
+        .value_size = value_size,
+    });
   }
 
-  LOG(INFO) << "point_query(count=" << count << ")";
-
-  auto start_time = std::chrono::steady_clock::now();
-
-  for (const KeyView& key : query_keys) {
-    BATT_REQUIRE_OK(context.kv_store->get(key));
-  }
-
-  auto duration = std::chrono::steady_clock::now() - start_time;
-  double elapsed_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count();
-
-  LOG(INFO) << "  elapsed: " << elapsed_ns / 1e9 << "s, " << (double)count * 1e6 / elapsed_ns
-            << " kops/sec";
+  BATT_REQUIRE_OK(context.schedule(std::move(ops)));
 
   return OkStatus();
 }
 
+}  // namespace script
 }  // namespace turtle_kv

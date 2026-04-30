@@ -9,6 +9,8 @@
 #include <turtle_kv/script/key_set.hpp>
 //
 
+#include <turtle_kv/util/atomic.hpp>
+
 namespace turtle_kv {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -29,53 +31,133 @@ usize KeySet::size() const noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Optional<KeyView> KeySet::get_key_by_index(usize index) noexcept
-{
-  // If the passed index has not yet been assigned, then there is no key to get; return None.
-  //
-  if (index >= this->size()) {
-    return None;
-  }
-
-  // Find the entry for this index.
-  //
-  KeyEntry* const entry = this->lookup(index);
-  BATT_CHECK_NOT_NULLPTR(entry);
-
-  // KeyEntry::get() will block until the key data is fully initialized.
-  //
-  return entry->get();
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-std::pair<KeyView, usize> KeySet::insert_key(const KeyView& key) noexcept
+std::pair<KeyView, usize> KeySet::create_key(const KeyView& key, bool inserted) noexcept
 {
   // Assign a unique index to this insertion.
   //
   const usize index = this->next_index_->fetch_add(1);
 
-  // Retrieve the KeyEntry for the assigned index; this may create a new Level.
+  // Create/retrieve the entry for the assigned index.
   //
-  KeyEntry* const entry = this->lookup(index);
+  KeyEntry* const entry = this->lookup(index, /*create=*/std::true_type{});
 
-  // Sanity check: the entry must not currently hold a key string!
-  //
-  BATT_CHECK_EQ(entry->data_.load(), nullptr);
+  const std::string_view stored_copy = [&] {
+    std::scoped_lock<std::mutex> lock{this->string_store_mutex_};
+    return this->string_store_.store(key);
+  }();
 
-  // Lock the mutex and place a copy of `key` in the StableStringStore.
-  //
-  std::scoped_lock<std::mutex> lock{this->string_store_mutex_};
-  entry->set(this->string_store_.store(key));
+  if (inserted) {
+    entry->set_inserted(inserted);
+  }
+  entry->set(stored_copy);
+
+  this->invalidate_inserted_upper_bound();
 
   // Success!
   //
-  return std::make_pair(entry->get(), index);
+  return std::make_pair(stored_copy, index);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-KeySet::KeyEntry* KeySet::lookup(usize index) noexcept
+void KeySet::set_key_inserted(usize index, bool b) noexcept
+{
+  // Find the entry for this index.
+  //
+  KeyEntry* const entry = this->lookup(index, /*create=*/std::false_type{});
+  BATT_CHECK_NOT_NULLPTR(entry);
+  BATT_CHECK(entry->is_created());
+
+  // Update the entry.
+  //
+  entry->set_inserted(b);
+
+  this->invalidate_inserted_upper_bound();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Optional<KeyView> KeySet::get_key(usize index) noexcept
+{
+  KeyEntry* const entry = this->lookup(index, /*create=*/std::false_type{});
+  if (entry == nullptr) {
+    return None;
+  }
+  return entry->get();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+bool KeySet::is_key_inserted(usize index) noexcept
+{
+  KeyEntry* const entry = this->lookup(index, /*create=*/std::false_type{});
+  return (entry != nullptr) && entry->is_inserted();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+KeyView KeySet::wait_for_key_inserted(usize index) noexcept
+{
+  KeyEntry* const entry = this->lookup(index, /*create=*/std::false_type{});
+  BATT_CHECK_NOT_NULLPTR(entry);
+  BATT_CHECK(entry->is_created());
+
+  entry->await_inserted();
+
+  return entry->get().value_or_panic();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+usize KeySet::inserted_upper_bound() noexcept
+{
+  if (this->inserted_upper_bound_valid_->load() != kIsValid) {
+    this->update_inserted_upper_bound();
+  }
+
+  return this->inserted_upper_bound_->load();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void KeySet::update_inserted_upper_bound() noexcept
+{
+  while ((this->inserted_upper_bound_valid_->fetch_or(kIsLocked) & kIsLocked) != 0) {
+    continue;
+  }
+  auto on_scope_exit = batt::finally([&] {
+    this->inserted_upper_bound_valid_->store(kIsValid);
+  });
+
+  for (usize index = this->inserted_upper_bound_->load();; ++index) {
+    KeyEntry* const entry = this->lookup(index, /*create=*/std::false_type{});
+    if (!entry || !entry->is_inserted()) {
+      this->inserted_upper_bound_->store(index);
+      break;
+    }
+  }
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void KeySet::invalidate_inserted_upper_bound() noexcept
+{
+  for (;;) {
+    const u32 observed = this->inserted_upper_bound_valid_->load();
+    if ((observed & kIsLocked) != 0) {
+      continue;
+    }
+    if ((observed & kIsValid) != 0) {
+      this->inserted_upper_bound_valid_->fetch_and(~kIsValid);
+    }
+    break;
+  }
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <bool kCreateLevel>
+KeySet::KeyEntry* KeySet::lookup(usize index, std::integral_constant<bool, kCreateLevel>) noexcept
 {
   // Find the level where this index resides.  Each level holds double the last; indexes first fill
   // up the first level, then the second, etc.
@@ -89,7 +171,11 @@ KeySet::KeyEntry* KeySet::lookup(usize index) noexcept
   //  in the same Level.  We use CAS to resolve the race.
   //
   Level* p_level = this->levels_[level_i].load();
-  {
+  if (!p_level) {
+    if constexpr (kCreateLevel == false) {
+      return nullptr;
+    }
+
     // Cache a pointer to a new Level struct if we create one.
     //
     Level* new_level = nullptr;
@@ -122,8 +208,8 @@ KeySet::KeyEntry* KeySet::lookup(usize index) noexcept
       }
       // else - p_level will be updated with the new value (unless this is a spurious failure)
     }
+    BATT_CHECK_NOT_NULLPTR(p_level);
   }
-  BATT_CHECK_NOT_NULLPTR(p_level);
 
   // Find the offset of this index relative to the start of the level.
   //
@@ -137,34 +223,58 @@ KeySet::KeyEntry* KeySet::lookup(usize index) noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-KeySet::KeyEntry::KeyEntry() noexcept : data_{nullptr}, size_{0}
+KeySet::KeyEntry::KeyEntry() noexcept : data_{nullptr}, size_{0}, inserted_{false}
 {
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-void KeySet::KeyEntry::set(std::string_view s)
+void KeySet::KeyEntry::set(std::string_view s) noexcept
 {
   // Important!  Always update size_ before data_, because once data_ has been observed as non-null,
   // other threads will assume size_ is set as well.
   //
   this->size_ = s.size();
   this->data_.store(s.data());
+  this->data_.notify_all();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-std::string_view KeySet::KeyEntry::get()
+Optional<std::string_view> KeySet::KeyEntry::get() noexcept
 {
-  // Spin until we observe the data_ pointer to be non-null.
-  //
+  const char* data = this->data_.load();
+  if (!data) {
+    return None;
+  }
+  return std::string_view{data, this->size_};
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+KeyView KeySet::KeyEntry::await_created() const noexcept
+{
   for (;;) {
-    const char* data = this->data_.load();
-    if (!data) {
-      std::this_thread::yield();
+    const char* const data = this->data_.load();
+    if (data == nullptr) {
+      this->data_.wait(nullptr);
       continue;
     }
-    return std::string_view{data, this->size_};
+    return KeyView{data, this->size_};
+  }
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+KeyView KeySet::KeyEntry::await_inserted() const noexcept
+{
+  for (;;) {
+    const bool observed = this->inserted_.load();
+    if (observed == false) {
+      this->inserted_.wait(false);
+      continue;
+    }
+    return KeyView{this->data_.load(), this->size_};
   }
 }
 

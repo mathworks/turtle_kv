@@ -29,9 +29,16 @@ class ZipfKeyDistribution : public KeyDistribution
                                double alpha,
                                usize max_index) noexcept;
 
-  KeyView get_next(KeySet& inserted_keys) override;
+  std::string_view name() const override
+  {
+    return this->name_;
+  }
+
+  std::pair<KeyView, usize> get_next(KeySet& key_set) override;
 
  private:
+  std::string name_;
+
   std::default_random_engine rng_;
 
   batt::ZipfIntDistribution<usize> pick_index_;

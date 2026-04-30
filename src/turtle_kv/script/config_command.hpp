@@ -7,14 +7,16 @@
 //+++++++++++-+-+--+----- --- -- -  -  -   -
 
 #pragma once
-#define TURTLE_KV_SCRIPT_HANDLE_INSERT_HPP
+#define TURTLE_KV_SCRIPT_CONFIG_COMMAND_HPP
 
-#include <turtle_kv/script/command_handlers.hpp>
+#include <turtle_kv/script/commands.hpp>
 
 namespace turtle_kv {
+namespace script {
 
-Status handle_insert(ScriptContext& context, const YAML::Node& params);
+Status config_command(ScriptContext& context, const YAML::Node& params);
 
-static_assert(std::is_constructible_v<CommandHandlerFn, decltype(&handle_insert)>);
+static_assert(std::is_constructible_v<CommandFn, decltype(&config_command)>);
 
+}  // namespace script
 }  // namespace turtle_kv

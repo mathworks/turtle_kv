@@ -41,9 +41,14 @@ class UniformInsertKeyDistribution : public KeyDistribution
   {
   }
 
-  KeyView get_next(KeySet& inserted_keys) override
+  std::string_view name() const override
   {
-    return inserted_keys.insert_key(this->format_key(this->count_.fetch_add(1))).first;
+    return "uniform";
+  }
+
+  std::pair<KeyView, usize> get_next(KeySet& inserted_keys) override
+  {
+    return inserted_keys.create_key(this->format_key(this->count_.fetch_add(1)));
   }
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -

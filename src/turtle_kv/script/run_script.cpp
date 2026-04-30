@@ -8,7 +8,8 @@
 
 #include <turtle_kv/script/run_script.hpp>
 //
-#include <turtle_kv/script/command_handlers.hpp>
+
+#include <turtle_kv/script/execution_strategy.hpp>
 #include <turtle_kv/script/script_context.hpp>
 
 #include <yaml-cpp/yaml.h>
@@ -29,27 +30,10 @@ Status run_script(const std::filesystem::path& kv_store_dir [[maybe_unused]],
   context.kv_store_dir = kv_store_dir;
   context.script_yml = script_yml;
 
-  auto& command_handlers = get_command_handlers();
+  script::ExecuteImmediately default_exec{context};
+  script::ExecutionTimer timed_exec{context, default_exec};
 
-  for (YAML::Node command : script) {
-    BATT_REQUIRE_EQ(command.IsMap(), true);
-    BATT_REQUIRE_EQ(command.size(), 1);
-
-    for (const auto& pair : command) {
-      const std::string name = pair.first.as<std::string>();
-      const YAML::Node& params = pair.second;
-
-      BATT_REQUIRE_EQ(command_handlers.count(name), 1);
-
-      context.command_stack.push_back(name);
-      auto on_scope_exit = batt::finally([&] {
-        context.command_stack.pop_back();
-      });
-
-      Status status = command_handlers[name](context, params);
-      BATT_REQUIRE_OK(status);
-    }
-  }
+  BATT_REQUIRE_OK(context.run(&timed_exec, script));
 
   LOG(INFO) << "(done)";
 

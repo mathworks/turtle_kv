@@ -50,9 +50,9 @@ namespace {
                                                                      "random_seed",
                                                                      /*default=*/0));
 
-    return {std::make_unique<ZipfKeyDistribution>(random_seed,
-                                                  alpha,
-                                                  /*max_index=*/context.inserted_keys.size() - 1)};
+    const usize max_index = /*max_index=*/context.key_set.inserted_upper_bound() - 1;
+
+    return {std::make_unique<ZipfKeyDistribution>(random_seed, alpha, max_index)};
   }
 
   LOG(ERROR) << "bad value: " << param_value << BATT_INSPECT(params);
