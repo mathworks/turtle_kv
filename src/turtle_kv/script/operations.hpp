@@ -61,6 +61,7 @@ struct PointQuery {
 /** \brief An update to an already inserted key.
  */
 struct Update {
+  KeyView key;
   usize index;
   usize value_size;
 };

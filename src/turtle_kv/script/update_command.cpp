@@ -6,7 +6,7 @@
 //
 //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-#include <turtle_kv/script/point_query_command.hpp>
+#include <turtle_kv/script/update_command.hpp>
 //
 
 #include <turtle_kv/script/key_distribution.hpp>
@@ -20,7 +20,7 @@ namespace script {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status point_query_command(ScriptContext& context [[maybe_unused]], const YAML::Node& params)
+Status update_command(ScriptContext& context [[maybe_unused]], const YAML::Node& params)
 {
   BATT_ASSIGN_OK_RESULT(  //
       std::unique_ptr<KeyDistribution> key_dist,
@@ -32,16 +32,29 @@ Status point_query_command(ScriptContext& context [[maybe_unused]], const YAML::
       usize count,
       context.parse_param<usize>(params, "count", /*default=*/1));
 
+  BATT_ASSIGN_OK_RESULT(  //
+      usize value_size,
+      context.parse_param<usize>(params,
+                                 "value_size",
+                                 /*default=*/context.config.tree_options.value_size_hint()));
+
   BATT_REQUIRE_NE(key_dist.get(), nullptr);
   BATT_REQUIRE_NE(context.kv_store.get(), nullptr);
 
-  LOG(INFO) << "point_query(count=" << count << ", key_dist=" << key_dist->name() << ")";
+  LOG(INFO) << "update(count=" << count << ", key_dist=" << key_dist->name()
+            << ", value_size=" << value_size << ")";
 
   std::vector<script::Operation> ops;
 
   for (usize i = 0; i < count; ++i) {
-    ops.push_back(script::PointQuery{
-        .index = key_dist->get_next(context.key_set).second,
+    KeyView key;
+    usize index;
+    std::tie(key, index) = key_dist->get_next(context.key_set);
+
+    ops.push_back(script::Update{
+        .key = key,
+        .index = index,
+        .value_size = value_size,
     });
   }
 

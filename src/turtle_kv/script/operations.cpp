@@ -50,24 +50,13 @@ Status execute_op_impl(ScriptContext& context, Create& op)
 //
 Status execute_op_impl(ScriptContext& context, Insert& op)
 {
-  thread_local SmallVec<char, 256> value_buffer;
-
-  // Retrieve the key by index from the key set.
-  //
-  KeyView key = op.key;  // context.key_set.get_key_by_index(op.index).value_or_panic();
-
-  // Format a unique value.
-  //
-  value_buffer.reserve(op.value_size);
-  ValueView value = context.next_value(as_slice(value_buffer.data(), op.value_size));
-
   // Insert!
   //
-  BATT_REQUIRE_OK(context.kv_store->put(key, value));
+  BATT_REQUIRE_OK(context.kv_store->put(op.key, context.get_value(op.index, op.value_size)));
 
   // Mark the key as inserted (for future/concurrent non-empty point queries).
   //
-  context.inserted_keys.insert_key_view_at(op.index, key);
+  context.key_set.set_key_inserted(op.index, true);
 
   return OkStatus();
 }
@@ -87,7 +76,8 @@ Status execute_op_impl(ScriptContext& context, Open& op [[maybe_unused]])
 //
 Status execute_op_impl(ScriptContext& context, PointQuery& op)
 {
-  KeyView key = context.inserted_keys.get_key_by_index(op.index).value_or_panic();
+  KeyView key = context.key_set.wait_for_key_inserted(op.index);
+
   return context.kv_store->get(key).status();
 }
 
@@ -95,7 +85,12 @@ Status execute_op_impl(ScriptContext& context, PointQuery& op)
 //
 Status execute_op_impl(ScriptContext& context, Update& op)
 {
-  return batt::StatusCode::kUnimplemented;
+  KeyView key = context.key_set.wait_for_key_inserted(op.index);
+  ValueView value = context.get_value(op.index, op.value_size);
+
+  BATT_REQUIRE_OK(context.kv_store->put(key, value));
+
+  return OkStatus();
 }
 
 }  // namespace script

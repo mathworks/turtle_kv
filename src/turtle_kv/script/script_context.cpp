@@ -33,9 +33,9 @@ Status ScriptContext::run(script::ExecutionStrategy* exec, const YAML::Node& scr
 
   BATT_CHECK(!this->exec_stack.empty());
 
-  auto& command_handlers = get_command_handlers();
+  auto& commands = script::get_commands();
 
-  for (YAML::Node command : script) {
+  for (const YAML::Node& command : script) {
     BATT_REQUIRE_EQ(command.IsMap(), true);
     BATT_REQUIRE_EQ(command.size(), 1);
 
@@ -43,7 +43,7 @@ Status ScriptContext::run(script::ExecutionStrategy* exec, const YAML::Node& scr
       const std::string name = pair.first.as<std::string>();
       const YAML::Node& params = pair.second;
 
-      if (command_handlers.count(name) == 0) {
+      if (commands.count(name) == 0) {
         LOG(ERROR) << "command '" << name << "' not found";
         return batt::StatusCode::kInternal;
       }
@@ -53,7 +53,7 @@ Status ScriptContext::run(script::ExecutionStrategy* exec, const YAML::Node& scr
         this->command_stack.pop_back();
       });
 
-      Status status = command_handlers[name](*this, params);
+      Status status = commands[name](*this, params);
       BATT_REQUIRE_OK(status);
       break;
     }
@@ -66,11 +66,9 @@ Status ScriptContext::run(script::ExecutionStrategy* exec, const YAML::Node& scr
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-ValueView ScriptContext::next_value(const Slice<char>& dst_buffer)
+ValueView ScriptContext::format_value(usize index, const Slice<char>& dst_buffer) noexcept
 {
-  [[maybe_unused]] const i64 c = this->op_counter.fetch_add(1);
-
-  usize n = 0;  // std::snprintf(dst_buffer.begin(), dst_buffer.size(), "%lld", (long long int)c);
+  usize n = 0;  // std::snprintf(dst_buffer.begin(), dst_buffer.size(), "%uz", index);
 
   if (n < dst_buffer.size()) {
     std::memset(dst_buffer.begin() + n, '_', dst_buffer.size() - n);

@@ -31,12 +31,14 @@ class ZipfKeyDistribution : public KeyDistribution
 
   std::string_view name() const override
   {
-    return "zipf";
+    return this->name_;
   }
 
-  std::pair<KeyView, usize> get_next(KeySet& inserted_keys) override;
+  std::pair<KeyView, usize> get_next(KeySet& key_set) override;
 
  private:
+  std::string name_;
+
   std::default_random_engine rng_;
 
   batt::ZipfIntDistribution<usize> pick_index_;

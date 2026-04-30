@@ -48,15 +48,11 @@ class ScriptContext
 
   std::unique_ptr<KVStore> kv_store;
 
-  KeySet inserted_keys;
-
   KeySet key_set;
 
   SmallVec<std::string_view, kDefaultStackSize> command_stack;
 
   SmallVec<script::ExecutionStrategy*, kDefaultStackSize> exec_stack;
-
-  std::atomic<i64> op_counter{0};
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -65,7 +61,14 @@ class ScriptContext
   template <typename T>
   StatusOr<T> parse_param(const YAML::Node& params, const char* name, T default_value) noexcept;
 
-  ValueView next_value(const Slice<char>& dst_buffer);
+  ValueView format_value(usize index, const Slice<char>& dst_buffer) noexcept;
+
+  ValueView get_value(usize index, usize value_size) noexcept
+  {
+    thread_local SmallVec<char, 256> value_buffer;
+    value_buffer.reserve(value_size);
+    return this->format_value(index, as_slice(value_buffer.data(), value_size));
+  }
 
   StatusOr<usize> schedule(std::vector<script::Operation>&& ops) noexcept
   {

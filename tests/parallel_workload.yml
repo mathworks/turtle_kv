@@ -11,20 +11,16 @@ script:
   - create:
       remove_existing: True
   - open:
-  - insert:
-      count: 1000000
-      key_dist: uniform
-      key_size: 24
-      value_size: 10
   - parallel:
-      n_threads: 8
+      n_threads: 2
       stages:
-        - interleave:
-          - update:
-              count: 1000000
-              key_dist: zipf
-              zipf_alpha: 0.99
-          - point_query:
-              count: 1000000
-              key_dist: zipf
-              zipf_alpha: 0.99
+        - insert:
+            count: 1000000
+            key_dist: uniform
+            key_size: 24
+            value_size: 10
+            n_threads: 8
+        - point_query:
+            count: 1000000
+            key_dist: zipf
+            zipf_alpha: 0.99

@@ -33,7 +33,7 @@ Status parallel_command(ScriptContext& context, const YAML::Node& params)
     return batt::StatusCode::kInternal;
   }
 
-  Parallel parallel_exec{n_threads};
+  Parallel parallel_exec{context, n_threads};
   ExecutionTimer stage_timer{context, parallel_exec};
 
   BATT_REQUIRE_OK(context.run(&stage_timer, stages));

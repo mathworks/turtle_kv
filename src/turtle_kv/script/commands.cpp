@@ -12,9 +12,11 @@
 #include <turtle_kv/script/config_command.hpp>
 #include <turtle_kv/script/create_command.hpp>
 #include <turtle_kv/script/insert_command.hpp>
+#include <turtle_kv/script/interleave_command.hpp>
 #include <turtle_kv/script/open_command.hpp>
 #include <turtle_kv/script/parallel_command.hpp>
 #include <turtle_kv/script/point_query_command.hpp>
+#include <turtle_kv/script/update_command.hpp>
 
 namespace turtle_kv {
 namespace script {
@@ -29,9 +31,11 @@ std::unordered_map<std::string, CommandFn>& get_commands()
     commands_["config"] = &config_command;
     commands_["create"] = &create_command;
     commands_["insert"] = &insert_command;
+    commands_["interleave"] = &interleave_command;
     commands_["open"] = &open_command;
     commands_["parallel"] = &parallel_command;
     commands_["point_query"] = &point_query_command;
+    commands_["update"] = &update_command;
 
     return true;
   }();

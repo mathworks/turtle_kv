@@ -48,7 +48,7 @@ class UniformInsertKeyDistribution : public KeyDistribution
 
   std::pair<KeyView, usize> get_next(KeySet& inserted_keys) override
   {
-    return inserted_keys.insert_key(this->format_key(this->count_.fetch_add(1)));
+    return inserted_keys.create_key(this->format_key(this->count_.fetch_add(1)));
   }
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -

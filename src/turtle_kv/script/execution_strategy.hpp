@@ -97,6 +97,8 @@ class ExecutionTimer : public ExecutionStrategy
  public:
   explicit ExecutionTimer(ScriptContext& context, ExecutionStrategy& base) noexcept;
 
+  StatusOr<usize> activate(ExecutionStrategy* parent) override;
+
   StatusOr<usize> schedule(std::vector<Operation>&& ops) override;
 
   StatusOr<usize> step() override;
@@ -145,11 +147,17 @@ class Interleave : public ExecutionStrategy
  public:
   Interleave() noexcept;
 
+  StatusOr<usize> activate(ExecutionStrategy* parent) override;
+
   StatusOr<usize> schedule(std::vector<Operation>&& ops) override;
 
   StatusOr<usize> step() override;
 
   StatusOr<usize> retire(ExecutionStrategy* parent) override;
+
+ private:
+  std::vector<Operation> step_buffer_;
+  std::vector<std::vector<Operation>> sequences_;
 };
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
@@ -167,11 +175,11 @@ class Interleave : public ExecutionStrategy
 class Parallel : public ExecutionStrategy
 {
  public:
-  explicit Parallel(i32 n_threads) noexcept;
+  explicit Parallel(ScriptContext& context, i32 n_threads) noexcept;
 
   ~Parallel() noexcept;
 
-  StatusOr<usize> activate(ExecutionStrategy*) override;
+  StatusOr<usize> activate(ExecutionStrategy* parent) override;
 
   StatusOr<usize> schedule(std::vector<Operation>&& ops) override;
 
@@ -179,12 +187,28 @@ class Parallel : public ExecutionStrategy
 
   StatusOr<usize> retire(ExecutionStrategy* parent) override;
 
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
+  struct ThreadState {
+    std::atomic<i64> progress;
+    Status status;
+
+    //----- --- -- -  -  -   -
+
+    void reset(i32 thread_i) noexcept
+    {
+      this->progress.store(thread_i);
+      this->status = OkStatus();
+    }
+  };
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
   ScriptContext& context_;
   i32 n_threads_;
   std::barrier<batt::DoNothing> barrier_;
   std::vector<std::thread> threads_;
-  std::unique_ptr<batt::CpuCacheLineIsolated<std::atomic<i64>>[]> thread_progress_;
+  std::unique_ptr<batt::CpuCacheLineIsolated<ThreadState>[]> thread_state_;
   std::atomic<bool> done_;
   std::vector<Operation> stage_ops_;
 };

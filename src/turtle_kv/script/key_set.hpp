@@ -53,36 +53,70 @@ class KeySet
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  void set_size(usize n) noexcept
-  {
-    this->next_index_->store(n);
-  }
-
+  /** \brief The number of keys that have been created in this set.x
+   */
   usize size() const noexcept;
 
-  Optional<KeyView> get_key_by_index(usize index) noexcept;
+  /** \brief Creates a new key, assigning it the first available index.
+   */
+  std::pair<KeyView, usize> create_key(const KeyView& key, bool inserted = false) noexcept;
 
-  KeyView wait_for_key_at(usize index) noexcept;
+  /** \brief Sets the inserted status of the given key. Panics if the key has not been created.
+   */
+  void set_key_inserted(usize index, bool b = true) noexcept;
 
-  std::pair<KeyView, usize> insert_key(const KeyView& key) noexcept;
+  /** \brief Updates the cached value for inserted upper bound.
+   */
+  void update_inserted_upper_bound() noexcept;
 
-  KeyView insert_key_at(usize index, const KeyView& key) noexcept;
+  /** \brief Gets the key with the given index; if this key has not yet been created, returns None.
+   */
+  Optional<KeyView> get_key(usize index) noexcept;
 
-  KeyView insert_key_view_at(usize index, const KeyView& key) noexcept;
+  /** \brief Returns true iff a key with the given index has been created and is also inserted.
+   */
+  bool is_key_inserted(usize index) noexcept;
+
+  /** \brief Waits for the given key to be inserted; panics if the key has not been created.
+   */
+  KeyView wait_for_key_inserted(usize index) noexcept;
+
+  usize inserted_upper_bound() noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
   struct KeyEntry {
     std::atomic<const char*> data_;
     usize size_;
+    std::atomic<bool> inserted_;
 
     //----- --- -- -  -  -   -
 
     KeyEntry() noexcept;
 
-    void set(std::string_view s);
+    bool is_created() const noexcept
+    {
+      return this->data_.load() != nullptr;
+    }
 
-    Optional<std::string_view> get(batt::WaitForResource wait_for_resource);
+    bool is_inserted() const noexcept
+    {
+      return this->inserted_.load();
+    }
+
+    void set(KeyView s) noexcept;
+
+    Optional<KeyView> get() noexcept;
+
+    KeyView await_created() const noexcept;
+
+    KeyView await_inserted() const noexcept;
+
+    void set_inserted(bool b = true) noexcept
+    {
+      this->inserted_.store(b);
+      this->inserted_.notify_all();
+    }
   };
 
   struct Level {
@@ -96,14 +130,24 @@ class KeySet
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  KeyEntry* lookup(usize index) noexcept;
+  template <bool kCreateLevel>
+  KeyEntry* lookup(usize index, std::integral_constant<bool, kCreateLevel>) noexcept;
+
+  void invalidate_inserted_upper_bound() noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  static constexpr u32 kIsValid = 1;
+  static constexpr u32 kIsLocked = 2;
+
+  std::array<std::atomic<Level*>, 26> levels_;
+
   batt::CpuCacheLineIsolated<std::atomic<usize>> next_index_{0};
+  batt::CpuCacheLineIsolated<std::atomic<usize>> inserted_upper_bound_{0};
+  batt::CpuCacheLineIsolated<std::atomic<u32>> inserted_upper_bound_valid_{kIsValid};
+
   std::mutex string_store_mutex_;
   batt::StableStringStore string_store_;
-  std::array<std::atomic<Level*>, 26> levels_;
 };
 
 }  // namespace turtle_kv
