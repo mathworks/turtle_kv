@@ -9,6 +9,8 @@
 #pragma once
 #define TURTLE_KV_CHANGE_LOG_BLOCK_HPP
 
+#include <turtle_kv/api_types.hpp>
+
 #include <turtle_kv/change_log/edit_offset.hpp>
 
 #include <turtle_kv/import/buffer.hpp>
@@ -169,7 +171,8 @@ class ChangeLogBlock
   /** \brief Read a ChangeLogBlock from the ChangeLogFile into the buffer, buf. Returns an error
    * status if malformed or unsuccessful.
    */
-  static StatusOr<boost::intrusive_ptr<ChangeLogBlock>> recover(ScopedMemory memory);
+  static StatusOr<boost::intrusive_ptr<ChangeLogBlock>> recover(ScopedMemory memory,
+                                                                BlockIndex block_index);
 
   /** \brief Serializes the passed `delta` to the front of `dst`, advancing `dst` beyond the written
    * value.
@@ -188,7 +191,7 @@ class ChangeLogBlock
    * \return The parsed delta value
    */
   template <typename ConstBufferT>
-    requires std::assignable_from<ConstBuffer&, ConstBufferT&&>
+  requires std::assignable_from<ConstBuffer&, ConstBufferT&&>
   static StatusOr<SlotEditOffsetDelta> read_slot_edit_offset_delta(ConstBufferT&& src) noexcept
   {
     BATT_REQUIRE_GE(src.size(), sizeof(PackedEditOffsetDelta));
@@ -331,6 +334,11 @@ class ChangeLogBlock
    */
   ConstBuffer get_slot(usize i) const noexcept;
 
+  /** \brief Returns physical block index on the change log file, i.e. the block's index in the
+   * file, from the 0th block.
+   */
+  Optional<BlockIndex> get_block_index();
+
   /** \brief Sets this ChangeLogBlock's next pointer to `new_next` and returns the previous value.
    * WARNING: not thead-safe!
    */
@@ -343,7 +351,7 @@ class ChangeLogBlock
   /** \brief Releases all Grant held by this ChangeLogBlock.  Exactly enough Grant to cover the
    * _current_ ready region is returned; the rest is released to the Grant::Issuer pool.
    */
-  batt::Grant consume_grant() noexcept;
+  batt::Grant consume_grant(BlockIndex block_index) noexcept;
 
   /** \brief Perform basic sanity checks to make sure this is a valid ChangeLogBlock object.
    */
@@ -426,7 +434,7 @@ class ChangeLogBlock
   /** \brief Helper function to initialize the ephemeral state of this ChangeLogBlock. Transfers
    * ownership of grant to ChangeLogBlock, and initializes the reference count to ref_count.
    */
-  void init_ephemeral_state(RecoveryChecksPassed&& token);
+  void init_ephemeral_state(RecoveryChecksPassed&& token, BlockIndex block_index);
 
   EphemeralStatePtr& ephemeral_state_ptr() noexcept
   {
@@ -512,7 +520,8 @@ inline void intrusive_ptr_release(ChangeLogBlock* block) noexcept
 class ChangeLogBlock::RecoveryChecksPassed
 {
   friend /*static*/ StatusOr<boost::intrusive_ptr<ChangeLogBlock>> ChangeLogBlock::recover(
-      ScopedMemory memory);
+      ScopedMemory memory,
+      BlockIndex block_index);
 
  public:
   RecoveryChecksPassed(const RecoveryChecksPassed&) = delete;
@@ -536,13 +545,20 @@ struct ChangeLogBlock::EphemeralState {
    */
   std::variant<batt::Grant, RecoveryChecksPassed> token_;
 
+  /** \brief The physical block index on the change log file, i.e. the block position in the file,
+   * from the 0th block.
+   */
+  Optional<BlockIndex> block_index_;
+
   //----- --- -- -  -  -   -
 
   explicit EphemeralState(batt::Grant&& grant) noexcept : token_{std::move(grant)}
   {
   }
 
-  explicit EphemeralState(RecoveryChecksPassed&& token) noexcept : token_{std::move(token)}
+  explicit EphemeralState(RecoveryChecksPassed&& token, BlockIndex block_index) noexcept
+      : token_{std::move(token)}
+      , block_index_{block_index}
   {
   }
 };
@@ -567,9 +583,11 @@ inline void ChangeLogBlock::init_ephemeral_state(batt::Grant&& grant)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-inline void ChangeLogBlock::init_ephemeral_state(RecoveryChecksPassed&& token)
+inline void ChangeLogBlock::init_ephemeral_state(RecoveryChecksPassed&& token,
+                                                 BlockIndex block_index)
 {
-  new (&this->ephemeral_state_storage_) EphemeralStatePtr{new EphemeralState{std::move(token)}};
+  new (&this->ephemeral_state_storage_)
+      EphemeralStatePtr{new EphemeralState{std::move(token), block_index}};
 }
 
 }  // namespace turtle_kv

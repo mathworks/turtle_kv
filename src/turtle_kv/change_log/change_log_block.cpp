@@ -44,7 +44,8 @@ namespace turtle_kv {
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 /*static*/ StatusOr<boost::intrusive_ptr<ChangeLogBlock>> ChangeLogBlock::recover(
-    ChangeLogBlock::ScopedMemory memory)
+    ChangeLogBlock::ScopedMemory memory,
+    BlockIndex block_index)
 {
   ChangeLogBlock* block = reinterpret_cast<ChangeLogBlock*>(memory.data());
 
@@ -70,7 +71,7 @@ namespace turtle_kv {
     return {batt::StatusCode::kDataLoss};
   }
 
-  block->init_ephemeral_state(RecoveryChecksPassed{});
+  block->init_ephemeral_state(RecoveryChecksPassed{}, block_index);
 
   // ref_count is 2 after reading from the change log. We want to initialize it to 1.
   //
@@ -182,6 +183,13 @@ ConstBuffer ChangeLogBlock::get_slot(usize i) const noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+Optional<BlockIndex> ChangeLogBlock::get_block_index()
+{
+  return this->ephemeral_state().block_index_;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 ConstBuffer ChangeLogBlock::prepare_to_flush() noexcept
 {
   thread_local pcg64_unique hash_seed_rng;
@@ -202,9 +210,10 @@ ConstBuffer ChangeLogBlock::prepare_to_flush() noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-batt::Grant ChangeLogBlock::consume_grant() noexcept
+batt::Grant ChangeLogBlock::consume_grant(BlockIndex block_index) noexcept
 {
   BATT_CHECK(batt::is_case<batt::Grant>(this->ephemeral_state().token_));
+  this->ephemeral_state().block_index_ = block_index;
   return std::move(std::get<batt::Grant>(this->ephemeral_state().token_));
 }
 
