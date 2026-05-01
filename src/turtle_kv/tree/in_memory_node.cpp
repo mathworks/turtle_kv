@@ -2037,13 +2037,46 @@ Level InMemoryNode::UpdateBuffer::SegmentedLevel::merge(Level&& sibling_level,
                               std::make_move_iterator(right_segmented_level.segments.begin()),
                               std::make_move_iterator(right_segmented_level.segments.end()));
 
-        // Erase potential duplicate segments that have resulted from a previous split.
+        // Next we need to find potential duplicate segments that have arisen from a previous
+        // split. For these duplicates, we need to merge their metadata.
         //
-        this->segments.erase(std::unique(this->segments.begin(),
-                                         this->segments.end(),
-                                         [](const Segment& l, const Segment& r) {
-                                           return l.page_id_slot.page_id == r.page_id_slot.page_id;
-                                         }),
+        std::unordered_map<llfs::PageId, usize, llfs::PageId::Hash> page_id_to_index;
+        SmallVec<bool, 32> should_remove(this->segments.size(), false);
+
+        for (usize i = 0; i < this->segments.size(); ++i) {
+          const llfs::PageId current_page_id = this->segments[i].page_id_slot.page_id;
+
+          auto iter = page_id_to_index.find(current_page_id);
+          if (iter != page_id_to_index.end()) {
+            // Found a duplicate, so we need to merge the segment metadata.
+            //
+            const usize first_index = iter->second;
+
+            // Merge active pivots using bitwise OR.
+            //
+            this->segments[first_index].active_pivots |= this->segments[i].active_pivots;
+
+            // Merge the filters.
+            //
+            this->segments[first_index].filter.merge(this->segments[i].filter);
+
+            // Mark this duplicate for removal.
+            //
+            should_remove[i] = true;
+          } else {
+            // We found the first occurrence of this page id, start tracking it.
+            //
+            page_id_to_index[current_page_id] = i;
+          }
+        }
+
+        // Remove duplicate segments, which have been marked for removal.
+        //
+        this->segments.erase(std::remove_if(this->segments.begin(),
+                                            this->segments.end(),
+                                            [&, i = usize{0}](const Segment&) mutable {
+                                              return should_remove[i++];
+                                            }),
                              this->segments.end());
 
         return *this;
