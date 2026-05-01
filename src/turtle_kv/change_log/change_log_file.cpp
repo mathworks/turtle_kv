@@ -30,8 +30,8 @@ void ChangeLogFile::Config::pack_to(PackedConfig* packed_config) const noexcept
   packed_config->block_size = this->block_size;
   packed_config->block_count = this->block_count;
   packed_config->block0_offset = this->block0_offset;
-  packed_config->lower_bound = this->lower_bound;
-  packed_config->upper_bound = this->upper_bound;
+  packed_config->active_blocks_lower_bound = this->active_block_range.lower_bound;
+  packed_config->active_blocks_upper_bound = this->active_block_range.upper_bound;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -45,8 +45,11 @@ auto ChangeLogFile::PackedConfig::unpack() const noexcept -> ChangeLogFile::Conf
   config.block_size = BlockSize{this->block_size.value()};
   config.block_count = BlockCount{this->block_count.value()};
   config.block0_offset = FileOffset{this->block0_offset.value()};
-  config.lower_bound = this->lower_bound.value();
-  config.upper_bound = this->upper_bound.value();
+  config.active_block_range.lower_bound = BlockIndex{this->active_blocks_lower_bound};
+  config.active_block_range.upper_bound = BlockIndex{this->active_blocks_upper_bound};
+  config.trim_edit_offset = EditOffset{this->trim_edit_offset.value()};
+
+  config.check_invariants(config.active_block_range);
 
   return config;
 }
@@ -61,7 +64,8 @@ auto ChangeLogFile::PackedConfig::unpack() const noexcept -> ChangeLogFile::Conf
     BATT_REQUIRE_OK(remove_existing_path(path));
   }
 
-  BATT_STATIC_ASSERT_EQ(sizeof(PackedConfig), 4096);
+  static_assert(sizeof(PackedConfig) == 4096);
+
   BATT_CHECK_GE(config.block0_offset, 4096) << "block0 must not overlap the 4k config block!";
 
   StatusOr<int> fd = llfs::create_file_read_write(path.string(), llfs::OpenForAppend{false});
@@ -157,6 +161,8 @@ Status ChangeLogFile::flush_config() noexcept
     , config_{config}
 {
   BATT_CHECK_EQ(this->config_.block_size & 511, 0);
+  std::memset(&this->packed_config_buffer_, 0, sizeof(PackedConfig));
+  this->config_.pack_to(&this->packed_config_buffer_);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

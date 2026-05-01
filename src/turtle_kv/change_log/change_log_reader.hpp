@@ -53,126 +53,16 @@ class ChangeLogReader
   {
   }
 
-  // +++++++++++-+-+--+----- --- -- -  -  -   -
-  //
-  Status visit_slots(const SlotVisitorFn& visitor)
-  {
-    batt::StatusOr<std::vector<boost::intrusive_ptr<ChangeLogBlock>>> blocks =
-        this->change_log_->read_blocks_into_vector();
-
-    if (!blocks.ok()) {
-      return blocks.status();
-    }
-
-    // Used to read slots from a block. Tracks which slot to read next with `next_slot_i`.
-    //
-    struct BlockIterator {
-      boost::intrusive_ptr<ChangeLogBlock> block;
-      usize next_slot_i = 0;
-
-      // Get the EditOffset of the current slot.
-      //
-      EditOffset current_edit_offset() const
-      {
-        // TODO: [Gabe Bornstein 3/27/26] Is it too extreme to do a BATT_CHECK here?
-        //
-        BATT_CHECK(this->has_more());
-        return this->block->slot_edit_offset(this->next_slot_i);
-      }
-
-      // Check if there are more slots to process.
-      //
-      bool has_more() const
-      {
-        return next_slot_i < block->slot_count();
-      }
-
-      bool operator<(const BlockIterator& other) const
-      {
-        // Both must have slots remaining for valid comparison.
-        //
-        // TODO: [Gabe Bornstein 3/27/26] Is it too extreme to do a BATT_CHECK here?
-        //
-        BATT_CHECK(this->has_more());
-        BATT_CHECK(other.has_more());
-        return this->current_edit_offset() < other.current_edit_offset();
-      }
-    };
-
-    struct BlockIteratorCompare {
-      bool operator()(BlockIterator* left, BlockIterator* right) const
-      {
-        return *left < *right;
-      }
-    };
-
-    // Create block iterators, filtering out empty blocks.
-    //
-    std::vector<BlockIterator> block_iterators;
-    block_iterators.reserve(blocks->size());
-
-    for (auto& block : *blocks) {
-      if (block->slot_count() > 0) {
-        block_iterators.emplace_back(BlockIterator{
-            .block = std::move(block),
-            .next_slot_i = 0,
-        });
-      }
-    }
-
-    // If there's no slots to process, return early.
-    //
-    if (block_iterators.empty()) {
-      VLOG(1) << "No slots to be processed in change log.";
-      return batt::OkStatus();
-    }
-
-    StackMerger<BlockIterator, BlockIteratorCompare> heap{
-        Slice<BlockIterator>{as_slice(block_iterators)}};
-
-    // Process slots in EditOffset order.
-    //
-    Optional<EditOffset> expected_next_edit_offset = None;
-    while (!heap.empty()) {
-      BlockIterator* current = heap.first();
-
-      ConstBuffer slot_buffer = current->block->get_slot(current->next_slot_i);
-      EditOffset edit_offset = current->current_edit_offset();
-
-      // If there's a gap in our slots, we're missing data and can't continue
-      //
-      if (expected_next_edit_offset.value_or(edit_offset) != edit_offset) {
-        return batt::OkStatus();
-      }
-
-      expected_next_edit_offset =
-          edit_offset + EditOffsetDelta{static_cast<i64>(slot_buffer.size())};
-
-      // Move the payload past the EditOffset.
-      //
-      ConstBuffer payload = slot_buffer + sizeof(PackedEditOffsetDelta);
-
-      Status visit_status = visitor(FirstVisitToBlock{current->next_slot_i == 0},
-                                    current->block.get(),
-                                    edit_offset,
-                                    payload);
-      BATT_REQUIRE_OK(visit_status);
-
-      current->next_slot_i++;
-
-      if (current->has_more()) {
-        heap.update_first();
-      } else {
-        heap.remove_first();
-      }
-    }
-
-    return batt::OkStatus();
-  }
+  /** \brief Calls the passed SlotVisitor function for each recovered slot, in EditOffset order.
+   */
+  Status visit_slots(  // TODO [tastolfi 2026-05-01] add a slot lower bound parameter to optimize.
+      const SlotVisitorFn& visitor,
+      RecoveredChangeLogState* recovered_state = nullptr) noexcept;
 
  private:
   /** \brief The state of the log file.
    */
+
   std::unique_ptr<ChangeLogFile> change_log_;
 };
 

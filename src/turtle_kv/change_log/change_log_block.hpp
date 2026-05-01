@@ -234,6 +234,14 @@ class ChangeLogBlock
            EditOffsetDelta{static_cast<i64>(last_slot.size())};
   }
 
+  /** \brief Returns the EditOffset interval spanned by this block.
+   */
+  Interval<EditOffset> edit_offset_range() const noexcept
+  {
+    return {this->edit_offset_lower_bound(),  //
+            this->edit_offset_upper_bound()};
+  }
+
   /** \brief Returns the EditOffset of the slot at the specified index `i`.
    */
   EditOffset slot_edit_offset(usize i) const noexcept

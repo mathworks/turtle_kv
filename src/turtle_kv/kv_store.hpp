@@ -143,8 +143,6 @@ class KVStore : public Table
       const TreeOptions& tree_options,
       Optional<RuntimeOptions> runtime_options = None) noexcept;
 
-  batt::StatusOr<RecoveredChangeLogState> run_recovery(const std::filesystem::path& path);
-
   // TODO [tastolfi 2026-04-02] Should probably be private.
   //
   static batt::StatusOr<turtle_kv::Checkpoint> recover_latest_checkpoint(
@@ -256,7 +254,6 @@ class KVStore : public Table
                    boost::intrusive_ptr<llfs::StorageContext>&& storage_context,
                    const TreeOptions& tree_options,
                    const RuntimeOptions& runtime_options,
-                   std::unique_ptr<ChangeLogWriter>&& change_log_writer,
                    std::unique_ptr<llfs::Volume>&& checkpoint_log,
                    Checkpoint&& latest_recovered_checkpoint) noexcept;
 
@@ -265,6 +262,11 @@ class KVStore : public Table
   /** \brief Initializes the `State` of the KVStore.
    */
   void initialize_state(Checkpoint&& latest_recovered_checkpoint);
+
+  /** \brief Opens the change log file and recovers state from it; this is necessary to properly
+   * initialize the KVStore.
+   */
+  Status run_recovery(const std::filesystem::path& change_log_file_path) noexcept;
 
   /** \brief Creates and returns a new MemTable, with current checkpoint distance settings and the
    * specified EditOffset lower bound.
@@ -305,8 +307,9 @@ class KVStore : public Table
   void info_task_main() noexcept;
 
   template <typename Fn>
-  requires std::invocable<Fn, std::unique_ptr<DeltaBatch>> Status
-  scan_mem_table_to_build_batches(boost::intrusive_ptr<MemTable>&& mem_table, Fn&& consume_fn);
+    requires std::invocable<Fn, std::unique_ptr<DeltaBatch>>
+  Status scan_mem_table_to_build_batches(boost::intrusive_ptr<MemTable>&& mem_table,
+                                         Fn&& consume_fn);
 
   void mem_table_batch_scanner_thread_main();
 

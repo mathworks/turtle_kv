@@ -269,6 +269,7 @@ u64 query_page_loader_reset_every_n()
   BATT_REQUIRE_OK(storage_context.add_existing_named_file(dir_path / filter_page_file_name()));
   BATT_REQUIRE_OK(storage_context.add_existing_named_file(dir_path / checkpoint_log_file_name()));
 
+#if 0
   // TODO: [Gabe Bornstein 4/30/26] Move ChangeLogWriter after run_recovery. We can add a new
   // KVStore function, KVStore::set_change_log_writer().
   //
@@ -276,6 +277,7 @@ u64 query_page_loader_reset_every_n()
                         ChangeLogWriter::open(dir_path / change_log_file_name()));
 
   change_log_writer->start(task_scheduler.schedule_task());
+#endif
 
   BATT_ASSIGN_OK_RESULT(std::unique_ptr<llfs::Volume> checkpoint_log_volume,
                         open_checkpoint_log(storage_context,  //
@@ -304,16 +306,16 @@ u64 query_page_loader_reset_every_n()
       storage_context.shared_from_this(),
       tree_options,
       *runtime_options,
+#if 0
       std::move(change_log_writer),
+#endif
       std::move(checkpoint_log_volume),
       std::move(latest_checkpoint),
   }};
 
-  batt::StatusOr<RecoveredChangeLogState> change_log_state =
-      kv_store->run_recovery(dir_path / change_log_file_name());
-  BATT_REQUIRE_OK(change_log_state);
+  const std::filesystem::path change_log_file_path = dir_path / change_log_file_name();
 
-  LOG(INFO) << BATT_INSPECT(change_log_state->active_block_range);
+  BATT_REQUIRE_OK(kv_store->run_recovery(change_log_file_path));
 
   return {std::move(kv_store)};
 }
@@ -422,7 +424,7 @@ u64 query_page_loader_reset_every_n()
       this->tree_options_,
       this->page_cache(),
       batt::make_copy(this->filter_page_write_state_),
-      batt::Toggle<State>::Reader { this->state_ } -> base_checkpoint_->clone(),
+      batt::Toggle<State>::Reader{this->state_}->base_checkpoint_->clone(),
       *this->checkpoint_log_);
 
   this->tree_options_.set_trie_index_reserve_size(this->tree_options_.trie_index_reserve_size());
@@ -1110,79 +1112,60 @@ Status KVStore::push_mem_table_to_channel(boost::intrusive_ptr<MemTable>&& mem_t
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-batt::StatusOr<RecoveredChangeLogState> KVStore::run_recovery(const std::filesystem::path& path)
+Status KVStore::run_recovery(const std::filesystem::path& change_log_file_path)
 {
-  EditOffset checkpoint_upper_bound = EditOffset{0};
-  {
+  RecoveredChangeLogState recovered_state;
+
+  EditOffset checkpoint_upper_bound = [this]() -> EditOffset {
     batt::Toggle<State>::Reader reader{this->state_};
-    checkpoint_upper_bound = reader->base_checkpoint_->edit_offset_upper_bound();
+    return reader->base_checkpoint_->edit_offset_upper_bound();
+  }();
+
+  {
+    // Recover MemTable's from the ChangeLog
+    //
+    BATT_ASSIGN_OK_RESULT(std::unique_ptr<ChangeLogReader> log, ChangeLogReader::open(path));
+
+    // TODO: [Gabe Bornstein 4/30/26] Update to start at stored ChangeLogFile::Config values.
+    //
+    // Index of block in ChangeLogFile.
+    //
+    Optional<BlockIndex> active_lower_bound = BlockIndex{0};
+
+    // TODO: [Gabe Bornstein 4/30/26] This is the incorrect value to initialize to.
+    //
+    EditOffset min_edit_offset_upper_bound = checkpoint_upper_bound;
+
+    Status status = log->visit_slots(
+        [&](FirstVisitToBlock first_visit,
+            ChangeLogBlock* block,
+            EditOffset edit_offset,
+            ConstBuffer payload) -> batt::Status {
+          // Skip slots already recovered by checkpoint
+          //
+          if (edit_offset < checkpoint_upper_bound) {
+            return batt::OkStatus();
+          }
+
+          batt::Status recovered_slot_status =
+              this->recover_put(first_visit, block, edit_offset, payload);
+          BATT_REQUIRE_OK(recovered_slot_status);
+
+          return batt::OkStatus();
+        },
+        &recovered_state);
+
+    BATT_REQUIRE_OK(status);
   }
 
-  // Recover MemTable's from the ChangeLog
-  //
-  BATT_ASSIGN_OK_RESULT(std::unique_ptr<ChangeLogReader> log, ChangeLogReader::open(path));
+  BATT_ASSIGN_OK_RESULT(this->change_log_writer_,
+                        ChangeLogWriter::open(change_log_file_path, recovered_state));
 
-  // TODO: [Gabe Bornstein 4/30/26] Update to start at stored ChangeLogFile::Config values.
-  //
-  // Index of block in ChangeLogFile.
-  //
-  Optional<BlockIndex> active_lower_bound = BlockIndex{0};
+  BATT_REQUIRE_OK(this->change_log_writer_->start(this->task_scheduler_));
 
-  // TODO: [Gabe Bornstein 4/30/26] This is the incorrect value to initialize to.
-  //
-  EditOffset min_edit_offset_upper_bound = checkpoint_upper_bound;
+  BATT_REQUIRE_OK(this->change_log_writer_->trim(checkpoint_upper_bound));
 
-  // Logical EditOffset of block in total edits.
-  //
-  i64 active_upper_bound = 0;
-  std::vector<EditOffset> active_blocks_upper_bounds;
-
-  batt::Status status = log->visit_slots([&](FirstVisitToBlock first_visit,
-                                             ChangeLogBlock* block,
-                                             EditOffset edit_offset,
-                                             ConstBuffer payload) -> batt::Status {
-    // Skip slots already recovered by checkpoint
-    //
-    if (edit_offset < checkpoint_upper_bound) {
-      return batt::OkStatus();
-    }
-
-    batt::Status recovered_slot_status =
-        this->recover_put(first_visit, block, edit_offset, payload);
-    BATT_REQUIRE_OK(recovered_slot_status);
-
-    // To capture the active range of blocks for the
-    // ChangeLogWriter, save the smallest block lower_bound, and the largest block upper_bound.
-    // Also save a Slice of all block upper_bounds.
-    //
-    // TODO: [Gabe Bornstein 4/30/26] Handle wrap-around case.
-    //
-    // TODO: [Gabe Bornstein 4/30/26] Isn't this wrong? We'll just set to the lowest EditOffset
-    // we find, not necessarily the lowest ACTIVE block index...
-    //
-    if (block->edit_offset_lower_bound() < min_edit_offset_upper_bound) {
-      active_lower_bound = block->get_block_index();
-      // TODO: [Gabe Bornstein 4/30/26] Check optional value of active_lower_bound to make sure it's
-      // valid.
-      //
-      min_edit_offset_upper_bound = block->edit_offset_lower_bound();
-    }
-
-    active_upper_bound = std::max(active_upper_bound, block->edit_offset_upper_bound().value());
-
-    // TODO: [Gabe Bornstein 4/30/26] Does this need to be ordered at all for the
-    // ChangeLogWriter?
-    //
-    active_blocks_upper_bounds.push_back(block->edit_offset_upper_bound());
-
-    return batt::OkStatus();
-  });
-
-  BATT_REQUIRE_OK(status);
-  return RecoveredChangeLogState{
-      .active_block_range = make_interval(*active_lower_bound, BlockIndex{active_upper_bound}),
-      .active_blocks_upper_bounds = std::move(active_blocks_upper_bounds),
-  };
+  return OkStatus();
 }
 
 using CheckpointEvent = llfs::PackedVariant<turtle_kv::PackedCheckpoint>;
@@ -1276,9 +1259,9 @@ void KVStore::mem_table_batch_scanner_thread_main()
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename Fn>
-requires std::invocable<Fn, std::unique_ptr<DeltaBatch>> Status
-KVStore::scan_mem_table_to_build_batches(boost::intrusive_ptr<MemTable>&& mem_table,
-                                         Fn&& consume_fn)
+  requires std::invocable<Fn, std::unique_ptr<DeltaBatch>>
+Status KVStore::scan_mem_table_to_build_batches(boost::intrusive_ptr<MemTable>&& mem_table,
+                                                Fn&& consume_fn)
 {
   MemTable::BatchCompactor batch_compactor{*mem_table,
                                            /*byte_size_limit=*/this->tree_options_.flush_size()};

@@ -79,13 +79,13 @@ class ChangeLogFile
     // up to date. The actual oldest active block may be newer. The lower_bound should guarantee it
     // is Less Than the lower bound of the actual oldest active block.
     //
-    little_i64 lower_bound;
-
     // Logical address in the ChangeLogFile of the newest known active block. NOT guaranteed to be
     // up to date. The actual newest active block may be newer. The upper_bound should guarantee it
     // is Less Than the upper bound of the actual newest active block.
     //
-    little_i64 upper_bound;
+    Interval<BlockIndex> active_block_range{BlockIndex{0}, BlockIndex{0}};
+
+    EditOffset trim_edit_offset{0};
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -189,6 +189,26 @@ class ChangeLogFile
       return block_range;
     }
 
+    /** \brief Increments the upper bound of the passed interval, pulling the lower bound forward
+     * and wrapping if this makes the range size too large.
+     */
+    Interval<BlockIndex>& increment_upper_bound_with_wrap(
+        Interval<BlockIndex>& block_range) const noexcept
+    {
+      this->check_invariants(block_range);
+      auto on_scope_exit = batt::finally([&] {
+        this->check_invariants(block_range);
+      });
+
+      this->increment_no_wrap(block_range.upper_bound);
+      if (block_range.size() > this->block_count) {
+        this->increment_no_wrap(block_range.lower_bound);
+        this->wrap_block_range(block_range);
+      }
+
+      return block_range;
+    }
+
     Interval<BlockIndex>& increment_block_range(Interval<BlockIndex>& block_range) const noexcept
     {
       this->check_invariants(block_range);
@@ -242,15 +262,17 @@ class ChangeLogFile
     // up to date. The actual oldest active block may be newer. The lower_bound should guarantee it
     // is Less Than the lower bound of the actual oldest active block.
     //
-    little_i64 lower_bound;
+    little_i64 active_blocks_lower_bound;
 
     // Logical address in the ChangeLogFile of the newest known active block. NOT guaranteed to be
     // up to date. The actual newest active block may be newer. The upper_bound should guarantee it
     // is Less Than the upper bound of the actual newest active block.
     //
-    little_i64 upper_bound;
+    little_i64 active_blocks_upper_bound;
 
-    u8 reserved_[4096 - 48];
+    little_i64 trim_edit_offset;
+
+    u8 reserved_[4096 - 56];
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -339,6 +361,8 @@ class ChangeLogFile
   llfs::IoRing::File file_;
 
   Config config_;
+
+  PackedConfig packed_config_buffer_;
 
   Metrics metrics_;
 };

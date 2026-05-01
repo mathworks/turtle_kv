@@ -238,6 +238,7 @@ class ChangeLogWriter
 
   static StatusOr<std::unique_ptr<ChangeLogWriter>> open(
       const std::filesystem::path& path,                       //
+      const RecoveredChangeLogState& recovered_state,          //
       Optional<ChangeLogWriter::Options> maybe_options = None  //
       ) noexcept;
 
