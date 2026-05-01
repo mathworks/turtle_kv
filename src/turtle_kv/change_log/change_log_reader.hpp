@@ -132,11 +132,21 @@ class ChangeLogReader
 
     // Process slots in EditOffset order.
     //
+    Optional<EditOffset> expected_next_edit_offset = None;
     while (!heap.empty()) {
       BlockIterator* current = heap.first();
 
       ConstBuffer slot_buffer = current->block->get_slot(current->next_slot_i);
       EditOffset edit_offset = current->current_edit_offset();
+
+      // If there's a gap in our slots, we're missing data and can't continue
+      //
+      if (expected_next_edit_offset.value_or(edit_offset) != edit_offset) {
+        return batt::OkStatus();
+      }
+
+      expected_next_edit_offset =
+          edit_offset + EditOffsetDelta{static_cast<i64>(slot_buffer.size())};
 
       // Move the payload past the EditOffset.
       //

@@ -14,6 +14,8 @@ namespace turtle_kv {
   config.block_size = BlockSize{ChangeLogFile::kDefaultBlockSize};
   config.block_count = BlockCount{ChangeLogFile::kDefaultLogSize / config.block_size};
   config.block0_offset = FileOffset{ChangeLogFile::kDefaultBlock0Offset};
+  config.lower_bound = 0;
+  config.upper_bound = 0;
 
   return config;
 }
@@ -28,6 +30,8 @@ void ChangeLogFile::Config::pack_to(PackedConfig* packed_config) const noexcept
   packed_config->block_size = this->block_size;
   packed_config->block_count = this->block_count;
   packed_config->block0_offset = this->block0_offset;
+  packed_config->lower_bound = this->lower_bound;
+  packed_config->upper_bound = this->upper_bound;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -41,6 +45,8 @@ auto ChangeLogFile::PackedConfig::unpack() const noexcept -> ChangeLogFile::Conf
   config.block_size = BlockSize{this->block_size.value()};
   config.block_count = BlockCount{this->block_count.value()};
   config.block0_offset = FileOffset{this->block0_offset.value()};
+  config.lower_bound = this->lower_bound.value();
+  config.upper_bound = this->upper_bound.value();
 
   return config;
 }
@@ -122,6 +128,27 @@ auto ChangeLogFile::PackedConfig::unpack() const noexcept -> ChangeLogFile::Conf
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+Status ChangeLogFile::flush_config() noexcept
+{
+  // TODO [tastolfi 2026-05-01] The ChangeLogWriter (or this class) should keep a ready-to-go packed
+  // version of the config block to speed this up.
+
+  // TODO [tastolfi 2026-05-01] Look into mapping the reserved config block buffer for faster
+  // io_uring writes (by avoiding the user->kernel remap step)
+
+  PackedConfig packed_config;
+  this->config_.pack_to(&packed_config);
+
+  return llfs::write_fd(this->file_.get_fd(),
+                        ConstBuffer{
+                            &packed_config,
+                            sizeof(PackedConfig),
+                        },
+                        /*offset=*/0);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 /*explicit*/ ChangeLogFile::ChangeLogFile(std::unique_ptr<llfs::ScopedIoRing>&& io_ring,
                                           llfs::IoRing::File&& file,
                                           const Config& config) noexcept
@@ -143,6 +170,10 @@ ChangeLogFile::~ChangeLogFile() noexcept
 batt::StatusOr<std::vector<boost::intrusive_ptr<ChangeLogBlock>>>
 ChangeLogFile::read_blocks_into_vector()
 {
+  // TODO: [Gabe Bornstein 4/29/26] Consider adding optional parameter that could denote which block
+  // to start reading from, and which block to stop reading from. We only need to read the potential
+  // active range, denoted in ChangeLogFile::Config.
+  //
   std::vector<boost::intrusive_ptr<ChangeLogBlock>> blocks;
   batt::Status read_blocks_status =
       this->read_blocks([&](boost::intrusive_ptr<ChangeLogBlock> block) -> batt::Status {

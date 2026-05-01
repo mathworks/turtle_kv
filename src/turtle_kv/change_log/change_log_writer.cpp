@@ -788,7 +788,7 @@ Status ChangeLogWriter::activate_blocks(WrittenBlocksState& input,
 
     // IMPORTANT: consume the block grant before doing anything else, so we don't leak the block.
     //
-    batt::Grant block_grant = next_block->consume_grant();
+    batt::Grant block_grant = next_block->consume_grant(*input.block_index);
     BATT_CHECK_EQ(block_grant.size(), 1);
 
     VLOG(1) << BATT_INSPECT(output.block_range) << BATT_INSPECT(output.trim_edit_offset)
@@ -819,6 +819,13 @@ Status ChangeLogWriter::activate_blocks(WrittenBlocksState& input,
     // No wrap-around for active_upper_bound_block, because it must stay >= the lower bound.
     //
     cfg.increment_upper_bound(output.block_range);
+  }
+
+  {
+    ChangeLogFile::Config& config = this->change_log_file().config();
+    config.lower_bound = output.block_range.lower_bound;
+    config.upper_bound = output.block_range.upper_bound;
+    BATT_REQUIRE_OK(this->change_log_file().flush_config());
   }
 
   return OkStatus();
