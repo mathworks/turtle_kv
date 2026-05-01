@@ -230,17 +230,16 @@ class ChangeLogWriter
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 
   static StatusOr<std::unique_ptr<ChangeLogWriter>> open_or_create(
-      const std::filesystem::path& path,                      //
-      const ChangeLogFile::Config& config,                    //
-      const ChangeLogWriter::Options& options,                //
-      RemoveExisting remove_existing = RemoveExisting{false}  //
-      ) noexcept;
+      const std::filesystem::path& path,
+      const ChangeLogFile::Config& config,
+      const ChangeLogWriter::Options& options,
+      RemoveExisting remove_existing = RemoveExisting{false},
+      const Optional<RecoveredChangeLogState>& recovered_state = None) noexcept;
 
   static StatusOr<std::unique_ptr<ChangeLogWriter>> open(
-      const std::filesystem::path& path,                       //
-      const RecoveredChangeLogState& recovered_state,          //
-      Optional<ChangeLogWriter::Options> maybe_options = None  //
-      ) noexcept;
+      const std::filesystem::path& path,
+      const Optional<ChangeLogWriter::Options>& maybe_options = None,
+      const Optional<RecoveredChangeLogState>& recovered_state = None) noexcept;
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -253,8 +252,7 @@ class ChangeLogWriter
    */
   explicit ChangeLogWriter(std::unique_ptr<ChangeLogFile>&& change_log,
                            const Options& options,
-                           const Interval<BlockIndex>& active_block_range,
-                           const Slice<EditOffset>& active_blocks_upper_bounds) noexcept;
+                           const RecoveredChangeLogState& recovered_state) noexcept;
 
   /** \brief Destructs a ChangeLogWriter.  All ChangeLogWriter::Context objects must be
    * destructed before the ChangeLogWriter is allowed to go out of scope.
@@ -456,6 +454,10 @@ class ChangeLogWriter
    */
   Status activate_blocks(WrittenBlocksState& input, ActiveBlocksState& output) noexcept;
 
+  /** \brief Refreshes the meta-block in the change log file.
+   */
+  Status refresh_meta_block(ActiveBlocksState& active_blocks) noexcept;
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   /** \brief The state of the log file.
@@ -466,15 +468,13 @@ class ChangeLogWriter
    */
   Options options_;
 
-  batt::Grant::Issuer free_block_tokens_{
-      BATT_CHECKED_CAST(u64, this->change_log_->config().block_count.value())};
+  batt::Grant::Issuer free_block_tokens_;
 
   Metrics metrics_;
 
   /** \brief The next unassigned EditOffset.
    */
-  std::atomic<i64> next_edit_offset_{
-      0};  // TODO [tastolfi 2026-03-23] this must be set correctly in recovery!
+  std::atomic<i64> next_edit_offset_;
 
   /** \brief Mutex-protected state for this object.
    */
@@ -484,8 +484,12 @@ class ChangeLogWriter
 #if BATT_PLATFORM_IS_LINUX
       IOV_MAX;
 #else
-      2 * kMiB / this->config().block_size;
+      128 * kKiB / this->config().block_size;
 #endif
+
+  /** \brief Buffer for updating the log meta-state while running.
+   */
+  ChangeLogFile::PackedMetaBlock meta_block_buffer_;
 
   /** \brief Set to true once-and-only-once when halt() is called the first time.
    */

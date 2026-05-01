@@ -136,19 +136,10 @@ struct ChangeLogWriter::WrittenBlocksState {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-struct ChangeLogWriter::ActiveBlocksState {
-  /** \brief The (logical) interval of active block indices.
-   *
-   * lower_bound: the "trim position" -- this is the position in the file, not the logical offset.
-   * upper_bound: the "flush position" -- this is the position in the file (not logical offset) one
-   *     past the *last* known written and untrimmed block.
-   */
-  Interval<BlockIndex> block_range;
+struct ChangeLogWriter::ActiveBlocksState : ChangeLogFile::MetaState {
+  using Super = ChangeLogFile::MetaState;
 
-  /** \brief Blocks with edit offset upper bound less than or equal to this value can be
-   * safely overwritten.
-   */
-  EditOffset trim_edit_offset;
+  //----- --- -- -  -  -   -
 
   /** \brief For each block index in the file, the known upper bound edit offset of slots in that
    * block.
@@ -162,37 +153,51 @@ struct ChangeLogWriter::ActiveBlocksState {
 
   //----- --- -- -  -  -   -
 
+  /** \brief Construct the ActiveBlockState from recovered log state.
+   */
   explicit ActiveBlocksState(const ChangeLogFile::Config& config,
                              batt::Grant::Issuer& block_grant_pool,
-                             const Interval<BlockIndex>& active_block_range,
-                             const Slice<EditOffset>& active_blocks_upper_bounds) noexcept
-      : block_range{active_block_range}
-      , trim_edit_offset{0 /*TODO [tastolfi 2026-04-20] - pass this in*/}
+                             const RecoveredChangeLogState& recovered_state) noexcept
+      : Super{static_cast<const ChangeLogMetaState&>(recovered_state)}
       , block_upper_bounds{new i64[config.block_count]}
       , in_use_block_grant{
             BATT_OK_RESULT_OR_PANIC(block_grant_pool.issue_grant(0, batt::WaitForResource::kFalse))}
   {
     config.check_invariants(this->block_range);
 
-    BATT_CHECK_EQ(active_blocks_upper_bounds.size(), (usize)this->block_range.size());
+    BATT_CHECK_EQ(recovered_state.active_blocks_upper_bounds.size(),
+                  (usize)this->block_range.size());
 
     Interval<BlockIndex> uninitialized = this->block_range;
 
-    for (const EditOffset& block_upper_bound : active_blocks_upper_bounds) {
+    for (const EditOffset& block_upper_bound : recovered_state.active_blocks_upper_bounds) {
       this->block_upper_bounds[uninitialized.lower_bound] = block_upper_bound.value();
       config.increment_lower_bound(uninitialized);
     }
 
-    this->in_use_block_grant.subsume(BATT_OK_RESULT_OR_PANIC(
-        block_grant_pool.issue_grant(active_block_range.size(), batt::WaitForResource::kFalse)));
+    this->in_use_block_grant.subsume(
+        BATT_OK_RESULT_OR_PANIC(block_grant_pool.issue_grant(recovered_state.block_range.size(),
+                                                             batt::WaitForResource::kFalse)));
+
+    Optional<batt::Grant> released_grant;
+    this->apply_trim(recovered_state.trim_edit_offset, config, released_grant);
   }
 
+  /** \brief Panics if the current state of `this` violates any invariants with respect to the
+   * passed Config.
+   */
   void check_invariants(const ChangeLogFile::Config& config) const noexcept
   {
     config.check_invariants(this->block_range);
     BATT_CHECK_EQ((usize)this->block_range.size(), in_use_block_grant.size())
         << "in_use_block_grant must exactly cover the active block interval";
   }
+
+  /** \brief Updates this->trim_edit_offset, this->block_range, and
+   */
+  void apply_trim(EditOffset new_trim_edit_offset,
+                  const ChangeLogFile::Config& config,
+                  Optional<batt::Grant>& released_grant) noexcept;
 };
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -286,11 +291,11 @@ void ChangeLogWriter::Context::push_buffer(BlockBuffer*& buffer,
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 /*static*/ StatusOr<std::unique_ptr<ChangeLogWriter>> ChangeLogWriter::open_or_create(
-    const std::filesystem::path& path,        //
-    const ChangeLogFile::Config& config,      //
-    const ChangeLogWriter::Options& options,  //
-    RemoveExisting remove_existing            //
-    ) noexcept
+    const std::filesystem::path& path,
+    const ChangeLogFile::Config& config,
+    const ChangeLogWriter::Options& options,
+    RemoveExisting remove_existing,
+    const Optional<RecoveredChangeLogState>& recovered_state) noexcept
 {
   std::error_code ec;
   if (remove_existing || !std::filesystem::exists(path, ec) || ec) {
@@ -298,7 +303,8 @@ void ChangeLogWriter::Context::push_buffer(BlockBuffer*& buffer,
   }
   BATT_REQUIRE_OK(ec);
 
-  BATT_ASSIGN_OK_RESULT(std::unique_ptr<ChangeLogFile> log_file, ChangeLogFile::open(path));
+  BATT_ASSIGN_OK_RESULT(std::unique_ptr<ChangeLogFile> log_file,
+                        ChangeLogFile::open(path, options, recovered_state));
 
   // TODO [tastolfi 2026-04-20] pass real values for active blocks params!
   //
@@ -311,9 +317,9 @@ void ChangeLogWriter::Context::push_buffer(BlockBuffer*& buffer,
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 /*static*/ StatusOr<std::unique_ptr<ChangeLogWriter>> ChangeLogWriter::open(
-    const std::filesystem::path& path,                //
-    Optional<ChangeLogWriter::Options> maybe_options  //
-    ) noexcept
+    const std::filesystem::path& path,
+    const Optional<ChangeLogWriter::Options>& maybe_options,
+    const Optional<RecoveredChangeLogState>& recovered_state) noexcept
 {
   Options options = maybe_options.value_or(Options::with_default_values());
 
@@ -332,18 +338,25 @@ void ChangeLogWriter::Context::push_buffer(BlockBuffer*& buffer,
 /*explicit*/ ChangeLogWriter::ChangeLogWriter(
     std::unique_ptr<ChangeLogFile>&& change_log,
     const Options& options,
-    const Interval<BlockIndex>& active_block_range,
-    const Slice<EditOffset>& active_blocks_upper_bounds) noexcept
+    const RecoveredChangeLogState& recovered_state) noexcept
     : change_log_{std::move(change_log)}
     , options_{options}
+    , free_block_tokens_{BATT_CHECKED_CAST(u64, this->change_log_->config().block_count.value())}
+    , metrics_{}
+    , next_edit_offset_{recovered_state.next_edit_offset.value()}
 {
+  // Initialize the meta-block buffer to reflect the on-disk state.
+  //
+  std::memset(&this->meta_block_buffer_, 0, sizeof(ChangeLogFile::PackedMetaBlock));
+  this->config().pack_to(&this->meta_block_buffer_.config);
+  recovered_state.ChangeLogMetaState::pack_to(&this->meta_block_buffer_.meta_state);
+
   {
     batt::ScopedLock<State> locked_state{this->state_};
     locked_state->active_blocks_state_ =
         std::make_unique<ActiveBlocksState>(this->config(),
                                             this->free_block_tokens_,
-                                            active_block_range,
-                                            active_blocks_upper_bounds);
+                                            recovered_state);
   }
 }
 
@@ -821,12 +834,7 @@ Status ChangeLogWriter::activate_blocks(WrittenBlocksState& input,
     cfg.increment_upper_bound(output.block_range);
   }
 
-  {
-    ChangeLogFile::Config& config = this->change_log_file().config();
-    config.lower_bound = output.block_range.lower_bound;
-    config.upper_bound = output.block_range.upper_bound;
-    BATT_REQUIRE_OK(this->change_log_file().flush_config());
-  }
+  BATT_REQUIRE_OK(this->refresh_meta_block(output));
 
   return OkStatus();
 }
@@ -844,55 +852,74 @@ Status ChangeLogWriter::trim(EditOffset new_trim_edit_offset)
   const ChangeLogFile::Config& cfg = this->config();
   {
     batt::ScopedLock<State> locked_state{this->state_};
-    ActiveBlocksState& s = *locked_state->active_blocks_state_;
+    ActiveBlocksState& active_blocks = *locked_state->active_blocks_state_;
 
-    // Sanity checks.
+    active_blocks.apply_trim(new_trim_edit_offset, cfg, released_grant);
+
+    // Refresh the meta-block.
     //
-    s.check_invariants(cfg);
-    auto on_scope_exit = batt::finally([&] {
-      s.check_invariants(cfg);
-    });
-
-    // Do nothing if the new trim offset isn't greater than the current one.
-    //
-    if (new_trim_edit_offset <= s.trim_edit_offset) {
-      return OkStatus();
-    }
-    s.trim_edit_offset = new_trim_edit_offset;
-
-    // Keep track of how many blocks are newly trimmed.
-    //
-    u64 n_trimmed = 0;
-
-    // Step through the active blocks until we reach the end or find one whose upper bound is above
-    // the trim offset.
-    //
-    while (!s.block_range.empty()) {
-      // Stop at the first block whose upper bound is after the trim offset.
-      //
-      if (EditOffset{s.block_upper_bounds[s.block_range.lower_bound]} > new_trim_edit_offset) {
-        break;
-      }
-
-      ++n_trimmed;
-
-      // Advance the active lower bound, with wrap-around.
-      //
-      cfg.increment_lower_bound(s.block_range);
-    }
-
-    VLOG(1) << BATT_INSPECT(n_trimmed);
-
-    // Release any trimmed blocks.  IMPORTANT: we release the in use grant all at once rather than
-    // one block at a time, so that any clients blocked waiting for space won't immediately run out
-    // of space.
-    //
-    if (n_trimmed != 0) {
-      released_grant.emplace(BATT_OK_RESULT_OR_PANIC(s.in_use_block_grant.spend(n_trimmed)));
-    }
-
-    VLOG(1) << BATT_INSPECT(s.in_use_block_grant.size());
+    BATT_REQUIRE_OK(this->refresh_meta_block(active_blocks));
   }
+  return OkStatus();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void ChangeLogWriter::ActiveBlocksState::apply_trim(EditOffset new_trim_edit_offset,
+                                                    const ChangeLogFile::Config& cfg,
+                                                    Optional<batt::Grant>& released_grant) noexcept
+{
+  // Sanity checks.
+  //
+  this->check_invariants(cfg);
+  auto on_scope_exit = batt::finally([&] {
+    this->check_invariants(cfg);
+  });
+
+  this->trim_edit_offset = std::max(this->trim_edit_offset, new_trim_edit_offset);
+
+  // Keep track of how many blocks are newly trimmed.
+  //
+  u64 n_trimmed = 0;
+
+  // Step through the active blocks until we reach the end or find one whose upper bound is above
+  // the trim offset.
+  //
+  while (!this->block_range.empty()) {
+    // Stop at the first block whose upper bound is after the trim offset.
+    //
+    if (EditOffset{this->block_upper_bounds[this->block_range.lower_bound]} >
+        this->trim_edit_offset) {
+      break;
+    }
+
+    ++n_trimmed;
+
+    // Advance the active lower bound, with wrap-around.
+    //
+    cfg.increment_lower_bound(this->block_range);
+  }
+
+  VLOG(1) << BATT_INSPECT(n_trimmed);
+
+  // Release any trimmed blocks.  IMPORTANT: we release the in use grant all at once rather than
+  // one block at a time, so that any clients blocked waiting for space won't immediately run out
+  // of space.
+  //
+  if (n_trimmed != 0) {
+    released_grant.emplace(BATT_OK_RESULT_OR_PANIC(this->in_use_block_grant.spend(n_trimmed)));
+  }
+
+  VLOG(1) << BATT_INSPECT(this->in_use_block_grant.size());
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Status ChangeLogWriter::refresh_meta_block(ActiveBlocksState& active_blocks) noexcept
+{
+  active_blocks.ChangeLogMetaState::pack_to(&this->meta_block_buffer_.meta_state);
+  BATT_REQUIRE_OK(this->change_log_file().write_meta_block(this->meta_block_buffer_));
+
   return OkStatus();
 }
 

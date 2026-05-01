@@ -69,47 +69,36 @@ Status ChangeLogReader::visit_slots(const SlotVisitorFn& visitor,
                                     RecoveredChangeLogState* recovered_state
                                     [[maybe_unused]]) noexcept
 {
+  ChangeLogFile& change_log = this->change_log_file();
+
   batt::StatusOr<std::vector<boost::intrusive_ptr<ChangeLogBlock>>> blocks =
-      this->change_log_->read_blocks_into_vector();
+      change_log.read_blocks_into_vector();
 
   if (!blocks.ok()) {
     return blocks.status();
   }
 
+  ChangeLogFile::PackedMetaBlock meta_block;
+  BATT_REQUIRE_OK(change_log.read_meta_block(meta_block));
+
+  ChangeLogMetaState meta_state = meta_block.meta_state.unpack();
+
   // An index from BlockIndex to EditOffset
   //
-  std::unordered_map<BlockIndex, Optional<Interval<EditOffset>>, BlockIndex::Hash>
-      block_edit_ranges;
-
-  //----- --- -- -  -  -   -
-  // Helpers
-  //
-  const auto get_block_upper_bound =
-      [&block_edit_ranges](BlockIndex index) -> Optional<EditOffset> {
-    auto iter = block_edit_ranges.find(index);
-    if (iter == block_edit_ranges.end() || *iter == None) {
-      return None;
-    }
-    return iter->upper_bound;
-  };
-  const auto get_block_edit_range =
-      [&block_edit_ranges](BlockIndex index) -> Optional<Interval<EditOffset>> {
-    auto iter = block_edit_ranges.find(index);
-    if (iter == block_edit_ranges.end()) {
-      return None;
-    }
-    return *iter;
-  };
-  //----- --- -- -  -  -   -
+  std::unordered_set<BlockIndex, BlockIndex::Hash> visited_block_set;
+  std::unordered_map<BlockIndex, EditOffset, BlockIndex::Hash> block_upper_bounds;
 
   // Create block iterators, filtering out empty blocks.
   //
   std::vector<BlockIterator> block_iterators;
-  block_iterators.reserve(blocks->size());
 
   for (auto& block : *blocks) {
     if (recovered_state) {
-      block_edit_ranges[block->get_block_index().value_or_panic()] = block->edit_offset_range();
+      block_upper_bounds[block->get_block_index().value_or_panic()] =
+          block->edit_offset_upper_bound();
+    }
+    if (meta_state.trim_edit_offset >= block->edit_offset_upper_bound()) {
+      continue;
     }
     if (block->slot_count() > 0) {
       block_iterators.emplace_back(BlockIterator{
@@ -134,29 +123,41 @@ Status ChangeLogReader::visit_slots(const SlotVisitorFn& visitor,
   Optional<EditOffset> expected_next_edit_offset = None;
   while (!heap.empty()) {
     BlockIterator* current = heap.first();
-
     ConstBuffer slot_buffer = current->block->get_slot(current->next_slot_i);
     EditOffset edit_offset = current->current_edit_offset();
 
-    // If there's a gap in our slots, we're missing data and can't continue
+    // If there's a gap in our slots, we're missing data and can't continue.
     //
     if (expected_next_edit_offset.value_or(edit_offset) != edit_offset) {
-      return batt::OkStatus();
+      break;
     }
-
     expected_next_edit_offset = edit_offset + EditOffsetDelta{static_cast<i64>(slot_buffer.size())};
 
-    // Move the payload past the EditOffset.
+    // Only visit slots which extend above the trim offset.
     //
-    ConstBuffer payload = slot_buffer + sizeof(PackedEditOffsetDelta);
+    if (*expected_next_edit_offset > meta_state.trim_edit_offset) {
+      //----- --- -- -  -  -   -
+      auto first_visit_to_block = FirstVisitToBlock{current->next_slot_i == 0};
+      ChangeLogBlock* block = current->block.get();
 
-    Status visit_status = visitor(FirstVisitToBlock{current->next_slot_i == 0},
-                                  current->block.get(),
-                                  edit_offset,
-                                  payload);
-    BATT_REQUIRE_OK(visit_status);
+      // If recovering state, add each block which contains recovered slots to the
+      // `block_edit_ranges` hash table.
+      //
+      if (recovered_state && first_visit_to_block) {
+        visited_block_set.insert(block->get_block_index().value_or_panic());
+      }
 
-    current->next_slot_i++;
+      // Move the payload past the EditOffset.
+      //
+      ConstBuffer payload = slot_buffer + sizeof(PackedEditOffsetDelta);
+
+      Status visit_status = visitor(first_visit_to_block, block, edit_offset, payload);
+      BATT_REQUIRE_OK(visit_status);
+    }
+
+    // Advance to the next slot.
+    //
+    ++current->next_slot_i;
 
     if (current->has_more()) {
       heap.update_first();
@@ -165,47 +166,56 @@ Status ChangeLogReader::visit_slots(const SlotVisitorFn& visitor,
     }
   }
 
+  // Initialize the passed `recovered_state` object.
+  //
   if (recovered_state) {
-    const ChangeLogFile::Config& config = this->change_log_->config();
-    recovered_state->active_block_range = config.active_block_range;
-    auto& active_range = recovered_state->active_block_range;
+    recovered_state->block_range = meta_state.block_range;
+    recovered_state->trim_edit_offset = meta_state.trim_edit_offset;
+    recovered_state->next_edit_offset = expected_next_edit_offset.value_or(EditOffset{0});
+    recovered_state->active_blocks_upper_bounds.clear();
+
+    const ChangeLogFile::Config& config = change_log.config();
+
+    // Initialize the recovered block range to all blocks, shifted by the recovered lower bound.
+    //
+    auto& active_range = recovered_state->block_range;
+    active_range.upper_bound = BlockIndex{active_range.lower_bound + config.block_count};
 
     // Run sanity checks.
     //
     config.check_invariants(active_range);
 
-    // First remove any unrecoverable blocks from the start of the active range.
+    // First remove any unvisited blocks from the start of the active range.
     //
-    while (!active_range.empty() && get_block_upper_bound(active_range.lower_bound) == None) {
+    while (!active_range.empty() && visited_block_set.count(active_range.lower_bound) == 0) {
       config.increment_lower_bound(active_range);
     }
 
-    // Extend the upper end of the active range to include any extra recovered blocks at the end.
+    // Reset the active range and then set the upper to the maximum logical index of all visited
+    // blocks.
     //
-    if (!active_range.empty()) {
-      Interval<EditOffset> first_block_edit_range =
-          get_block_edit_range(active_range.lower_bound).value_or_panic();
+    active_range.upper_bound = active_range.lower_bound;
+    for (BlockIndex visited_index : visited_block_set) {
+      config.extend_block_range_to_include(active_range, visited_index);
+    }
 
-      for (;;) {
-        // If the last block is the same as the first, then there are no more blocks we could
-        // possibly add; break.
-        //
-        BlockIndex last_block_physical_index = config.wrapped_upper_bound(active_range);
-        if (last_block_physical_index == active_range.lower_bound) {
-          break;
-        }
+    Optional<EditOffset> most_recent_block_upper_bound;
 
-        Optional<Interval<EditOffset>> last_block_edit_range =
-            get_block_edit_range(last_block_physical_index);
+    // Gather the edit offset upper bounds for all blocks in the recovered active range.
+    //  Fill in any gaps with the previous block's upper bound.
+    //
+    for (BlockIndex index = active_range.lower_bound; index != active_range.upper_bound;
+         config.increment_with_wrap(index)) {
+      auto iter = block_upper_bounds.find(index);
+      if (iter != block_upper_bounds.end()) {
+        most_recent_block_upper_bound = *iter;
       }
+      recovered_state->active_blocks_upper_bounds.push_back(
+          most_recent_block_upper_bound.value_or_panic());
     }
 
-    BlockIndex index = recovered_state->active_block_range.lower_bound;
-
-    for (i64 block_i = recovered_state->active_block_range.lower_bound;
-         block_i < recovered_state->active_block_range;
-         ++block_i) {
-    }
+    BATT_CHECK_EQ(BATT_CHECKED_CAST(usize, active_range.size()),
+                  recovered_state->active_blocks_upper_bounds.size());
   }
 
   return batt::OkStatus();

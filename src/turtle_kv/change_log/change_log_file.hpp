@@ -9,9 +9,13 @@
 #pragma once
 #define TURTLE_KV_CHANGE_LOG_FILE_HPP
 
-#include <turtle_kv/api_types.hpp>
 #include <turtle_kv/change_log/change_log_block.hpp>
+#include <turtle_kv/change_log/change_log_config.hpp>
 #include <turtle_kv/change_log/change_log_file_metrics.hpp>
+#include <turtle_kv/change_log/change_log_meta_state.hpp>
+#include <turtle_kv/change_log/recovered_change_log_state.hpp>
+
+#include <turtle_kv/api_types.hpp>
 #include <turtle_kv/file_utils.hpp>
 
 #include <turtle_kv/import/bit_ops.hpp>
@@ -61,223 +65,32 @@ class ChangeLogFile
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  static constexpr i64 kMetaBlockOffset = 0;
   static constexpr i64 kDefaultBlockSize = 8192;
   static constexpr i64 kDefaultBlock0Offset = 4096;
   static constexpr i64 kDefaultLogSize = 32 * kMiB;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  struct PackedConfig;
+  using Config = ChangeLogConfig;
+  using PackedConfig = PackedChangeLogConfig;
 
-  struct Config {
-    BlockSize block_size;
-    BlockCount block_count;
-    FileOffset block0_offset;
-
-    // The physical address in the ChangeLogFile of the oldest known
-    // active block. The lower bound will never Greater Than the upper_bound. NOT guaranteed to be
-    // up to date. The actual oldest active block may be newer. The lower_bound should guarantee it
-    // is Less Than the lower bound of the actual oldest active block.
-    //
-    // Logical address in the ChangeLogFile of the newest known active block. NOT guaranteed to be
-    // up to date. The actual newest active block may be newer. The upper_bound should guarantee it
-    // is Less Than the upper bound of the actual newest active block.
-    //
-    Interval<BlockIndex> active_block_range{BlockIndex{0}, BlockIndex{0}};
-
-    EditOffset trim_edit_offset{0};
-
-    //+++++++++++-+-+--+----- --- -- -  -  -   -
-
-    static Config with_default_values() noexcept;
-
-    //+++++++++++-+-+--+----- --- -- -  -  -   -
-
-    void pack_to(PackedConfig* packed_config) const noexcept;
-
-    /** \brief Returns the file offset corresponding to the end of the last block.
-     */
-    FileOffset last_block_end_offset() const noexcept
-    {
-      return this->block_offset_from_index(BlockIndex{this->block_count});
-    }
-
-    /** \brief Returns the file offset of the beginning of the specific block.
-     */
-    FileOffset block_offset_from_index(BlockIndex block_index) const noexcept
-    {
-      return FileOffset{this->block0_offset + (this->block_size * block_index)};
-    }
-
-    /** \brief Returns the index of the block that *ends* at `block_end_offset`.
-     */
-    BlockIndex block_index_from_end_offset(FileOffset block_end_offset) const noexcept
-    {
-      if (block_end_offset == this->block0_offset) {
-        return BlockIndex{this->block_count - 1};
-      }
-
-      FileOffset block_begin_offset{block_end_offset - this->block_size};
-      BlockIndex block_index{(block_begin_offset - this->block0_offset) / this->block_size};
-
-      BATT_CHECK_EQ(block_begin_offset, this->block_offset_from_index(block_index))
-          << "The passed `block_end_offset` must be aligned to the block size!"
-          << BATT_INSPECT(this->block_size) << BATT_INSPECT(block_end_offset)
-          << BATT_INSPECT(block_index);
-
-      return block_index;
-    }
-
-    /** \brief Increments the passed block index variable, with no wrap-around.
-     */
-    BlockIndex& increment_no_wrap(BlockIndex& block_index) const noexcept
-    {
-      block_index = BlockIndex{block_index + 1};
-      return block_index;
-    }
-
-    /** \brief Increments the passed block index variable, applying wrap-around.
-     */
-    BlockIndex& increment_with_wrap(BlockIndex& block_index) const noexcept
-    {
-      if (this->increment_no_wrap(block_index) == this->block_count) {
-        block_index = BlockIndex{0};
-      }
-      return block_index;
-    }
-
-    /** \brief Increments the lower bound of the passed interval, wrapping around at
-     * this->block_count while maintaining the size of the interval.
-     */
-    Interval<BlockIndex>& increment_lower_bound(Interval<BlockIndex>& block_range) const noexcept
-    {
-      this->check_invariants(block_range);
-      auto on_scope_exit = batt::finally([&] {
-        this->check_invariants(block_range);
-      });
-
-      this->increment_no_wrap(block_range.lower_bound);
-
-      return this->wrap_block_range(block_range);
-    }
-
-    /** \brief If the lower bound is this->block_count, shifts upper and lower bound down by
-     * block_count.
-     */
-    Interval<BlockIndex>& wrap_block_range(Interval<BlockIndex>& block_range) const noexcept
-    {
-      BATT_CHECK_LT(block_range.lower_bound, this->block_count * 2);
-
-      if (block_range.lower_bound >= this->block_count) {
-        block_range.lower_bound = BlockIndex{block_range.lower_bound - this->block_count};
-        block_range.upper_bound = BlockIndex{block_range.upper_bound - this->block_count};
-      }
-      return block_range;
-    }
-
-    /** \brief Increments the upper bound of the passed interval.
-     */
-    Interval<BlockIndex>& increment_upper_bound(Interval<BlockIndex>& block_range) const noexcept
-    {
-      this->check_invariants(block_range);
-      auto on_scope_exit = batt::finally([&] {
-        this->check_invariants(block_range);
-      });
-
-      this->increment_no_wrap(block_range.upper_bound);
-
-      return block_range;
-    }
-
-    /** \brief Increments the upper bound of the passed interval, pulling the lower bound forward
-     * and wrapping if this makes the range size too large.
-     */
-    Interval<BlockIndex>& increment_upper_bound_with_wrap(
-        Interval<BlockIndex>& block_range) const noexcept
-    {
-      this->check_invariants(block_range);
-      auto on_scope_exit = batt::finally([&] {
-        this->check_invariants(block_range);
-      });
-
-      this->increment_no_wrap(block_range.upper_bound);
-      if (block_range.size() > this->block_count) {
-        this->increment_no_wrap(block_range.lower_bound);
-        this->wrap_block_range(block_range);
-      }
-
-      return block_range;
-    }
-
-    Interval<BlockIndex>& increment_block_range(Interval<BlockIndex>& block_range) const noexcept
-    {
-      this->check_invariants(block_range);
-      auto on_scope_exit = batt::finally([&] {
-        this->check_invariants(block_range);
-      });
-
-      this->increment_no_wrap(block_range.lower_bound);
-      this->increment_no_wrap(block_range.upper_bound);
-
-      return this->wrap_block_range(block_range);
-    }
-
-    /** \brief Returns the upper bound of the passed interval, with wrap-around.
-     */
-    BlockIndex wrapped_upper_bound(const Interval<BlockIndex>& block_range) const noexcept
-    {
-      this->check_invariants(block_range);
-      if (block_range.upper_bound < this->block_count) {
-        return block_range.upper_bound;
-      }
-      const BlockIndex wrapped{block_range.upper_bound - this->block_count};
-      BATT_CHECK_LE(wrapped, this->block_count);
-      return wrapped;
-    }
-
-    /** \brief Panics if the passed interval is not well formed for this configuration.
-     */
-    void check_invariants(const Interval<BlockIndex>& block_range) const noexcept
-    {
-      BATT_CHECK_LT(block_range.lower_bound, this->block_count);
-      BATT_CHECK_LE(block_range.lower_bound, block_range.upper_bound);
-      BATT_CHECK_LE(block_range.upper_bound - block_range.lower_bound, this->block_count);
-    }
-  };
+  using MetaState = ChangeLogMetaState;
+  using PackedMetaState = PackedChangeLogMetaState;
 
   // The flag O_DIRECT is set to true when reading some files. In order for the
   // O_DIRECT flag to work on all filesystems, PackedConfig (the file we're reading) needs to have
   // its starting address be aligned with 4096.
   //
-  struct alignas(llfs::kDirectIOBlockAlign) PackedConfig {
-    static constexpr u64 kMagic = 0x53ee6863bf7a1254ull;
+  struct alignas(llfs::kDirectIOBlockAlign) PackedMetaBlock {
+    PackedConfig config;
 
-    big_u64 magic;
-    little_i64 block_size;
-    little_i64 block_count;
-    little_i64 block0_offset;
+    PackedMetaState meta_state;
 
-    // The physical address in the ChangeLogFile of the oldest known
-    // active block. The lower bound will never Greater Than the upper_bound. NOT guaranteed to be
-    // up to date. The actual oldest active block may be newer. The lower_bound should guarantee it
-    // is Less Than the lower bound of the actual oldest active block.
-    //
-    little_i64 active_blocks_lower_bound;
-
-    // Logical address in the ChangeLogFile of the newest known active block. NOT guaranteed to be
-    // up to date. The actual newest active block may be newer. The upper_bound should guarantee it
-    // is Less Than the upper bound of the actual newest active block.
-    //
-    little_i64 active_blocks_upper_bound;
-
-    little_i64 trim_edit_offset;
-
-    u8 reserved_[4096 - 56];
-
-    //+++++++++++-+-+--+----- --- -- -  -  -   -
-
-    Config unpack() const noexcept;
+    u8 reserved_[4096 - 128];
   };
+
+  static_assert(sizeof(PackedMetaBlock) == 4096);
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -307,6 +120,10 @@ class ChangeLogFile
   StatusOr<batt::Grant> reserve_blocks(BlockCount block_count,
                                        batt::WaitForResource wait_for_resource) noexcept;
 
+  Status read_meta_block(PackedMetaBlock& meta_block) const noexcept;
+
+  Status write_meta_block(const PackedMetaBlock& meta_block) const noexcept;
+
   /** \brief Recovers all previously active ChangeLogBlocks from disk and returns them to the user.
    * All blocks initially have a reference count of 1. intrusive_ptr will help manage the lifetime
    * of the block, however, the user is also resposnsible for altering and managing the lifetime of
@@ -324,8 +141,8 @@ class ChangeLogFile
    * Ownership of the ChangeLogBlock's memory is transferred to `process_block`.
    * `process_block` must free the block's memory if it plans to do nothing with it.
    */
-  template <typename SerializeFn = batt::Status(boost::intrusive_ptr<ChangeLogBlock>)>
-  batt::Status read_blocks(SerializeFn process_block);
+  template <typename ConsumeBlockFn = Status(boost::intrusive_ptr<ChangeLogBlock>)>
+  batt::Status read_blocks(ConsumeBlockFn consume_block);
 
   FileByteCount capacity() const
   {
@@ -362,8 +179,6 @@ class ChangeLogFile
 
   Config config_;
 
-  PackedConfig packed_config_buffer_;
-
   Metrics metrics_;
 };
 
@@ -373,8 +188,8 @@ BATT_OBJECT_PRINT_IMPL((inline), ChangeLogFile::Config, (block_size, block_count
 // TODO: [Gabe Bornstein 1/16/26] Do I need to update other ChangeLogFile member data? Like lower,
 // upper bound? They aren't recovered from ::open.
 //
-template <typename SerializeFn>
-batt::Status ChangeLogFile::read_blocks(SerializeFn process_block)
+template <typename ConsumeBlockFn>
+batt::Status ChangeLogFile::read_blocks(ConsumeBlockFn consume_block)
 {
   BATT_ASSIGN_OK_RESULT(const i64 file_size, llfs::sizeof_fd(this->file_.get_fd()));
 
@@ -464,7 +279,7 @@ batt::Status ChangeLogFile::read_blocks(SerializeFn process_block)
 
     // `process_block` is responsible for determining when to stop reading.
     //
-    batt::Status process_status = process_block(std::move(*block));
+    batt::Status process_status = consume_block(std::move(*block));
     if (process_status == batt::StatusCode::kLoopBreak) {
       break;
     } else if (!process_status.ok()) {
@@ -473,12 +288,5 @@ batt::Status ChangeLogFile::read_blocks(SerializeFn process_block)
   }
   return batt::OkStatus();
 }
-
-/** \brief The result of recovering active block state from a ChangeLogFile.
- */
-struct RecoveredChangeLogState {
-  Interval<BlockIndex> active_block_range;
-  std::vector<EditOffset> active_blocks_upper_bounds;
-};
 
 }  // namespace turtle_kv
