@@ -115,14 +115,12 @@ class ChangeLogFile
     return this->config_;
   }
 
-  Status flush_config() noexcept;
-
   StatusOr<batt::Grant> reserve_blocks(BlockCount block_count,
                                        batt::WaitForResource wait_for_resource) noexcept;
 
-  Status read_meta_block(PackedMetaBlock& meta_block) const noexcept;
+  Status read_meta_block(PackedMetaBlock& meta_block) noexcept;
 
-  Status write_meta_block(const PackedMetaBlock& meta_block) const noexcept;
+  Status write_meta_block(const PackedMetaBlock& meta_block) noexcept;
 
   /** \brief Recovers all previously active ChangeLogBlocks from disk and returns them to the user.
    * All blocks initially have a reference count of 1. intrusive_ptr will help manage the lifetime
@@ -193,42 +191,52 @@ batt::Status ChangeLogFile::read_blocks(ConsumeBlockFn consume_block)
 {
   BATT_ASSIGN_OK_RESULT(const i64 file_size, llfs::sizeof_fd(this->file_.get_fd()));
 
-  std::unordered_set<i64> corrupted_block_offsets;
-  i64 file_offset = this->config_.block0_offset;
+  PackedMetaBlock meta_block;
+  BATT_REQUIRE_OK(this->read_meta_block(meta_block));
 
-  for (i64 blocks_read = 0; blocks_read < this->config_.block_count; ++blocks_read) {
+  MetaState meta_state = meta_block.meta_state.unpack();
+
+  Config& cfg = this->config_;
+
+  std::unordered_set<i64> corrupted_block_offsets;
+
+  // Track the number of blocks successfully read and consumed.
+  //
+  usize n_blocks_read = 0;
+
+  // Calculate the block range to read, based on the most recently written MetaState.
+  //
+  Interval<BlockIndex> block_range = cfg.block_range_to_recover(meta_state.block_range);
+
+  VLOG(1) << "reading " << BATT_INSPECT(block_range);
+
+  for (; !block_range.empty(); cfg.increment_lower_bound(block_range)) {
     //----- --- -- -  -  -   -
+
+    FileOffset file_offset = cfg.block_offset_from_index(block_range.lower_bound);
 
     // If the next read spans the end of the file, then we have data loss!
     //
-    if (file_offset < file_size && file_offset + this->config_.block_size > file_size) {
+    if (file_offset < file_size && file_offset + cfg.block_size > file_size) {
       return batt::StatusCode::kDataLoss;
-    }
-
-    // If the file ends on a block boundary, then assume this is as far as we've written.
-    //
-    if (file_offset == file_size) {
-      break;
     }
 
     // Allocate a buffer for the next block to read.
     //
-    ChangeLogBlock::ScopedMemory block_memory =
-        ChangeLogBlock::allocate_aligned(this->config_.block_size);
+    ChangeLogBlock::ScopedMemory block_memory = ChangeLogBlock::allocate_aligned(cfg.block_size);
 
     // Read the block!
     //
     batt::Status read_status = this->file_.read_all(file_offset, block_memory.buffer());
     BATT_REQUIRE_OK(read_status);
-    file_offset += this->config_.block_size;
 
     // Recover the block from the read data; this will perform data integrity checks.
     //
     StatusOr<boost::intrusive_ptr<ChangeLogBlock>> block =
-        ChangeLogBlock::recover(std::move(block_memory), BlockIndex{blocks_read});
+        ChangeLogBlock::recover(std::move(block_memory), block_range.lower_bound);
 
     if (block.status() == batt::StatusCode::kOutOfRange) {
-      VLOG(1) << "Recovered " << blocks_read
+      VLOG(1) << "Recovered " << n_blocks_read
               << " blocks. Stopped reading with status:" << BATT_INSPECT(block.status())
               << BATT_INSPECT(file_offset) << BATT_INSPECT(file_offset);
 
@@ -285,7 +293,10 @@ batt::Status ChangeLogFile::read_blocks(ConsumeBlockFn consume_block)
     } else if (!process_status.ok()) {
       return process_status;
     }
+
+    ++n_blocks_read;
   }
+
   return batt::OkStatus();
 }
 

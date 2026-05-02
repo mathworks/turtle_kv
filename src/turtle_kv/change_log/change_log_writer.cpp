@@ -9,6 +9,8 @@
 #include <turtle_kv/change_log/change_log_writer.hpp>
 //
 
+#include <turtle_kv/change_log/change_log_reader.hpp>
+
 #include <turtle_kv/util/small_queue.hpp>
 
 #include <chrono>
@@ -303,34 +305,30 @@ void ChangeLogWriter::Context::push_buffer(BlockBuffer*& buffer,
   }
   BATT_REQUIRE_OK(ec);
 
-  BATT_ASSIGN_OK_RESULT(std::unique_ptr<ChangeLogFile> log_file,
-                        ChangeLogFile::open(path, options, recovered_state));
-
-  // TODO [tastolfi 2026-04-20] pass real values for active blocks params!
-  //
-  return {std::make_unique<ChangeLogWriter>(std::move(log_file),
-                                            options,
-                                            make_interval(BlockIndex{0}, BlockIndex{0}),
-                                            Slice<EditOffset>{})};
+  return ChangeLogWriter::open(path, options, recovered_state);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 /*static*/ StatusOr<std::unique_ptr<ChangeLogWriter>> ChangeLogWriter::open(
     const std::filesystem::path& path,
-    const Optional<ChangeLogWriter::Options>& maybe_options,
-    const Optional<RecoveredChangeLogState>& recovered_state) noexcept
+    Optional<ChangeLogWriter::Options> options,
+    Optional<RecoveredChangeLogState> recovered_state) noexcept
 {
-  Options options = maybe_options.value_or(Options::with_default_values());
+  if (!options) {
+    options = Options::with_default_values();
+  }
 
   BATT_ASSIGN_OK_RESULT(std::unique_ptr<ChangeLogFile> log_file, ChangeLogFile::open(path));
 
-  // TODO [tastolfi 2026-04-20] pass real values for active blocks params!
-  //
-  return {std::make_unique<ChangeLogWriter>(std::move(log_file),
-                                            options,
-                                            make_interval(BlockIndex{0}, BlockIndex{0}),
-                                            Slice<EditOffset>{})};
+  if (!recovered_state) {
+    // Create a temporary, non-owning reader to recover the state.
+    //
+    ChangeLogReader reader{log_file.get()};
+    BATT_ASSIGN_OK_RESULT(recovered_state, reader.recover_state());
+  }
+
+  return {std::make_unique<ChangeLogWriter>(std::move(log_file), *options, *recovered_state)};
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -452,8 +450,7 @@ void ChangeLogWriter::remove_context(Context& context) noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-auto ChangeLogWriter::allocate_buffer(EditOffset offset,
-                                      batt::WaitForResource wait_for_resource) noexcept
+auto ChangeLogWriter::allocate_buffer(batt::WaitForResource wait_for_resource) noexcept
     -> StatusOr<BlockBuffer*>
 {
   BATT_ASSIGN_OK_RESULT(batt::Grant buffer_grant,
@@ -461,7 +458,7 @@ auto ChangeLogWriter::allocate_buffer(EditOffset offset,
 
   this->change_log_->metrics().reserved_blocks_count.add(buffer_grant.size());
 
-  return BlockBuffer::allocate(offset, std::move(buffer_grant), this->config().block_size);
+  return BlockBuffer::allocate(std::move(buffer_grant), this->config().block_size);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -632,7 +629,7 @@ auto ChangeLogWriter::prepare_blocks(CollectedBlocksState& input,
   // Add as many blocks as we can.
   //
   while (!input.blocks.empty() && space_in_file >= this->config().block_size &&
-         output.block_chunks.size() < this->max_batch_size_) {
+         output.block_chunks.size() < this->config().max_write_batch_size()) {
     //----- --- -- -  -  -   -
     BlockBuffer* const next_block = input.blocks.front();
 
@@ -669,7 +666,8 @@ auto ChangeLogWriter::write_blocks(PreparedBlocksState& input, WrittenBlocksStat
     output.check_invariants(this->config());
   });
 
-  BATT_CHECK_LE(input.block_chunks.size(), this->max_batch_size_) << "Too many prepared blocks!";
+  BATT_CHECK_LE(input.block_chunks.size(), this->config().max_write_batch_size())
+      << "Too many prepared blocks!";
 
   // Write!
   //
@@ -869,6 +867,8 @@ void ChangeLogWriter::ActiveBlocksState::apply_trim(EditOffset new_trim_edit_off
                                                     const ChangeLogFile::Config& cfg,
                                                     Optional<batt::Grant>& released_grant) noexcept
 {
+  VLOG(1) << "trim(" << new_trim_edit_offset << ")";
+
   // Sanity checks.
   //
   this->check_invariants(cfg);
@@ -894,6 +894,9 @@ void ChangeLogWriter::ActiveBlocksState::apply_trim(EditOffset new_trim_edit_off
     }
 
     ++n_trimmed;
+
+    VLOG(1) << "Trimmed block at " << this->block_range.lower_bound << "; edit_offset_upper_bound="
+            << this->block_upper_bounds[this->block_range.lower_bound];
 
     // Advance the active lower bound, with wrap-around.
     //
@@ -921,6 +924,22 @@ Status ChangeLogWriter::refresh_meta_block(ActiveBlocksState& active_blocks) noe
   BATT_REQUIRE_OK(this->change_log_file().write_meta_block(this->meta_block_buffer_));
 
   return OkStatus();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+ChangeLogWriter::BlockStats ChangeLogWriter::get_block_stats() noexcept
+{
+  batt::ScopedLock<State> locked_state{this->state_};
+
+  BlockStats stats;
+
+  stats.total_count = this->config().block_count;
+  stats.active_count = locked_state->active_blocks_state_->in_use_block_grant.size();
+  stats.free_count = this->free_block_tokens_.available();
+  stats.reserved_count = stats.total_count - (stats.active_count + stats.free_count);
+
+  return stats;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

@@ -13,6 +13,13 @@ namespace turtle_kv {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+/*static*/ ChangeLogMetaState ChangeLogMetaState::with_initial_values() noexcept
+{
+  return ChangeLogMetaState{};
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 void ChangeLogMetaState::pack_to(PackedChangeLogMetaState* packed) const noexcept
 {
   std::memset(packed, 0, sizeof(PackedChangeLogMetaState));

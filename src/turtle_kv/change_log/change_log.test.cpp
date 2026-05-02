@@ -38,6 +38,8 @@ class ChangeLogTest : public ::testing::Test
 
     this->test_dir_ = *root / "turtle_kv_Test";
     this->test_file_ = this->test_dir_ / "test_change_log.log";
+
+    std::filesystem::create_directories(this->test_dir_);
   }
 
   void TearDown() override
@@ -74,7 +76,8 @@ class ChangeLogTest : public ::testing::Test
 TEST_F(ChangeLogTest, CreateAndOpenFile)
 {
   ChangeLogFile::Config config = ChangeLogFile::Config::with_default_values();
-  ASSERT_TRUE(ChangeLogFile::create(this->test_file_, config, RemoveExisting{true}).ok());
+  Status status = ChangeLogFile::create(this->test_file_, config, RemoveExisting{true});
+  ASSERT_TRUE(status.ok()) << BATT_INSPECT(status) << BATT_INSPECT(this->test_file_);
 
   StatusOr<std::unique_ptr<ChangeLogFile>> log_file = ChangeLogFile::open(this->test_file_);
   ASSERT_TRUE(log_file.ok());
@@ -119,7 +122,7 @@ TEST_F(ChangeLogTest, WriterBasicOperations)
 
   // Wait for writer to process appends before halting.
   //
-  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  ASSERT_TRUE((*writer)->wait_for_flush());
 
   (*writer)->halt();
   (*writer)->join();
@@ -166,6 +169,8 @@ TEST_F(ChangeLogTest, WriteAndReadMultipleSlots)
                                        EditOffset offset) {
             VLOG(1) << "Appending block with lower_bound: " << block->edit_offset_lower_bound()
                     << ", on slot: " << offset;
+            VLOG(1) << BATT_INSPECT(first_visit) << BATT_INSPECT(block->slot_count())
+                    << BATT_INSPECT(block->edit_offset_range());
             this->on_visit_block(first_visit, block);
             std::memcpy(buffer.data(), data.data(), data.size());
           });
@@ -174,7 +179,7 @@ TEST_F(ChangeLogTest, WriteAndReadMultipleSlots)
 
     // Wait for writer to process appends before halting.
     //
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    ASSERT_TRUE((*writer)->wait_for_flush());
 
     (*writer)->halt();
     (*writer)->join();
@@ -284,7 +289,7 @@ TEST_F(ChangeLogTest, ConcurrentWritesMultipleContexts)
 
     // Wait for writer to process appends before halting.
     //
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    ASSERT_TRUE((*writer)->wait_for_flush());
 
     (*writer)->halt();
     (*writer)->join();
@@ -381,7 +386,7 @@ TEST_F(ChangeLogTest, BlockBoundaryConditions)
 
   // Wait for writer to process appends before halting.
   //
-  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  ASSERT_TRUE((*writer)->wait_for_flush());
 
   (*writer)->halt();
   (*writer)->join();
@@ -442,9 +447,10 @@ TEST_F(ChangeLogTest, ExceedCapacityWrapAround)
   std::mt19937 rng(42);  // Fixed seed for reproducibility
   std::uniform_int_distribution<usize> size_dist(100, 2000);
 
-  std::unordered_set<i64> offsets;
+  std::map<i64, i64> offsets;
   i64 total_written = 0;
   i64 successful_writes = 0;
+  i64 slots_trimmed = 0;
 
   // Write Phase
   //
@@ -460,38 +466,67 @@ TEST_F(ChangeLogTest, ExceedCapacityWrapAround)
 
     ChangeLogWriter::Context context(**writer);
 
+    i64 expected_next_offset = 0;
+
     // Keep writing until we've written target_data_size
     //
     while (total_written < target_data_size) {
       usize slot_size = size_dist(rng);
       std::string slot_data(slot_size, 'A');
 
-      Status write_status = context.append_slot(
-          /*min_edit_offset_lower_bound=*/EditOffset{0},
-          slot_data.size(),
-          [&slot_data, &writer, &offsets](FirstVisitToBlock,
-                                          ChangeLogBlock* block,
-                                          MutableBuffer buffer,
-                                          EditOffset offset) {
-            VLOG(1) << "Appending block with lower_bound: " << block->edit_offset_lower_bound()
-                    << ", on slot: " << offset;
-            offsets.insert(offset.value());
-            std::memcpy(buffer.data(), slot_data.data(), slot_data.size());
+      Status write_status = batt::StatusCode::kUnknown;
 
-            (*writer)->trim(offset + EditOffsetDelta{(i64)slot_data.size()}).IgnoreError();
-          });
+      for (;;) {
+        write_status = context.append_slot(
+            /*min_edit_offset_lower_bound=*/EditOffset{0},
+            slot_data.size(),
+            offsets.empty() ? batt::WaitForResource::kTrue : batt::WaitForResource::kFalse,
+            [&slot_data, &offsets, &expected_next_offset](FirstVisitToBlock,
+                                                          ChangeLogBlock* block,
+                                                          MutableBuffer buffer,
+                                                          EditOffset offset) {
+              VLOG(1) << "Appending block with lower_bound: " << block->edit_offset_lower_bound()
+                      << ", on slot: " << offset << " size=" << slot_data.size();
+
+              BATT_CHECK_EQ(offset.value(), expected_next_offset);
+              expected_next_offset += slot_data.size();
+
+              VLOG(1) << " (updated)" << BATT_INSPECT(expected_next_offset);
+
+              offsets.emplace(/*lower_bound=*/offset.value(),
+                              /*upper_bound=*/offset.value() + (i64)slot_data.size());
+
+              BATT_CHECK_GE(buffer.size(), slot_data.size());
+
+              std::memcpy(buffer.data(), slot_data.data(), slot_data.size());
+            });
+
+        if (write_status.ok() || write_status != batt::StatusCode::kGrantUnavailable ||
+            offsets.empty()) {
+          break;
+        }
+
+        // If the append failed because we ran out of blocks, then try trimming the next offset and
+        // retrying.
+        //
+        VLOG(1) << "trimming to " << offsets.begin()->second;
+        Status trim_status = (*writer)->trim(EditOffset{offsets.begin()->second});
+        ASSERT_TRUE(trim_status.ok()) << BATT_INSPECT(trim_status);
+        offsets.erase(offsets.begin());
+        ++slots_trimmed;
+      }
 
       if (write_status.ok()) {
         successful_writes++;
         total_written += slot_size;
       } else {
-        ASSERT_TRUE(write_status.ok()) << BATT_INSPECT(write_status);
+        ASSERT_TRUE(write_status.ok()) << BATT_INSPECT(write_status) << BATT_INSPECT_RANGE(offsets);
       }
     }
 
     // Give writer time to flush remaining data
     //
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    ASSERT_TRUE((*writer)->wait_for_flush());
 
     (*writer)->halt();
     (*writer)->join();
@@ -518,12 +553,13 @@ TEST_F(ChangeLogTest, ExceedCapacityWrapAround)
 
     int slots_read = 0;
     std::unordered_set<i64> unique_blocks;
-    auto visitor_fn = [&](FirstVisitToBlock,
+    auto visitor_fn = [&](FirstVisitToBlock first_visit,
                           ChangeLogBlock* block,
                           EditOffset edit_offset,
                           ConstBuffer payload) -> Status {
       VLOG(1) << "Reading block with lower_bound: " << block->edit_offset_lower_bound()
-              << ", on slot: " << edit_offset << ", payload size: " << payload.size();
+              << ", on slot: " << edit_offset << ", payload size: " << payload.size()
+              << BATT_INSPECT(first_visit) << BATT_INSPECT(block->get_block_index());
 
       slots_read++;
 
@@ -538,8 +574,9 @@ TEST_F(ChangeLogTest, ExceedCapacityWrapAround)
     ASSERT_TRUE(visit_status.ok()) << BATT_INSPECT(visit_status);
 
     EXPECT_GT(slots_read, 0);
-    EXPECT_EQ(unique_blocks.size(), config.block_count.value());
-    EXPECT_EQ(slots_read, successful_writes - offsets.size());
+    EXPECT_LE(unique_blocks.size(), config.block_count.value());
+    EXPECT_EQ(slots_read, successful_writes - slots_trimmed);
+    EXPECT_TRUE(offsets.empty());
   }
 }
 
@@ -593,7 +630,7 @@ TEST_F(ChangeLogTest, CorruptBlockInMiddle)
 
     // Wait for writer to flush all data
     //
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    ASSERT_TRUE((*writer)->wait_for_flush());
 
     (*writer)->halt();
     (*writer)->join();

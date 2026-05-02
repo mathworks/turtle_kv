@@ -15,6 +15,8 @@
 
 #include <turtle_kv/import/interval.hpp>
 
+#include <batteries/operators.hpp>
+
 namespace turtle_kv {
 
 struct PackedChangeLogMetaState;
@@ -41,6 +43,8 @@ struct ChangeLogMetaState {
 
   void pack_to(PackedChangeLogMetaState* packed) const noexcept;
 };
+
+BATT_OBJECT_PRINT_IMPL((inline), ChangeLogMetaState, (block_range, trim_edit_offset))
 
 struct PackedChangeLogMetaState {
   // The physical address in the ChangeLogFile of the oldest known

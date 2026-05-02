@@ -28,13 +28,11 @@ namespace turtle_kv {
 template <MemTableStorage StorageT, MemTableAllocationTracker AllocationTrackerT>
 /*explicit*/ BasicMemTable<StorageT, AllocationTrackerT>::BasicMemTable(
     AllocationTrackerT& allocation_tracker,
-    const StorageWriter& storage_writer,
     MemTableMetrics& metrics,
     EditOffset edit_offset_lower_bound,
     usize max_bytes_per_batch,
     usize max_batch_count) noexcept
     : allocation_tracker_{allocation_tracker}
-    , storage_writer_{storage_writer}
     , metrics_{metrics}
     , edit_offset_lower_bound_{edit_offset_lower_bound}
     , max_bytes_per_batch_{BATT_CHECKED_CAST(i64, max_bytes_per_batch)}
@@ -201,7 +199,8 @@ Optional<ValueView> BasicMemTable<StorageT, AllocationTrackerT>::finalized_get(
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <MemTableStorage StorageT, MemTableAllocationTracker AllocationTrackerT>
-bool BasicMemTable<StorageT, AllocationTrackerT>::finalize() noexcept
+bool BasicMemTable<StorageT, AllocationTrackerT>::finalize(
+    const SmallFn<EditOffset()>& get_next_edit_offset) noexcept
 {
   const i64 prior_committed = this->committed_bytes_total_->fetch_or(Self::kFinalizedMask);
   const i64 prior_prepared = this->prepared_bytes_total_->fetch_or(Self::kFinalizedMask);
@@ -225,7 +224,7 @@ bool BasicMemTable<StorageT, AllocationTrackerT>::finalize() noexcept
   // If this is the first thread to call finalize, then we must set the upper bound.
   //
   if (newly_finalized) {
-    const EditOffset finalized_upper_bound = this->storage_writer_.next_edit_offset();
+    const EditOffset finalized_upper_bound = get_next_edit_offset();
     BATT_CHECK_GE(finalized_upper_bound, this->edit_offset_lower_bound_);
     this->edit_offset_upper_bound_.store(finalized_upper_bound.value());
     this->edit_offset_upper_bound_.notify_all();

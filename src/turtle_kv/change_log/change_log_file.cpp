@@ -19,16 +19,16 @@ namespace turtle_kv {
 
   BATT_CHECK_GE(config.block0_offset, 4096) << "block0 must not overlap the 4k meta block!";
 
-  StatusOr<int> fd = llfs::create_file_read_write(path.string(), llfs::OpenForAppend{false});
-  BATT_REQUIRE_OK(fd);
+  BATT_ASSIGN_OK_RESULT(int fd,
+                        llfs::create_file_read_write(path.string(), llfs::OpenForAppend{false}));
 
   auto on_scope_exit = batt::finally([fd] {
-    llfs::close_fd(*fd).IgnoreError();
+    llfs::close_fd(fd).IgnoreError();
   });
 
   const u64 file_size = config.block0_offset + (config.block_size * config.block_count);
 
-  BATT_REQUIRE_OK(llfs::truncate_fd(*fd, file_size));
+  BATT_REQUIRE_OK(llfs::truncate_fd(fd, file_size));
 
   PackedMetaBlock meta_block;
 
@@ -36,7 +36,7 @@ namespace turtle_kv {
 
   ChangeLogMetaState::with_initial_values().pack_to(&meta_block.meta_state);
 
-  BATT_REQUIRE_OK(llfs::write_fd(*fd,
+  BATT_REQUIRE_OK(llfs::write_fd(fd,
                                  ConstBuffer{
                                      &meta_block,
                                      sizeof(PackedMetaBlock),
@@ -93,7 +93,10 @@ namespace turtle_kv {
     , file_{std::move(file)}
     , config_{config}
 {
-  BATT_CHECK_EQ(this->config_.block_size & 4095, 0);
+  // TODO [tastolfi 2026-05-02] Fix tests so we can assert llfs::kDirectIOBlockSize - 1 instead of
+  // 511.
+  //
+  BATT_CHECK_EQ(this->config_.block_size & 511, 0);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -104,7 +107,7 @@ ChangeLogFile::~ChangeLogFile() noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status ChangeLogFile::read_meta_block(PackedMetaBlock& meta_block) const noexcept
+Status ChangeLogFile::read_meta_block(PackedMetaBlock& meta_block) noexcept
 {
   static_assert(alignof(meta_block) == 4096);
   static_assert(sizeof(meta_block) == 4096);
@@ -118,10 +121,10 @@ Status ChangeLogFile::read_meta_block(PackedMetaBlock& meta_block) const noexcep
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status ChangeLogFile::write_meta_block(const PackedMetaBlock& meta_block) const noexcept
+Status ChangeLogFile::write_meta_block(const PackedMetaBlock& meta_block) noexcept
 {
-  static_assert(alignof(meta_block) == 4096);
-  static_assert(sizeof(meta_block) == 4096);
+  static_assert(alignof(PackedMetaBlock) == 4096);
+  static_assert(sizeof(PackedMetaBlock) == 4096);
 
   BATT_CHECK_EQ(meta_block.config.unpack(), this->config());
 

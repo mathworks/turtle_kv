@@ -359,6 +359,8 @@ class KVStore : public Table
 
   std::unique_ptr<ChangeLogWriter> change_log_writer_;
 
+  Optional<EditOffset> next_edit_offset_to_recover_;
+
   // How frequently we take checkpoints, where the units of distance are number of MemTables.
   // (i.e. if checkpoint_distance_ == 3, we take a checkpoint every time 3 MemTables are filled up)
   //

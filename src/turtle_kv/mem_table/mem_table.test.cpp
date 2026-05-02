@@ -92,7 +92,6 @@ class MemTableTest : public ::testing::Test
   void SetUp() override
   {
     this->mem_table.emplace(this->allocation_tracker,
-                            this->storage_writer,
                             this->mem_table_metrics,
                             EditOffset{0},
                             this->max_bytes_per_batch,

@@ -9,9 +9,11 @@
 #pragma once
 #define TURTLE_KV_CHANGE_LOG_BLOCK_HPP
 
-#include <turtle_kv/api_types.hpp>
-
+#include <turtle_kv/change_log/change_log_block_memory.hpp>
+#include <turtle_kv/change_log/change_log_config.hpp>
 #include <turtle_kv/change_log/edit_offset.hpp>
+
+#include <turtle_kv/api_types.hpp>
 
 #include <turtle_kv/import/buffer.hpp>
 #include <turtle_kv/import/int_types.hpp>
@@ -24,6 +26,7 @@
 #include <batteries/async/latch.hpp>
 #include <batteries/require.hpp>
 
+#include <llfs/ioring.hpp>
 #include <llfs/ioring_file.hpp>
 
 #include <boost/intrusive_ptr.hpp>
@@ -42,6 +45,7 @@ class ChangeLogBlock
  public:
   using Self = ChangeLogBlock;
 
+  static constexpr usize kHeaderSize = 64;
   static constexpr usize kDefaultAlign = 4096;
   static constexpr usize kDefaultSize = 8192;
   static constexpr usize kMinSize = 512;
@@ -77,68 +81,7 @@ class ChangeLogBlock
   static_assert(sizeof(SlotInfo) == 2);
   static_assert(alignof(SlotInfo) == 2);
 
-  class ScopedMemory
-  {
-   public:
-    using Self = ScopedMemory;
-
-    explicit ScopedMemory(void* ptr, usize size) noexcept : buffer_{ptr, size}
-    {
-    }
-
-    ScopedMemory(const Self&) = delete;
-    Self& operator=(const Self&) = delete;
-
-    ScopedMemory(Self&& other) noexcept : buffer_{std::exchange(other.buffer_, {})}
-    {
-    }
-
-    Self& operator=(Self&& other) noexcept
-    {
-      if (this != &other) {
-        // Free any memory currently owned by *this beore overwriting it.
-        //
-        if (this->buffer_.data() != nullptr) {
-          free(this->buffer_.data());
-        }
-
-        this->buffer_ = std::exchange(other.buffer_, {});
-      }
-      return *this;
-    }
-
-    ~ScopedMemory() noexcept
-    {
-      if (this->buffer_.data() != nullptr) {
-        free(this->buffer_.data());
-      }
-    }
-
-    void* data() const
-    {
-      return this->buffer_.data();
-    }
-
-    usize size() const
-    {
-      return this->buffer_.size();
-    }
-
-    MutableBuffer buffer() const
-    {
-      return this->buffer_;
-    }
-
-    void* release_ownership()
-    {
-      void* released_ptr = this->buffer_.data();
-      this->buffer_ = MutableBuffer{};
-      return released_ptr;
-    }
-
-   private:
-    MutableBuffer buffer_;
-  };
+  using ScopedMemory = ChangeLogBlockMemory;
 
   /** \brief ChangeLogBlock objects must be deallocated by calling ChangeLogBlock::remove_ref(); the
    * delete operator is disabled to enforce this.
@@ -152,9 +95,7 @@ class ChangeLogBlock
 
   /** \brief Allocates and returns a buffer of the specifed size.
    */
-  static ChangeLogBlock* allocate(EditOffset edit_offset_lower_bound,
-                                  batt::Grant&& grant,
-                                  usize n_bytes) noexcept;
+  static ChangeLogBlock* allocate(batt::Grant&& grant, usize n_bytes) noexcept;
 
   /** \brief Deallocates the dynamic memory of block.
    */
@@ -207,6 +148,12 @@ class ChangeLogBlock
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  void init_edit_offset_lower_bound(EditOffset edit_offset)
+  {
+    BATT_CHECK_EQ(this->slot_count(), 0);
+    this->edit_offset_lower_bound_ = edit_offset.value();
+  }
+
   /** \brief Returns the greatest EditOffset value that is not less than the slots in this Block.
    */
   EditOffset edit_offset_lower_bound() const noexcept
@@ -233,6 +180,12 @@ class ChangeLogBlock
     return this->edit_offset_lower_bound() + slot_delta +
            EditOffsetDelta{static_cast<i64>(last_slot.size())};
   }
+
+  /** \brief Called during recovery, to reset the block state so that uncoverable slots are erased.
+   */
+  Status truncate_edit_offset_upper_bound(EditOffset recovered_upper_bound,
+                                          const ChangeLogConfig& config,
+                                          llfs::IoRing::File& log_file) noexcept;
 
   /** \brief Returns the EditOffset interval spanned by this block.
    */
@@ -342,6 +295,10 @@ class ChangeLogBlock
    */
   ConstBuffer get_slot(usize i) const noexcept;
 
+  /** \brief Returns the size of the given slot.
+   */
+  usize slot_size(usize i) const noexcept;
+
   /** \brief Returns physical block index on the change log file, i.e. the block's index in the
    * file, from the 0th block.
    */
@@ -386,12 +343,17 @@ class ChangeLogBlock
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  static constexpr u16 initial_space(u16 block_size) noexcept
+  {
+    return block_size - (ChangeLogBlock::kHeaderSize + sizeof(ChangeLogBlock::SlotInfo) * 2);
+  }
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
   /** \brief Constructs a new ChangeLogBlock; must only be called from (static)
    * ChangeLogBlock::allocate.
    */
-  explicit ChangeLogBlock(EditOffset edit_offset_lower_bound,
-                          batt::Grant&& grant,
-                          usize block_size) noexcept;
+  explicit ChangeLogBlock(batt::Grant&& grant, usize block_size) noexcept;
 
   /** \brief Marks the ChangeLogBlock as expired; the Grant is released.
    */
@@ -454,6 +416,11 @@ class ChangeLogBlock
     return *this->ephemeral_state_ptr();
   }
 
+  /** \brief Called during recovery (from truncate_edit_offset_upper_bound), to roll-back slots
+   * whose edit offset is after some unrecoverable slot.
+   */
+  void revert_last_slot() noexcept;
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
   /** \brief Initialized to (int)this XOR kMagic while this object is valid; set to kExpired when
    * it is destructed.
@@ -506,7 +473,7 @@ class ChangeLogBlock
   static_assert(sizeof(EphemeralStateStorage) == 8);
 };
 
-static_assert(sizeof(ChangeLogBlock) == 64);
+static_assert(sizeof(ChangeLogBlock) == ChangeLogBlock::kHeaderSize);
 
 /** \brief Free function necessary for intrusive_ptr usage. Adds a reference to the ChangeLogBlock.
  */

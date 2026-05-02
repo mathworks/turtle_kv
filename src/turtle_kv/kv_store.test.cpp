@@ -533,7 +533,7 @@ TEST_P(CheckpointTest, CheckpointRecovery)
 // TODO: [Gabe Bornstein 4/9/26] Use TEST_P here instead. Test with a different number of puts,
 // ensuring we fill up several memtables, and dont entirely fill up memtables.
 //
-TEST_F(KVStoreTest, DISABLED_KVStoreRecovery)
+TEST_F(KVStoreTest, KVStoreRecovery)
 {
   std::filesystem::path test_kv_store_dir = this->data_root / "turtle_kv_Test" / "kvstore_recovery";
   std::map<std::string, std::string> expected_keys_values;

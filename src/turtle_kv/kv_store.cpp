@@ -157,8 +157,6 @@ u64 query_page_loader_reset_every_n()
             (kv_store_config.change_log_size_bytes + ChangeLogFile::kDefaultBlockSize - 1) /
                 ChangeLogFile::kDefaultBlockSize)},
         .block0_offset = FileOffset{ChangeLogFile::kDefaultBlock0Offset},
-        .lower_bound = 0,
-        .upper_bound = 0,
     };
 
     BATT_REQUIRE_OK(ChangeLogFile::create(dir_path / change_log_file_name(),  //
@@ -384,7 +382,6 @@ u64 query_page_loader_reset_every_n()
                               boost::intrusive_ptr<llfs::StorageContext>&& storage_context,
                               const TreeOptions& tree_options,
                               const RuntimeOptions& runtime_options,
-                              std::unique_ptr<ChangeLogWriter>&& change_log_writer,
                               std::unique_ptr<llfs::Volume>&& checkpoint_log,
                               Checkpoint&& latest_recovered_checkpoint) noexcept
     : metrics_{}
@@ -396,7 +393,8 @@ u64 query_page_loader_reset_every_n()
     , tree_options_{tree_options}
     , runtime_options_{runtime_options}
     , mem_table_allocation_tracker_{this->page_cache(), this->metrics_.overcommit}
-    , change_log_writer_{std::move(change_log_writer)}
+    , change_log_writer_{nullptr}
+    , next_edit_offset_to_recover_{None}
     , checkpoint_distance_{this->runtime_options_.initial_checkpoint_distance}
     , checkpoint_log_{std::move(checkpoint_log)}
     , filter_page_write_state_{FilterPageWriteState::make_new()}
@@ -596,7 +594,6 @@ boost::intrusive_ptr<MemTable> KVStore::create_mem_table(EditOffset edit_offset_
 
   boost::intrusive_ptr<MemTable> mem_table{new MemTable{
       this->mem_table_allocation_tracker_,
-      *this->change_log_writer_,
       this->metrics_.mem_table,
       edit_offset_lower_bound,
       /*max_bytes_per_batch=*/this->tree_options_.flush_size(),
@@ -723,10 +720,16 @@ Status KVStore::recover_put(FirstVisitToBlock first_visit,
     // 3. Retry the put.
     //
     BATT_CHECK_NOT_NULLPTR(full_mem_table);
+
+    this->next_edit_offset_to_recover_ = edit_offset;
+    auto on_scope_exit = batt::finally([&] {
+      this->next_edit_offset_to_recover_ = None;
+    });
+
     BATT_REQUIRE_OK(this->finalize_mem_table(std::move(full_mem_table)));
 
     // TODO [tastolfi 2026-04-07] maybe also the back-pressure stuff (i.e., waiting for the deltas
-    // to shrink?)
+    // to shrink?) --- to keep memory footprint under control during recovery
   }
 }
 
@@ -989,7 +992,12 @@ Status KVStore::remove(const KeyView& key) noexcept /*override*/
 //
 Status KVStore::finalize_mem_table(boost::intrusive_ptr<MemTable>&& old_mem_table)
 {
-  const bool newly_finalized = old_mem_table->finalize();
+  const bool newly_finalized = old_mem_table->finalize([this]() -> EditOffset {
+    if (this->change_log_writer_) {
+      return this->change_log_writer_->next_edit_offset();
+    }
+    return this->next_edit_offset_to_recover_.value_or_panic();
+  });
   const EditOffset current_edit_offset = old_mem_table->edit_offset_upper_bound();
 
   if (newly_finalized) {
@@ -1112,7 +1120,7 @@ Status KVStore::push_mem_table_to_channel(boost::intrusive_ptr<MemTable>&& mem_t
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status KVStore::run_recovery(const std::filesystem::path& change_log_file_path)
+Status KVStore::run_recovery(const std::filesystem::path& change_log_file_path) noexcept
 {
   RecoveredChangeLogState recovered_state;
 
@@ -1124,46 +1132,55 @@ Status KVStore::run_recovery(const std::filesystem::path& change_log_file_path)
   {
     // Recover MemTable's from the ChangeLog
     //
-    BATT_ASSIGN_OK_RESULT(std::unique_ptr<ChangeLogReader> log, ChangeLogReader::open(path));
+    BATT_ASSIGN_OK_RESULT(std::unique_ptr<ChangeLogReader> log,
+                          ChangeLogReader::open(change_log_file_path));
 
-    // TODO: [Gabe Bornstein 4/30/26] Update to start at stored ChangeLogFile::Config values.
+    // Our visitor must build MemTables by repeatedly calling recover_put on each slot.
     //
-    // Index of block in ChangeLogFile.
+    const auto visitor_fn = [&](FirstVisitToBlock first_visit,
+                                ChangeLogBlock* block,
+                                EditOffset edit_offset,
+                                ConstBuffer payload) -> batt::Status {
+      // Skip slots already recovered by checkpoint
+      //
+      if (edit_offset < checkpoint_upper_bound) {
+        return batt::OkStatus();
+      }
+
+      // Recover this slot.
+      //
+      batt::Status recovered_slot_status =
+          this->recover_put(first_visit, block, edit_offset, payload);
+      BATT_REQUIRE_OK(recovered_slot_status);
+
+      // Success!
+      //
+      return batt::OkStatus();
+    };
+
+    // Visit all recoverable slots and retrieve the RecoveredChangeLogState.
     //
-    Optional<BlockIndex> active_lower_bound = BlockIndex{0};
-
-    // TODO: [Gabe Bornstein 4/30/26] This is the incorrect value to initialize to.
-    //
-    EditOffset min_edit_offset_upper_bound = checkpoint_upper_bound;
-
-    Status status = log->visit_slots(
-        [&](FirstVisitToBlock first_visit,
-            ChangeLogBlock* block,
-            EditOffset edit_offset,
-            ConstBuffer payload) -> batt::Status {
-          // Skip slots already recovered by checkpoint
-          //
-          if (edit_offset < checkpoint_upper_bound) {
-            return batt::OkStatus();
-          }
-
-          batt::Status recovered_slot_status =
-              this->recover_put(first_visit, block, edit_offset, payload);
-          BATT_REQUIRE_OK(recovered_slot_status);
-
-          return batt::OkStatus();
-        },
-        &recovered_state);
+    Status status = log->visit_slots(visitor_fn, &recovered_state);
 
     BATT_REQUIRE_OK(status);
   }
 
-  BATT_ASSIGN_OK_RESULT(this->change_log_writer_,
-                        ChangeLogWriter::open(change_log_file_path, recovered_state));
+  // Adjust the trim point to match the checkpoint upper bound.  This avoids having to trim after we
+  // create the writer.
+  //
+  BATT_CHECK_LE(recovered_state.trim_edit_offset, checkpoint_upper_bound);
+  recovered_state.trim_edit_offset = checkpoint_upper_bound;
 
-  BATT_REQUIRE_OK(this->change_log_writer_->start(this->task_scheduler_));
+  // Now that we have recovered the change log state, we can create a new writer for future
+  // apppends.
+  //
+  BATT_ASSIGN_OK_RESULT(
+      this->change_log_writer_,
+      ChangeLogWriter::open(change_log_file_path, /*options=*/None, recovered_state));
 
-  BATT_REQUIRE_OK(this->change_log_writer_->trim(checkpoint_upper_bound));
+  // Important!  Don't forget to start the background flusher task.
+  //
+  this->change_log_writer_->start(this->task_scheduler_.schedule_task());
 
   return OkStatus();
 }

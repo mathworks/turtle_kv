@@ -25,9 +25,7 @@ namespace turtle_kv {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-/*static*/ ChangeLogBlock* ChangeLogBlock::allocate(EditOffset edit_offset_lower_bound,
-                                                    batt::Grant&& grant,
-                                                    usize n_bytes) noexcept
+/*static*/ ChangeLogBlock* ChangeLogBlock::allocate(batt::Grant&& grant, usize n_bytes) noexcept
 {
   Self::metrics().block_alloc_count.add(1);
 
@@ -35,8 +33,7 @@ namespace turtle_kv {
 
   void* data = memory.release_ownership();
 
-  ChangeLogBlock* buffer =
-      new (data) ChangeLogBlock{edit_offset_lower_bound, std::move(grant), n_bytes};
+  ChangeLogBlock* buffer = new (data) ChangeLogBlock{std::move(grant), n_bytes};
 
   return buffer;
 }
@@ -86,15 +83,12 @@ namespace turtle_kv {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-/*explicit*/ ChangeLogBlock::ChangeLogBlock(EditOffset edit_offset_lower_bound,
-                                            batt::Grant&& grant,
-                                            usize block_size) noexcept
+/*explicit*/ ChangeLogBlock::ChangeLogBlock(batt::Grant&& grant, usize block_size) noexcept
     : magic_{ChangeLogBlock::kMagic}
-    , edit_offset_lower_bound_{edit_offset_lower_bound.value()}
+    , edit_offset_lower_bound_{0}
     , block_size_{BATT_CHECKED_CAST(u16, block_size)}
     , slot_count_{0}
-    , space_{BATT_CHECKED_CAST(u16,
-                               this->block_size_ - (sizeof(ChangeLogBlock) + sizeof(SlotInfo) * 2))}
+    , space_{ChangeLogBlock::initial_space(this->block_size_)}
     , ref_count_{1}
     , next_{nullptr}
     , xxh3_checksum_{0}
@@ -183,6 +177,14 @@ ConstBuffer ChangeLogBlock::get_slot(usize i) const noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+usize ChangeLogBlock::slot_size(usize i) const noexcept
+{
+  const SlotInfo* p_slot = (this->slots_rbegin() - i);
+  return static_cast<usize>(p_slot[-1].offset) - static_cast<usize>(p_slot[0].offset);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 Optional<BlockIndex> ChangeLogBlock::get_block_index()
 {
   return this->ephemeral_state().block_index_;
@@ -253,6 +255,63 @@ void ChangeLogBlock::check_buffer_invariant() const noexcept
       << BATT_INSPECT(sizeof(Self)) << BATT_INSPECT(this->slots_total_size())
       << BATT_INSPECT(this->space_) << BATT_INSPECT(sizeof(SlotInfo))
       << BATT_INSPECT(this->slot_count_);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Status ChangeLogBlock::truncate_edit_offset_upper_bound(EditOffset recovered_upper_bound,
+                                                        const ChangeLogConfig& config,
+                                                        llfs::IoRing::File& log_file) noexcept
+{
+  // If this block is already below the recovered bound, nothing needs to be done!
+  //
+  if (this->edit_offset_upper_bound() <= recovered_upper_bound) {
+    return OkStatus();
+  }
+
+  // First reset the checksum seed, to indicate this block is no longer finalized.
+  //
+  this->xxh3_seed_ = 0;
+  this->xxh3_checksum_ = 0;
+
+  // If this block is entirely after the recovered upper bound, then clear it out.
+  //
+  if (this->edit_offset_lower_bound() >= recovered_upper_bound) {
+    this->edit_offset_lower_bound_ = recovered_upper_bound.value();
+    this->slot_count_ = 0;
+    this->space_ = ChangeLogBlock::initial_space(this->block_size_);
+
+  } else {
+    // Remove slots until we are under the limit.
+    //
+    while (this->slot_count() > 0 && this->edit_offset_upper_bound() > recovered_upper_bound) {
+      this->revert_last_slot();
+    }
+
+    if (this->slot_count() == 0) {
+      this->edit_offset_lower_bound_ = recovered_upper_bound.value();
+    }
+  }
+  this->check_buffer_invariant();
+
+  // Data checksums need to be recalculated.
+  //
+  ConstBuffer data_to_write = this->prepare_to_flush();
+  FileOffset file_offset = config.block_offset_from_index(this->get_block_index().value_or_panic());
+
+  // Flush the updated block.
+  //
+  BATT_REQUIRE_OK(log_file.write_all(file_offset, data_to_write));
+
+  return OkStatus();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void ChangeLogBlock::revert_last_slot() noexcept
+{
+  this->space_ += this->slot_size(this->slot_count_ - 1) + sizeof(SlotInfo);
+  this->slot_count_ -= 1;
 }
 
 }  // namespace turtle_kv

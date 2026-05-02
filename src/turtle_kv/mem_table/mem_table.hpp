@@ -36,6 +36,7 @@
 #include <turtle_kv/import/int_types.hpp>
 #include <turtle_kv/import/optional.hpp>
 #include <turtle_kv/import/slice.hpp>
+#include <turtle_kv/import/small_fn.hpp>
 #include <turtle_kv/import/status.hpp>
 
 #include <llfs/page_cache.hpp>
@@ -139,7 +140,6 @@ class BasicMemTable : public MemTableBase
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   explicit BasicMemTable(AllocationTracker& allocation_tracker,
-                         const StorageWriter& storage_writer,
                          MemTableMetrics& metrics,
                          EditOffset edit_offset_lower_bound,
                          usize max_bytes_per_batch,
@@ -185,7 +185,7 @@ class BasicMemTable : public MemTableBase
    *
    * \return true iff this is the first call to finalize for this MemTable.
    */
-  [[nodiscard]] bool finalize() noexcept;
+  [[nodiscard]] bool finalize(const SmallFn<EditOffset()>& get_next_edit_offset) noexcept;
 
   /** \brief Blocks the caller until the MemTable is finalized; *does not cause the MemTable to
    * become finalized*.
@@ -307,8 +307,6 @@ class BasicMemTable : public MemTableBase
   std::atomic<u64> magic_num_{Self::kAliveMagicNum};
 
   AllocationTracker& allocation_tracker_;
-
-  const StorageWriter& storage_writer_;
 
   MemTableMetrics& metrics_;
 

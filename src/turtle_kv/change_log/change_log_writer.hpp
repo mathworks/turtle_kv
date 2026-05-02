@@ -29,8 +29,10 @@
 #include <batteries/async/task_scheduler.hpp>
 #include <batteries/interval.hpp>
 
+#include <chrono>
 #include <concepts>
 #include <ranges>
+#include <thread>
 
 namespace turtle_kv {
 
@@ -228,6 +230,15 @@ class ChangeLogWriter
   };
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+  //
+  struct BlockStats {
+    i64 total_count;
+    i64 free_count;
+    i64 reserved_count;
+    i64 active_count;
+  };
+
+  //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 
   static StatusOr<std::unique_ptr<ChangeLogWriter>> open_or_create(
       const std::filesystem::path& path,
@@ -238,8 +249,8 @@ class ChangeLogWriter
 
   static StatusOr<std::unique_ptr<ChangeLogWriter>> open(
       const std::filesystem::path& path,
-      const Optional<ChangeLogWriter::Options>& maybe_options = None,
-      const Optional<RecoveredChangeLogState>& recovered_state = None) noexcept;
+      Optional<ChangeLogWriter::Options> options = None,
+      Optional<RecoveredChangeLogState> recovered_state = None) noexcept;
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -314,6 +325,28 @@ class ChangeLogWriter
    */
   Status trim(EditOffset new_active_lower_bound);
 
+  /** \brief Returns the number of blocks in each state: free, reserved, active.
+   */
+  BlockStats get_block_stats() noexcept;
+
+  [[nodiscard]] bool wait_for_flush(
+      std::chrono::milliseconds poll_interval_ms = std::chrono::milliseconds(1),
+      usize max_poll_cycles = 3000) noexcept
+  {
+    for (usize cycle_i = 0; cycle_i < max_poll_cycles; ++cycle_i) {
+      BlockStats stats = this->get_block_stats();
+
+      if (stats.reserved_count == 0) {
+        return true;
+      }
+
+      if (batt::Task::sleep(poll_interval_ms)) {
+        break;
+      }
+    }
+    return false;
+  }
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -362,18 +395,26 @@ class ChangeLogWriter
     ~State() noexcept;
   };
 
+  /** \brief Returned by various block writer pipeline functions to report on the total size and
+   * overhead percentage of blocks.
+   */
   struct BlockBufferStats {
     u64 user_bytes = 0;
     u64 total_bytes = 0;
 
     //----- --- -- -  -  -   -
 
-    bool is_under_target() const noexcept
+    /** \brief Returns true when the percentage of this->user_bytes relative to this->total_bytes is
+     * under the given target precentage.
+     */
+    bool is_under_target(
+        usize target_pct = ChangeLogWriter::kMinBlockDensityTargetPct) const noexcept
     {
-      return this->user_bytes * 100 <
-             this->total_bytes * ChangeLogWriter::kMinBlockDensityTargetPct;
+      return this->user_bytes * 100 < this->total_bytes * target_pct;
     }
 
+    /** \brief Returns the field-wise sum of this with other; does not modify either input object!
+     */
     BlockBufferStats operator+(const BlockBufferStats& other) const noexcept
     {
       return BlockBufferStats{
@@ -417,8 +458,7 @@ class ChangeLogWriter
   /** \brief Allocates and returns a new BlockBuffer of the configured size.  This function may
    * block waiting to acquire Grant from the Volume (i.e. Volume::reserve).
    */
-  auto allocate_buffer(EditOffset edit_offset_lower_bound,
-                       batt::WaitForResource wait_for_resource) noexcept -> StatusOr<BlockBuffer*>;
+  auto allocate_buffer(batt::WaitForResource wait_for_resource) noexcept -> StatusOr<BlockBuffer*>;
 
   /** \brief The background writer task; continuously polls all associated Contexts for new
    * data. When new data is found, it is merged in index-order and written in batches (as large
@@ -468,8 +508,13 @@ class ChangeLogWriter
    */
   Options options_;
 
+  /** \brief Pool from which block tokens are granted; this manages the space in the log, providing
+   * back-pressure when it fills up.
+   */
   batt::Grant::Issuer free_block_tokens_;
 
+  /** \brief Observability metrics for the log writer.
+   */
   Metrics metrics_;
 
   /** \brief The next unassigned EditOffset.
@@ -479,13 +524,6 @@ class ChangeLogWriter
   /** \brief Mutex-protected state for this object.
    */
   batt::Mutex<State> state_;
-
-  const usize max_batch_size_ =
-#if BATT_PLATFORM_IS_LINUX
-      IOV_MAX;
-#else
-      128 * kKiB / this->config().block_size;
-#endif
 
   /** \brief Buffer for updating the log meta-state while running.
    */
@@ -505,124 +543,98 @@ class ChangeLogWriter
 template <typename SerializeFn>
   requires std::
       invocable<SerializeFn&&, FirstVisitToBlock, ChangeLogBlock*, MutableBuffer, EditOffset>
-    inline Status ChangeLogWriter::Context::append_slot(EditOffset min_edit_offset_lower_bound,
-                                                        usize byte_size,
-                                                        batt::WaitForResource wait_for_resource,
-                                                        SerializeFn&& serialize_fn) noexcept
+    inline auto ChangeLogWriter::Context::append_slot(EditOffset min_edit_offset_lower_bound,
+                                                      usize byte_size,
+                                                      batt::WaitForResource wait_for_resource,
+                                                      SerializeFn&& serialize_fn) noexcept -> Status
 {
+  static constexpr i64 kBlockClusterMask =
+      ~((i64{1} << ChangeLogWriter::kBlockClusterLimitBits) - 1);
+
+  //----- --- -- -  -  -   -
+
   Context& context = *this;
   ChangeLogWriter& writer = this->writer_;
   auto first_visit_to_block = FirstVisitToBlock{false};
 
-  static constexpr i64 kBlockClusterMask =
-      ~((i64{1} << ChangeLogWriter::kBlockClusterLimitBits) - 1);
-
-  // Assign the EditOffset of the new slot.
-  //
-  const EditOffset slot_edit_offset{writer.next_edit_offset_.fetch_add(byte_size)};
+  i64 slot_size = (i64)byte_size;
 
   // Make sure there is a clean break between blocks every 2^kBlockClusterLimitBits.
   //
   min_edit_offset_lower_bound = EditOffset{
       std::max(min_edit_offset_lower_bound.value(),  //
-               slot_edit_offset.value() & kBlockClusterMask),
+               (writer.next_edit_offset_.load() + slot_size) & kBlockClusterMask),
   };
+
+  const usize space_needed = byte_size + sizeof(PackedEditOffsetDelta);
 
   // Grab a private buffer.
   //
   BlockBuffer* observed_head = nullptr;
   BlockBuffer* block_buffer = context.pop_buffer(observed_head);
   for (;;) {
-    // Enforce the constraint that the Block buffer we pass to serialize_fn *must* have an
-    // edit_offset_lower_bound at least as large as min_edit_offset_lower_bound.
-    //
-    if (block_buffer && block_buffer->edit_offset_lower_bound() < min_edit_offset_lower_bound) {
-      context.push_buffer(block_buffer, observed_head);
-      block_buffer = nullptr;
-      writer.metrics_.block_rebase_count.add(1);
-    }
-
-    const bool no_buffer = (block_buffer == nullptr);
-
-    // No buffer, no retry; there is no point attempting again if we had a fresh, empty buffer
-    // to begin with.
-    //
-    const bool no_retry = no_buffer;
-
     // If no buffer, allocate one.
     //
-    if (no_buffer) {
+    if (block_buffer == nullptr) {
       VLOG(1) << "ChangeLogWriter::append_slot - allocating new block buffer...";
-      BATT_CHECK_GE(slot_edit_offset, min_edit_offset_lower_bound);
-      BATT_ASSIGN_OK_RESULT(block_buffer,
-                            writer.allocate_buffer(slot_edit_offset, wait_for_resource));
+
+      BATT_ASSIGN_OK_RESULT(block_buffer, writer.allocate_buffer(wait_for_resource));
+
+      // If the slot data is too big to fit in an empty block buffer, this is a fatal error.
+      //
+      if (block_buffer->space() < space_needed) {
+        context.push_buffer(block_buffer, observed_head);
+        return batt::StatusCode::kOutOfRange;
+      }
       first_visit_to_block = FirstVisitToBlock{true};
+
       VLOG(1) << "ChangeLogWriter::append_slot - have new buffer!";
+    } else {
+      const bool buffer_edit_range_too_low =
+          (block_buffer->edit_offset_lower_bound() < min_edit_offset_lower_bound);
+
+      const bool buffer_too_full = (block_buffer->space() < space_needed);
+
+      // Try again once more with a fresh buffer.
+      //
+      if (buffer_edit_range_too_low || buffer_too_full) {
+        context.push_buffer(block_buffer, observed_head);
+        block_buffer = nullptr;
+        continue;
+      }
     }
-    BATT_CHECK_NOT_NULLPTR(block_buffer);
-    BATT_CHECK_GE(block_buffer->edit_offset_lower_bound(), min_edit_offset_lower_bound);
-    BATT_CHECK_LE(block_buffer->edit_offset_lower_bound(), slot_edit_offset);
+    BATT_ASSERT_NOT_NULLPTR(block_buffer);
+    BATT_ASSERT_GE(block_buffer->space(), space_needed);
+
+    //+++++++++++-+-+--+----- --- -- -  -  -   -
+    // Once we *know* we will succeed, and not before, we assign the slot edit offset.
+    //
+    const EditOffset slot_edit_offset{writer.next_edit_offset_.fetch_add(slot_size)};
+
+    if (first_visit_to_block) {
+      block_buffer->init_edit_offset_lower_bound(slot_edit_offset);
+    } else {
+      BATT_ASSERT_LE(block_buffer->edit_offset_lower_bound(), slot_edit_offset);
+    }
 
     // Serialize the payload.
     //
-    const usize space_available = block_buffer->space();
-    const usize space_needed = byte_size + sizeof(PackedEditOffsetDelta);
+    MutableBuffer slot_buffer = block_buffer->output_buffer(space_needed);
 
-    Status status;
-    usize bytes_to_commit = 0;
-
-    if (space_needed <= space_available) {
-      // Serialize the slot's edit offset delta at the beginning.
-      //
-      MutableBuffer slot_buffer = block_buffer->output_buffer(space_needed);
-
-      BATT_REQUIRE_OK(BlockBuffer::write_slot_edit_offset_delta(
-          slot_buffer,
-          (slot_edit_offset - block_buffer->edit_offset_lower_bound()).to_slot_delta()));
-
-      //----- --- -- -  -  -   -
-      BATT_FORWARD(serialize_fn)(first_visit_to_block, block_buffer, slot_buffer, slot_edit_offset);
-      //----- --- -- -  -  -   -
-
-      bytes_to_commit = space_needed;
-      status = OkStatus();
-
-    } else {
-      status = batt::StatusCode::kResourceExhausted;
-    }
-
-    {
-      // When we leave this scope block, give the BlockBuffer back to the Context so it can be
-      // (possibly) appended in the background.
-      //
-      auto on_scope_exit = batt::finally([&] {
-        context.push_buffer(block_buffer, observed_head);
-      });
-
-      // If there was room in the buffer, then `format_slot` will succeed; assign this slot an
-      // "index" (sequence number or logical time-stamp) and commit the newly copied data.
-      // (Remember, the scope guard above will take care of giving the BlockBuffer back to the
-      // Context)
-      //
-      if (status.ok()) {
-        block_buffer->commit_slot(/*n_bytes=*/bytes_to_commit);
-        return OkStatus();
-
-      } else {
-        VLOG(1) << "format_slot failed: " << status << BATT_INSPECT(no_buffer)
-                << BATT_INSPECT(no_retry) << BATT_INSPECT(space_available)
-                << BATT_INSPECT(byte_size) << BATT_INSPECT(space_needed);
-      }
-    }
-
-    if (no_retry) {
-      return status;
-    }
-
-    // Volume::format_slot only fails if there wasn't enough space; reset the buffer pointer and
-    // retry (we will allocate a new buffer at the top of loop).
+    // Serialize the slot's edit offset delta at the beginning.
     //
-    block_buffer = nullptr;
+    BATT_CHECK_OK(BlockBuffer::write_slot_edit_offset_delta(
+        slot_buffer,
+        (slot_edit_offset - block_buffer->edit_offset_lower_bound()).to_slot_delta()));
+
+    //----- --- -- -  -  -   -
+    BATT_FORWARD(serialize_fn)(first_visit_to_block, block_buffer, slot_buffer, slot_edit_offset);
+    //----- --- -- -  -  -   -
+
+    block_buffer->commit_slot(/*n_bytes=*/space_needed);
+    context.push_buffer(block_buffer, observed_head);
+
+    return OkStatus();
   }
 }
 

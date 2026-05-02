@@ -13,7 +13,12 @@
 
 #include <turtle_kv/api_types.hpp>
 
+#include <turtle_kv/import/constants.hpp>
 #include <turtle_kv/import/interval.hpp>
+
+#if BATT_PLATFORM_IS_LINUX
+#include <limits.h>
+#endif
 
 namespace turtle_kv {
 
@@ -31,6 +36,18 @@ struct ChangeLogConfig {
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   void pack_to(PackedChangeLogConfig* packed_config) const noexcept;
+
+  /** \brief The maximum number of blocks which can be written in a single multi-chunk write.
+   */
+  usize max_write_batch_size() const noexcept
+  {
+    return
+#if BATT_PLATFORM_IS_LINUX
+        IOV_MAX;
+#else
+        128 * kKiB / this->block_size;
+#endif
+  }
 
   /** \brief Returns the file offset corresponding to the end of the last block.
    */
@@ -65,6 +82,25 @@ struct ChangeLogConfig {
     return block_index;
   }
 
+  /** \brief Calculates and returns the maximum recovery block range, given the passed Interval.
+   */
+  Interval<BlockIndex> block_range_to_recover(
+      const Interval<BlockIndex>& read_block_range) const noexcept
+  {
+    Interval<BlockIndex> block_range = read_block_range;
+
+    // The lower bound is always exact, since it is written atomically to storage along with each
+    // update to the trim edit offset. However, the last true block may be up to
+    // `max_write_batch_size()` blocks after the saved upper bound, but it is never past the maximum
+    // (lower_bound + count).
+    //
+    block_range.upper_bound =
+        BlockIndex{std::min<i64>(read_block_range.upper_bound + this->max_write_batch_size(),
+                                 read_block_range.lower_bound + this->block_count)};
+
+    return block_range;
+  }
+
   /** \brief Increments the passed block index variable, with no wrap-around.
    */
   BlockIndex& increment_no_wrap(BlockIndex& block_index) const noexcept
@@ -81,6 +117,13 @@ struct ChangeLogConfig {
       block_index = BlockIndex{0};
     }
     return block_index;
+  }
+
+  /** \brief Returns a copy of the passed BlockIndex, wrapped so it fits within the valid range.
+   */
+  BlockIndex wrap_block_index(BlockIndex index) const noexcept
+  {
+    return BlockIndex{index % this->block_count};
   }
 
   /** \brief Increments the lower bound of the passed interval, wrapping around at
