@@ -221,7 +221,7 @@ Status Subtree::apply_batch_update(const TreeOptions& tree_options,
 
   // If this is the root level and tree needs to grow/shrink in height, do so now.
   //
-  if (is_root) {
+  if (is_root) {  // TODO [tastolfi 2026-05-04] maybe: `&& !is_root_viable(...)`?
     BATT_REQUIRE_OK(
         Subtree::make_root_viable(*new_subtree, tree_options, update.context, key_upper_bound));
   }
@@ -262,7 +262,8 @@ Status Subtree::apply_batch_update(const TreeOptions& tree_options,
       [&](const NeedsMerge& needs_merge) {
         // Only perform a flush and shrink if the root has a single pivot.
         //
-        if (!needs_merge.single_pivot) {
+        if (!needs_merge.single_pivot) {  // TODO [tastolfi 2026-05-04] duplicates `is_root_viable`
+                                          // -- can remove if we use `is_root_viable` instead.
           return OkStatus();
         }
 
@@ -321,6 +322,8 @@ Status Subtree::flush_and_shrink(BatchUpdateContext& context) noexcept
   // when all the levels of this node and its child will fit in a single buffer.
   //
   while (!is_root_viable(this->get_viability()) && retries < kMaxPivots) {
+    // TODO [tastolfi 2026-05-04] maybe: BATT_CHECK(root_needs_merge(this->get_viability()));
+
     ++retries;
 
     // First, try flushing. If flushing makes the root viable, return immediately.
@@ -575,8 +578,7 @@ Status Subtree::try_merge(BatchUpdateContext& context, Subtree&& sibling) noexce
 {
   BATT_CHECK(!this->locked_.load());
 
-  BATT_ASSIGN_OK_RESULT(i32 this_height,
-                        this->get_height(context.page_loader, context.overcommit));
+  BATT_ASSIGN_OK_RESULT(i32 this_height, this->get_height(context.page_loader, context.overcommit));
   BATT_ASSIGN_OK_RESULT(i32 sibling_height,
                         sibling.get_height(context.page_loader, context.overcommit));
 
@@ -641,7 +643,8 @@ Status Subtree::try_shrink() noexcept
       },
 
       [&](const std::unique_ptr<InMemoryLeaf>& leaf [[maybe_unused]]) -> StatusOr<Subtree> {
-        // If the root is a leaf and there are no items in the leaf, set the root to be an empty subtree.
+        // If the root is a leaf and there are no items in the leaf, set the root to be an empty
+        // subtree.
         //
         if (!leaf->get_item_count()) {
           return llfs::PageIdSlot::from_page_id(llfs::PageId{});
