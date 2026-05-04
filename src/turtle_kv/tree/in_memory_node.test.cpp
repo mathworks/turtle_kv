@@ -422,7 +422,6 @@ void SubtreeBatchUpdateScenario::run()
                                 IsRoot{true});
 
     ASSERT_TRUE(status.ok()) << BATT_INSPECT(status) << BATT_INSPECT(this->seed) << BATT_INSPECT(i);
-    ASSERT_FALSE(tree.is_serialized());
     ASSERT_FALSE(batt::is_case<NeedsSplit>(tree.get_viability()));
 
     if (my_id == 0) {

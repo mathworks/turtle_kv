@@ -221,7 +221,8 @@ Status Subtree::apply_batch_update(const TreeOptions& tree_options,
 
   // If this is the root level and tree needs to grow/shrink in height, do so now.
   //
-  if (is_root) {  // TODO [tastolfi 2026-05-04] maybe: `&& !is_root_viable(...)`?
+  SubtreeViability new_subtree_viability = new_subtree->get_viability();
+  if (is_root && !is_root_viable(new_subtree_viability)) { 
     BATT_REQUIRE_OK(
         Subtree::make_root_viable(*new_subtree, tree_options, update.context, key_upper_bound));
   }
@@ -260,13 +261,6 @@ Status Subtree::apply_batch_update(const TreeOptions& tree_options,
         return status;
       },
       [&](const NeedsMerge& needs_merge) {
-        // Only perform a flush and shrink if the root has a single pivot.
-        //
-        if (!needs_merge.single_pivot) {  // TODO [tastolfi 2026-05-04] duplicates `is_root_viable`
-                                          // -- can remove if we use `is_root_viable` instead.
-          return OkStatus();
-        }
-
         Status status = new_subtree.flush_and_shrink(update_context);
 
         if (!status.ok()) {
@@ -321,8 +315,9 @@ Status Subtree::flush_and_shrink(BatchUpdateContext& context) noexcept
   // TODO [vsilai 2026-04-28]: Consider allowing shrink with non-empty levels (pending bytes > 0),
   // when all the levels of this node and its child will fit in a single buffer.
   //
-  while (!is_root_viable(this->get_viability()) && retries < kMaxPivots) {
-    // TODO [tastolfi 2026-05-04] maybe: BATT_CHECK(root_needs_merge(this->get_viability()));
+  SubtreeViability root_viability = this->get_viability();
+  while (!is_root_viable(root_viability) && retries < kMaxPivots) {
+    BATT_CHECK(batt::is_case<NeedsMerge>(root_viability));
 
     ++retries;
 
@@ -340,6 +335,12 @@ Status Subtree::flush_and_shrink(BatchUpdateContext& context) noexcept
       BATT_REQUIRE_OK(this->try_shrink());
       retries = 0;
     }
+
+    root_viability = this->get_viability();
+  }
+
+  if (retries >= kMaxPivots) {
+    return batt::Status{batt::StatusCode::kInternal};
   }
 
   return OkStatus();
