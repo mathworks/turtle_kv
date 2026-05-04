@@ -737,6 +737,7 @@ Subtree InMemoryNode::shrink_or_panic()
 {
   BATT_CHECK_EQ(this->children.size(), 1);
   BATT_CHECK_EQ(this->pending_bytes.size(), 1);
+  // TODO [tastolfi 2026-05-04] CHECK that pending bytes is exact == true?
   BATT_CHECK_EQ(this->pending_bytes[0], 0);
 
   for (const auto& level : this->update_buffer.levels) {

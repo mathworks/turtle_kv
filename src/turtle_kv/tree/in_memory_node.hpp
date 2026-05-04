@@ -358,7 +358,9 @@ struct InMemoryNode {
 
       void push_front_pivots(usize node_pivot_count);
 
-      StatusOr<ValueView> find_key(const InMemoryNode& node, KeyQuery& query, i32 key_pivot_i) const;
+      StatusOr<ValueView> find_key(const InMemoryNode& node,
+                                   KeyQuery& query,
+                                   i32 key_pivot_i) const;
 
       /** \brief Merges this level with a "sibling" level from another node.
        *
@@ -550,7 +552,9 @@ struct InMemoryNode {
                         i32 left_pivot_i,
                         i32 right_pivot_i);
 
-      StatusOr<ValueView> find_key(const InMemoryNode& node, KeyQuery& query, i32 key_pivot_i) const;
+      StatusOr<ValueView> find_key(const InMemoryNode& node,
+                                   KeyQuery& query,
+                                   i32 key_pivot_i) const;
 
       Level merge(Level&& sibling_level, usize node_pivot_count);
 
@@ -765,6 +769,7 @@ struct InMemoryNode {
   Status try_flush(BatchUpdateContext& context);
 
   /** \brief Attempt to collapse one level of the tree. Returns the node's single pivot.
+   * TODO [tastolfi 2026-05-04] describe the conditions under which this fn will panic
    */
   Subtree shrink_or_panic();
 
