@@ -36,8 +36,8 @@ Status ScriptContext::run(script::ExecutionStrategy* exec, const YAML::Node& scr
   auto& commands = script::get_commands();
 
   for (const YAML::Node& command : script) {
-    BATT_REQUIRE_EQ(command.IsMap(), true);
-    BATT_REQUIRE_EQ(command.size(), 1);
+    BATT_REQUIRE_EQ(command.IsMap(), true) << batt::LogLevel::kWarning;
+    BATT_REQUIRE_EQ(command.size(), 1) << batt::LogLevel::kWarning;
 
     for (const auto& pair : command) {
       const std::string name = pair.first.as<std::string>();

@@ -310,6 +310,7 @@ StatusOr<usize> Parallel::activate(ExecutionStrategy*) /*override*/
         // The total number of operations to be executed by all threads.
         //
         const i64 op_count = BATT_CHECKED_CAST(i64, this->stage_ops_.size());
+        const i64 ops_per_thread_rem = (op_count % this->n_threads_);
 
         // Start with this thread, then attempt to steal work from other threads, in round-robin
         // order.
@@ -324,17 +325,25 @@ StatusOr<usize> Parallel::activate(ExecutionStrategy*) /*override*/
             if (next_op_i >= op_count) {
               break;
             }
+            BATT_ASSERT_EQ(next_op_i % this->n_threads_, shard_k);
+            BATT_ASSERT_EQ((next_op_i + kStepSize) % this->n_threads_, shard_k);
 
             // Calculate the end of the claimed operations.
             //
-            const i64 last_op_i = std::min(op_count + shard_k, next_op_i + kStepSize);
+            const i64 last_op_i =
+                std::min(op_count - ops_per_thread_rem + shard_k, next_op_i + kStepSize);
+
+            BATT_ASSERT_EQ((last_op_i + kStepSize) % this->n_threads_, shard_k);
 
             // Execute claimed operations.
             //
             for (; next_op_i != last_op_i; next_op_i += this->n_threads_) {
+              BATT_ASSERT_EQ(next_op_i % this->n_threads_, shard_k);
               BATT_ASSERT_LT(next_op_i, op_count);
+
               state.status.Update(execute_op(this->context_, this->stage_ops_[next_op_i]));
             }
+            BATT_ASSERT_EQ(next_op_i % this->n_threads_, shard_k);
           }
         }
       }

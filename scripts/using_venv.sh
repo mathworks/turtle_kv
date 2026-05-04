@@ -16,8 +16,7 @@ if [ ! -f "${build_dir}/venv.ts" ]; then
     source "${build_dir}/venv/bin/activate"
 
     pip install --upgrade pip
-    pip install matplotlib
-    pip install numpy
+    pip install -r "${script_dir}/requirements.txt"
 
     touch "${build_dir}/venv.ts"
 fi

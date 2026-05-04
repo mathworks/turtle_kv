@@ -857,6 +857,9 @@ Status ChangeLogWriter::trim(EditOffset new_trim_edit_offset)
     // Refresh the meta-block.
     //
     BATT_REQUIRE_OK(this->refresh_meta_block(active_blocks));
+    //
+    // VERY IMPORTANT: the meta-block must be written with the new trim value before we release
+    // grant, allowing writers to overwrite trimmed blocks.
   }
   return OkStatus();
 }

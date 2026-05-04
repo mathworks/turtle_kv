@@ -30,7 +30,7 @@ BATT_STRONG_TYPEDEF(usize, IndexInGroup);
 BATT_STRONG_TYPEDEF(usize, TotalEditsSize);
 BATT_STRONG_TYPEDEF(usize, TotalSlotsSize);
 
-using llfs::FileByteCount;
+BATT_STRONG_TYPEDEF(i64, FileByteCount);
 using llfs::FileOffset;
 
 }  // namespace turtle_kv
