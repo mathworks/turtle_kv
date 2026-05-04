@@ -207,12 +207,6 @@ class BasicMemTable : public MemTableBase
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  // TODO: [Gabe Bornstein 1/7/25] The art index is public? That doesn't feel right...
-  // tastolfi -> gbornste: I agree it is a bit messy; this is used by KVStoreScanner to construct an
-  // ART scanner to merge all the different depth sorted runs (see kv_store_scanner.cpp:57).  The
-  // reason it is currently expressed as a concrete type (rather than an abstract base class) is to
-  // try to keep the overhead as low as we can for scanning.
-  //
   ART<MemTableValueEntry>& art_index()
   {
     return this->art_index_;
@@ -410,8 +404,9 @@ class BasicMemTable<StorageT, AllocationTrackerT>::PerOpStorageContext
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   template <typename SerializeFn>
-    requires(std::invocable<SerializeFn, MutableBuffer, EditOffset>)
-  Status store_data(usize n_bytes, SerializeFn&& serialize_fn) noexcept
+  requires(std::invocable<SerializeFn, MutableBuffer, EditOffset>) Status
+      store_data(usize n_bytes, SerializeFn&& serialize_fn)
+  noexcept
   {
     // Must be set to true before calling attach_block_buffer *iff* this function is holding a lock
     // on the block_list_mutex_.

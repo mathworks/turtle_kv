@@ -751,10 +751,6 @@ auto ChangeLogWriter::write_blocks(PreparedBlocksState& input, WrittenBlocksStat
 Status ChangeLogWriter::activate_blocks(WrittenBlocksState& input,
                                         ActiveBlocksState& output) noexcept
 {
-  // TODO: [Gabe Bornstein 4/23/26] Consider updating the change log header here
-  // (active_block_range, active_blocks_upper_bounds). We don't want to update the header too
-  // frequently. How frequently is activate_blocks called?
-  //
   if (input.blocks.empty()) {
     return OkStatus();
   }

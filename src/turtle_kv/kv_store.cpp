@@ -267,16 +267,6 @@ u64 query_page_loader_reset_every_n()
   BATT_REQUIRE_OK(storage_context.add_existing_named_file(dir_path / filter_page_file_name()));
   BATT_REQUIRE_OK(storage_context.add_existing_named_file(dir_path / checkpoint_log_file_name()));
 
-#if 0
-  // TODO: [Gabe Bornstein 4/30/26] Move ChangeLogWriter after run_recovery. We can add a new
-  // KVStore function, KVStore::set_change_log_writer().
-  //
-  BATT_ASSIGN_OK_RESULT(std::unique_ptr<ChangeLogWriter> change_log_writer,
-                        ChangeLogWriter::open(dir_path / change_log_file_name()));
-
-  change_log_writer->start(task_scheduler.schedule_task());
-#endif
-
   BATT_ASSIGN_OK_RESULT(std::unique_ptr<llfs::Volume> checkpoint_log_volume,
                         open_checkpoint_log(storage_context,  //
                                             dir_path / checkpoint_log_file_name()));
@@ -304,9 +294,6 @@ u64 query_page_loader_reset_every_n()
       storage_context.shared_from_this(),
       tree_options,
       *runtime_options,
-#if 0
-      std::move(change_log_writer),
-#endif
       std::move(checkpoint_log_volume),
       std::move(latest_checkpoint),
   }};
@@ -422,7 +409,7 @@ u64 query_page_loader_reset_every_n()
       this->tree_options_,
       this->page_cache(),
       batt::make_copy(this->filter_page_write_state_),
-      batt::Toggle<State>::Reader{this->state_}->base_checkpoint_->clone(),
+      batt::Toggle<State>::Reader { this->state_ } -> base_checkpoint_->clone(),
       *this->checkpoint_log_);
 
   this->tree_options_.set_trie_index_reserve_size(this->tree_options_.trie_index_reserve_size());
@@ -1276,9 +1263,9 @@ void KVStore::mem_table_batch_scanner_thread_main()
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename Fn>
-  requires std::invocable<Fn, std::unique_ptr<DeltaBatch>>
-Status KVStore::scan_mem_table_to_build_batches(boost::intrusive_ptr<MemTable>&& mem_table,
-                                                Fn&& consume_fn)
+requires std::invocable<Fn, std::unique_ptr<DeltaBatch>> Status
+KVStore::scan_mem_table_to_build_batches(boost::intrusive_ptr<MemTable>&& mem_table,
+                                         Fn&& consume_fn)
 {
   MemTable::BatchCompactor batch_compactor{*mem_table,
                                            /*byte_size_limit=*/this->tree_options_.flush_size()};
