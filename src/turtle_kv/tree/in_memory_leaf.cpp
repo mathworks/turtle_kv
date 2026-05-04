@@ -229,6 +229,10 @@ Status InMemoryLeaf::try_merge(BatchUpdateContext& context,
 
   this->set_edit_size_totals(context.compute_running_total(*this->result_set));
 
+  // Retain a pin on the sibling's leaf page.
+  //
+  this->sibling_pages_.emplace_back(std::move(sibling->pinned_leaf_page_));
+
   return OkStatus();
 }
 

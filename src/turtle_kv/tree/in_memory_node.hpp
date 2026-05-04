@@ -239,7 +239,7 @@ struct InMemoryNode {
         // Nothing to do!
       }
 
-      Level merge(Level&& sibling_level, usize node_pivot_count);
+      Level merge(Level&& sibling_level, usize node_pivot_count) &&;
 
       SmallFn<void(std::ostream&)> dump() const;
     };
@@ -369,7 +369,7 @@ struct InMemoryNode {
        * `node_pivot_count` is the number of pivots in the left node (i.e., the node that this
        * level exists in).
        */
-      Level merge(Level&& sibling_level, usize node_pivot_count);
+      Level merge(Level&& sibling_level, usize node_pivot_count) &&;
 
       /** \brief Prints a human-readable representation of the level.
        */
@@ -462,7 +462,7 @@ struct InMemoryNode {
         return this->result_set.find_key(key);
       }
 
-      Level merge(Level&& sibling_level, usize node_pivot_count);
+      Level merge(Level&& sibling_level, usize node_pivot_count) &&;
 
       /** \brief Returns the number of segment leaf page build jobs added to the context.
        */
@@ -552,7 +552,7 @@ struct InMemoryNode {
 
       StatusOr<ValueView> find_key(const InMemoryNode& node, KeyQuery& query, i32 key_pivot_i) const;
 
-      Level merge(Level&& sibling_level, usize node_pivot_count);
+      Level merge(Level&& sibling_level, usize node_pivot_count) &&;
 
       StatusOr<usize> start_serialize(const InMemoryNode& node, TreeSerializeContext& context);
 

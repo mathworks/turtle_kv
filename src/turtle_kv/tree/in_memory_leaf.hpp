@@ -32,6 +32,7 @@ struct InMemoryLeaf {
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   llfs::PinnedPage pinned_leaf_page_;
+  SmallVec<llfs::PinnedPage, 1> sibling_pages_;
   TreeOptions tree_options;
   Optional<MergeCompactor::ResultSet</*decay_to_items=*/true>> result_set;
   std::shared_ptr<const batt::RunningTotal> shared_edit_size_totals_;

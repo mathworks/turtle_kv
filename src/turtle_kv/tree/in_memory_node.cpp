@@ -862,7 +862,8 @@ Status InMemoryNode::try_merge(BatchUpdateContext& context,
   for (usize i = 0; i < this->update_buffer.levels.size(); ++i) {
     batt::case_of(this->update_buffer.levels[i], [&](auto& left_level) {
       this->update_buffer.levels[i] =
-          left_level.merge(std::move(sibling->update_buffer.levels[i]), this->pivot_count());
+          std::move(left_level)
+              .merge(std::move(sibling->update_buffer.levels[i]), this->pivot_count());
     });
   }
 
@@ -1683,7 +1684,7 @@ StatusOr<llfs::PinnedPage> Segment::load_leaf_page(llfs::PageLoader& page_loader
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Level MergedLevel::merge(Level&& sibling_level, usize node_pivot_count)
+Level MergedLevel::merge(Level&& sibling_level, usize node_pivot_count) &&
 {
   return batt::case_of(
       sibling_level,
@@ -2013,7 +2014,7 @@ StatusOr<ValueView> InMemoryNode::UpdateBuffer::SegmentedLevel::find_key(const I
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 Level InMemoryNode::UpdateBuffer::SegmentedLevel::merge(Level&& sibling_level,
-                                                        usize node_pivot_count)
+                                                        usize node_pivot_count) &&
 {
   return batt::case_of(
       sibling_level,
@@ -2315,7 +2316,8 @@ StatusOr<ValueView> InMemoryNode::UpdateBuffer::HybridLevel::find_key(const InMe
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Level InMemoryNode::UpdateBuffer::HybridLevel::merge(Level&& sibling_level, usize node_pivot_count)
+Level InMemoryNode::UpdateBuffer::HybridLevel::merge(Level&& sibling_level,
+                                                     usize node_pivot_count) &&
 {
   batt::case_of(
       sibling_level,
@@ -2325,12 +2327,10 @@ Level InMemoryNode::UpdateBuffer::HybridLevel::merge(Level&& sibling_level, usiz
         this->add_new_sub_level(std::move(right_merged_level));
       },
       [&](SegmentedLevel& right_segmented_level) {
-        right_segmented_level.push_front_pivots(node_pivot_count);
-        this->add_new_sub_level(std::move(right_segmented_level));
+        this->add_new_sub_level(std::move(right_segmented_level), node_pivot_count);
       },
       [&](HybridLevel& right_hybrid_level) {
-        right_hybrid_level.push_front_pivots(node_pivot_count);
-        this->add_new_sub_level(std::move(right_hybrid_level));
+        this->add_new_sub_level(std::move(right_hybrid_level), node_pivot_count);
       });
 
   return *this;
@@ -2384,11 +2384,6 @@ StatusOr<SegmentedLevel> InMemoryNode::UpdateBuffer::HybridLevel::finish_seriali
         },
         [&](SegmentedLevel& segmented_sub_level) -> StatusOr<SegmentedLevel> {
           r_metrics.serialized_buffer_segment_count.add(segmented_sub_level.segment_count());
-
-          final_segmented_level.segments.insert(
-              final_segmented_level.segments.end(),
-              std::make_move_iterator(segmented_sub_level.segments.begin()),
-              std::make_move_iterator(segmented_sub_level.segments.end()));
 
           return {std::move(segmented_sub_level)};
         });
@@ -2481,7 +2476,8 @@ SmallFn<void(std::ostream&)> InMemoryNode::UpdateBuffer::dump() const
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Level InMemoryNode::UpdateBuffer::EmptyLevel::merge(Level&& sibling_level, usize node_pivot_count)
+Level InMemoryNode::UpdateBuffer::EmptyLevel::merge(Level&& sibling_level,
+                                                    usize node_pivot_count) &&
 {
   return batt::case_of(
       sibling_level,
