@@ -235,54 +235,10 @@ batt::Status ChangeLogFile::read_blocks(ConsumeBlockFn consume_block)
     StatusOr<boost::intrusive_ptr<ChangeLogBlock>> block =
         ChangeLogBlock::recover(std::move(block_memory), block_range.lower_bound);
 
-    if (block.status() == batt::StatusCode::kOutOfRange) {
-      VLOG(1) << "Recovered " << n_blocks_read
-              << " blocks. Stopped reading with status:" << BATT_INSPECT(block.status())
-              << BATT_INSPECT(file_offset) << BATT_INSPECT(file_offset);
-
-      return batt::OkStatus();
-
-    } else if (block.status() == batt::StatusCode::kDataLoss) {
-      LOG(INFO) << "Data loss detected at block offset " << file_offset
-                << ". Continuing to read subsequent blocks.";
-
-      // TODO: [Gabe Bornstein 4/3/26] We fail de-referencing this block if it's corrupted.
-      // How do we want to handle tracking which blocks we want to ignore if we can't rely on
-      // information in the corrupted block?
-      //
-      // corrupted_block_offsets.insert((*block)->edit_offset_lower_bound().value());
-      // ++blocks_read;
-      // continue;
-
-      // TODO: [Gabe Bornstein 4/3/26] Temporarily return here when we encounter a corrupted block.
-      // We won't read any blocks following a corrupted block detection. CONSIDER continuing to read
-      // after the corrupted block.
-      //
-      return batt::OkStatus();
-    }
-
-    // TODO: [Gabe Bornstein 4/3/26] Optimize this case with Block Clusters (see design doc).
-    //
-    // TODO: [Gabe Bornstein 4/3/26] CURRENTLY BROKEN. We aren't succesfully tracking which offsets
-    // have been corrupted.
-    //
-    // Handle case where we reach a corrupt block, but need to keep
-    // reading and reach correct blocks that come after it. Forget all blocks that have an
-    // EditOffset higher than blocks with kDataLoss. Remember valid blocks with lower EditOffsets.
-    //
-    if (corrupted_block_offsets.size() > 0) {
-      i64 curr_block_offset_upper_bound = (*block)->edit_offset_upper_bound().value();
-
-      for (auto offset : corrupted_block_offsets) {
-        // If these two blocks have any overlap, or if the current block came after the corrupt
-        // block, we need to discard the current block
-        //
-        if (curr_block_offset_upper_bound >= offset) {
-          LOG(INFO) << "Discarding block at offset " << file_offset
-                    << " due to prior data loss at offset " << offset;
-          continue;
-        }
-      }
+    if (!block.ok()) {
+      VLOG(1) << "Failed to recover block at" << BATT_INSPECT(file_offset) << ";"
+              << BATT_INSPECT(block_range) << BATT_INSPECT(n_blocks_read);
+      continue;
     }
 
     // `process_block` is responsible for determining when to stop reading.

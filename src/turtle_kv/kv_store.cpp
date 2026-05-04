@@ -394,6 +394,7 @@ u64 query_page_loader_reset_every_n()
     , runtime_options_{runtime_options}
     , mem_table_allocation_tracker_{this->page_cache(), this->metrics_.overcommit}
     , change_log_writer_{nullptr}
+    , recovery_status_{Self::kRecoveryNotStarted}
     , next_edit_offset_to_recover_{None}
     , checkpoint_distance_{this->runtime_options_.initial_checkpoint_distance}
     , checkpoint_log_{std::move(checkpoint_log)}
@@ -1122,6 +1123,14 @@ Status KVStore::push_mem_table_to_channel(boost::intrusive_ptr<MemTable>&& mem_t
 //
 Status KVStore::run_recovery(const std::filesystem::path& change_log_file_path) noexcept
 {
+  this->recovery_status_.store(Self::kRecoveryStarted);
+
+  // By default, signal failure; we will cancel this when we succeed below.
+  //
+  auto on_failure = batt::finally([&] {
+    this->set_recovery_status(Self::kRecoveryFailed);
+  });
+
   RecoveredChangeLogState recovered_state;
 
   EditOffset checkpoint_upper_bound = [this]() -> EditOffset {
@@ -1182,7 +1191,37 @@ Status KVStore::run_recovery(const std::filesystem::path& change_log_file_path) 
   //
   this->change_log_writer_->start(this->task_scheduler_.schedule_task());
 
+  // Recovery is complete!
+  //
+  on_failure.cancel();
+  this->set_recovery_status(Self::kRecoveryComplete);
+
   return OkStatus();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void KVStore::set_recovery_status(i32 s) noexcept
+{
+  this->recovery_status_.store(s);
+  this->recovery_status_.notify_all();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Status KVStore::wait_for_recovery() const noexcept
+{
+  for (;;) {
+    i32 s = this->recovery_status_.load();
+    if (s == Self::kRecoveryFailed) {
+      return batt::StatusCode::kInternal;
+    }
+    if (s == Self::kRecoveryComplete) {
+      return OkStatus();
+    }
+    BATT_CHECK(s == Self::kRecoveryNotStarted || s == Self::kRecoveryStarted) << BATT_INSPECT(s);
+    this->recovery_status_.wait(s);
+  }
 }
 
 using CheckpointEvent = llfs::PackedVariant<turtle_kv::PackedCheckpoint>;
@@ -1472,6 +1511,10 @@ void KVStore::checkpoint_flush_thread_main()
 //
 Status KVStore::commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_job)
 {
+  // Make sure recovery has fully completed before continuing.
+  //
+  BATT_REQUIRE_OK(this->wait_for_recovery());
+
   // Durably commit the checkpoint.
   //
   StatusOr<llfs::SlotRange> checkpoint_slot_range =
@@ -1580,6 +1623,9 @@ void KVStore::collect_stats(
   auto& kv_store = this->metrics_;
   auto& checkpoint_log = *this->checkpoint_log_;
   auto& cache = checkpoint_log.cache();
+
+  this->wait_for_recovery().IgnoreError();
+
   auto& change_log_file = this->change_log_writer_->change_log_file();
   auto& change_log_writer = this->change_log_writer_->metrics();
 

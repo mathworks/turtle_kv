@@ -55,6 +55,8 @@ namespace turtle_kv {
 class KVStore : public Table
 {
  public:
+  using Self = KVStore;
+
   friend class KVStoreScanner;
 
   using Config = KVStoreConfig;
@@ -143,7 +145,7 @@ class KVStore : public Table
       const TreeOptions& tree_options,
       Optional<RuntimeOptions> runtime_options = None) noexcept;
 
-  // TODO [tastolfi 2026-04-02] Should probably be private.
+  // TODO [tastolfi 2026-04-02] Should probably be private. <deferred>
   //
   static batt::StatusOr<turtle_kv::Checkpoint> recover_latest_checkpoint(
       llfs::Volume& checkpoint_log_volume);
@@ -227,6 +229,13 @@ class KVStore : public Table
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
+  static constexpr i32 kRecoveryNotStarted = 0;
+  static constexpr i32 kRecoveryStarted = 1;
+  static constexpr i32 kRecoveryComplete = 2;
+  static constexpr i32 kRecoveryFailed = 3;
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
   struct State {
     /** \brief The active MemTable; this is where new edits are inserted/buffered.
      */
@@ -337,6 +346,10 @@ class KVStore : public Table
                      EditOffset edit_offset,
                      ConstBuffer payload);
 
+  void set_recovery_status(i32) noexcept;
+
+  Status wait_for_recovery() const noexcept;
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   KVStoreMetrics metrics_;
@@ -358,6 +371,8 @@ class KVStore : public Table
   MemTablePageCacheAllocationTracker mem_table_allocation_tracker_;
 
   std::unique_ptr<ChangeLogWriter> change_log_writer_;
+
+  std::atomic<i32> recovery_status_;
 
   Optional<EditOffset> next_edit_offset_to_recover_;
 
