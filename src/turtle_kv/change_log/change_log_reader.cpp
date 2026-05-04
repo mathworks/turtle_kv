@@ -26,8 +26,6 @@ struct BlockIterator {
   //
   EditOffset current_edit_offset() const
   {
-    // TODO: [Gabe Bornstein 3/27/26] Is it too extreme to do a BATT_CHECK here?
-    //
     BATT_CHECK(this->has_more());
     return this->block->slot_edit_offset(this->next_slot_i);
   }
