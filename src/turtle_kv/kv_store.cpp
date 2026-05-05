@@ -275,11 +275,6 @@ u64 query_page_loader_reset_every_n()
     runtime_options = RuntimeOptions::with_default_values();
   }
 
-  // Recover the checkpoint
-  //
-  BATT_ASSIGN_OK_RESULT(Checkpoint latest_checkpoint,
-                        KVStore::recover_latest_checkpoint(*checkpoint_log_volume));
-
   // TODO [Gabe Bornstein 4/8/26] [tastolfi 2026-04-08] What I am worried about is that we are
   // opening the ChangeLogWriter *before* doing recovery; to me this could spell trouble.  It makes
   // sense that run_recovery takes the path to the change log file; I think a good side-effect of
@@ -295,7 +290,6 @@ u64 query_page_loader_reset_every_n()
       tree_options,
       *runtime_options,
       std::move(checkpoint_log_volume),
-      std::move(latest_checkpoint),
   }};
 
   const std::filesystem::path change_log_file_path = dir_path / change_log_file_name();
@@ -369,8 +363,7 @@ u64 query_page_loader_reset_every_n()
                               boost::intrusive_ptr<llfs::StorageContext>&& storage_context,
                               const TreeOptions& tree_options,
                               const RuntimeOptions& runtime_options,
-                              std::unique_ptr<llfs::Volume>&& checkpoint_log,
-                              Checkpoint&& latest_recovered_checkpoint) noexcept
+                              std::unique_ptr<llfs::Volume>&& checkpoint_log) noexcept
     : metrics_{}
     , task_scheduler_{task_scheduler}
     , worker_pool_{worker_pool}
@@ -402,7 +395,19 @@ u64 query_page_loader_reset_every_n()
     , checkpoint_update_thread_{}
     , checkpoint_flush_thread_{}
 {
-  this->initialize_state(std::move(latest_recovered_checkpoint));
+  BATT_CHECK_OK(NodePageView::register_layout(this->page_cache()));
+  BATT_CHECK_OK(LeafPageView::register_layout(this->page_cache()));
+  BATT_CHECK_OK(llfs::BloomFilterPageView::register_layout(this->page_cache()));
+  BATT_CHECK_OK(VqfFilterPageView::register_layout(this->page_cache()));
+
+  // Recover the checkpoint
+  //
+  batt::StatusOr<Checkpoint> latest_checkpoint =
+      KVStore::recover_latest_checkpoint(*this->checkpoint_log_);
+
+  BATT_CHECK_OK(latest_checkpoint);
+
+  this->initialize_state(std::move(*latest_checkpoint));
 
   this->checkpoint_generator_.emplace(
       this->worker_pool_,
@@ -416,14 +421,7 @@ u64 query_page_loader_reset_every_n()
 
   BATT_CHECK_OK(KVStore::global_init());
 
-  BATT_CHECK_OK(NodePageView::register_layout(this->page_cache()));
-  BATT_CHECK_OK(LeafPageView::register_layout(this->page_cache()));
-  BATT_CHECK_OK(llfs::BloomFilterPageView::register_layout(this->page_cache()));
-
   if (this->tree_options_.filter_bits_per_key() != 0) {
-    BATT_CHECK_OK(llfs::BloomFilterPageView::register_layout(this->page_cache()));
-    BATT_CHECK_OK(VqfFilterPageView::register_layout(this->page_cache()));
-
     Status status = this->page_cache().assign_paired_device(this->tree_options_.leaf_size(),
                                                             kPairedFilterForLeaf,
                                                             this->tree_options_.filter_page_size());
