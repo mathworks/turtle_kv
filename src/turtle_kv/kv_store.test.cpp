@@ -530,14 +530,28 @@ TEST_P(CheckpointTest, CheckpointRecovery)
   }
 }
 
-// TODO: [Gabe Bornstein 4/9/26] Use TEST_P here instead. Test with a different number of puts,
-// ensuring we fill up several memtables, and dont entirely fill up memtables.
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-TEST_F(KVStoreTest, KVStoreRecovery)
+class KVStoreRecoveryTest
+    : public KVStoreTest
+    , public testing::WithParamInterface<u64>
+{
+ public:
+  void SetUp() override
+  {
+    KVStoreTest::SetUp();
+    this->num_puts = GetParam();
+  }
+
+  u64 num_puts;
+};
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+TEST_P(KVStoreRecoveryTest, KVStoreRecovery)
 {
   std::filesystem::path test_kv_store_dir = this->data_root / "turtle_kv_Test" / "kvstore_recovery";
   std::map<std::string, std::string> expected_keys_values;
-  u64 num_puts = 100;
 
   {
     StatusOr<std::unique_ptr<KVStore>> open_result = this->CreateAndOpenKVStore(test_kv_store_dir);
@@ -547,19 +561,7 @@ TEST_F(KVStoreTest, KVStoreRecovery)
 
     kv_store->set_checkpoint_distance(1);
 
-    // TODO: [Gabe Bornstein 4/9/26] Replace with PopulateKVStore()
-    //
-    for (u64 i = 0; i < num_puts; ++i) {
-      std::string key = this->generate_key(this->rng);
-      std::string value = this->generate_value();
-
-      Status actual_put_status = kv_store->put(KeyView{key}, ValueView::from_str(value));
-      ASSERT_TRUE(actual_put_status.ok()) << BATT_INSPECT(actual_put_status);
-
-      expected_keys_values[key] = value;
-
-      VLOG(3) << "Put key== " << key << ", value==" << value;
-    }
+    this->PopulateKVStore(*kv_store, this->num_puts, &expected_keys_values);
 
     // TODO: [Gabe Bornstein 3/17/26] Replace with fsync once it's implemented.
     //
@@ -579,8 +581,6 @@ TEST_F(KVStoreTest, KVStoreRecovery)
     //
     std::this_thread::sleep_for(std::chrono::seconds(1));
 
-    // Iterate over all keys and verify their corresponding value in the checkpoint is correct
-    //
     for (const auto& [key, expected_value] : expected_keys_values) {
       turtle_kv::KeyView key_view{key};
       batt::StatusOr<turtle_kv::ValueView> actual_value = (*recovered_kv_store)->get(key_view);
@@ -623,3 +623,7 @@ INSTANTIATE_TEST_SUITE_P(
         //  TODO: [Gabe Bornstein 11/6/25] Sporadic Failing. Likely cause by keys not
         //  being flushed before that last checkpoint is taken. Need fsync to resolve.
         /*CheckpointTestParams(101, 100000)*/));
+
+INSTANTIATE_TEST_SUITE_P(RecoveringKVStore,
+                         KVStoreRecoveryTest,
+                         testing::Values(u64{0}, u64{1}, u64{100}, u64{1000}, u64{100000}));
