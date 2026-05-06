@@ -140,10 +140,6 @@ Status ChangeLogFile::write_meta_block(const PackedMetaBlock& meta_block) noexce
 batt::StatusOr<std::vector<boost::intrusive_ptr<ChangeLogBlock>>>
 ChangeLogFile::read_blocks_into_vector()
 {
-  // TODO: [Gabe Bornstein 4/29/26] Consider adding optional parameter that could denote which block
-  // to start reading from, and which block to stop reading from. We only need to read the potential
-  // active range, denoted in ChangeLogFile::Config.
-  //
   std::vector<boost::intrusive_ptr<ChangeLogBlock>> blocks;
   batt::Status read_blocks_status =
       this->read_blocks([&](boost::intrusive_ptr<ChangeLogBlock> block) -> batt::Status {

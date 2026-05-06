@@ -275,13 +275,6 @@ u64 query_page_loader_reset_every_n()
     runtime_options = RuntimeOptions::with_default_values();
   }
 
-  // TODO [Gabe Bornstein 4/8/26] [tastolfi 2026-04-08] What I am worried about is that we are
-  // opening the ChangeLogWriter *before* doing recovery; to me this could spell trouble.  It makes
-  // sense that run_recovery takes the path to the change log file; I think a good side-effect of
-  // successful `run_recovery` could be to figure out what the correct values for the append and
-  // trim points are, and create the ChangeLogWriter after we know that information.
-  //
-
   std::unique_ptr<KVStore> kv_store{new KVStore{
       task_scheduler,
       worker_pool,
