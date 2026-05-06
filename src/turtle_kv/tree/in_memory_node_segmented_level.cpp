@@ -5,6 +5,7 @@
 #include <turtle_kv/tree/algo/segments.hpp>
 #include <turtle_kv/tree/batch_update.hpp>
 #include <turtle_kv/tree/in_memory_node.hpp>
+#include <turtle_kv/tree/in_memory_node_hybrid_level.hpp>
 #include <turtle_kv/tree/key_query.hpp>
 #include <turtle_kv/tree/leaf_page_view.hpp>
 #include <turtle_kv/tree/segmented_level_scanner.hpp>
@@ -331,17 +332,10 @@ Level InMemoryNodeSegmentedLevel::merge(Level&& sibling_level, usize node_pivot_
         return new_hybrid_level;
       },
       [&](SegmentedLevel& right_segmented_level) -> Level {
-        right_segmented_level.push_front_pivots(node_pivot_count);
-
-        // Next we need to find potential duplicate segments that have arisen from a previous
+        // We need to find potential duplicate segments that have arisen from a previous
         // split. For these duplicates, we need to merge their metadata.
         //
-        BATT_CHECK_NOT_NULLPTR(this->back());
-        BATT_CHECK_NOT_NULLPTR(right_segmented_level.front());
-        if (this->back()->get_leaf_page_id() == right_segmented_level.front()->get_leaf_page_id()) {
-          right_segmented_level.front()->deduplicate(*this->back());
-          this->segments.pop_back();
-        }
+        this->deduplicate(right_segmented_level, node_pivot_count);
 
         // Concatenate the two segment vectors.
         //
@@ -352,13 +346,44 @@ Level InMemoryNodeSegmentedLevel::merge(Level&& sibling_level, usize node_pivot_
         return *this;
       },
       [&](HybridLevel& right_hybrid_level) -> Level {
+        this->deduplicate(right_hybrid_level, node_pivot_count);
+
         HybridLevel new_hybrid_level;
         new_hybrid_level.add_new_sub_level(std::move(*this));
-
-        new_hybrid_level.add_new_sub_level(std::move(right_hybrid_level), node_pivot_count);
+        new_hybrid_level.add_new_sub_level(std::move(right_hybrid_level));
 
         return new_hybrid_level;
       });
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void InMemoryNodeSegmentedLevel::deduplicate(InMemoryNodeSegmentedLevel& right_level,
+                                             usize push_pivot_count)
+{
+  right_level.push_front_pivots(push_pivot_count);
+
+  BATT_CHECK_NOT_NULLPTR(this->back());
+  BATT_CHECK_NOT_NULLPTR(right_level.front());
+  if (this->back()->get_leaf_page_id() == right_level.front()->get_leaf_page_id()) {
+    right_level.front()->deduplicate(*this->back());
+    this->segments.pop_back();
+  }
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void InMemoryNodeSegmentedLevel::deduplicate(InMemoryNodeHybridLevel& right_level,
+                                             usize push_pivot_count)
+{
+  right_level.push_front_pivots(push_pivot_count);
+
+  BATT_CHECK_NOT_NULLPTR(this->back());
+  BATT_CHECK_NOT_NULLPTR(right_level.front());
+  if (batt::is_case<InMemoryNodeSegmentedLevel>(*right_level.front())) {
+    auto& right_sub_level = std::get<InMemoryNodeSegmentedLevel>(*right_level.front());
+    this->deduplicate(right_sub_level);
+  }
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

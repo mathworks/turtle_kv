@@ -63,27 +63,12 @@ struct InMemoryNodeHybridLevel {
     return &this->sub_levels.back();
   }
 
-  void add_new_sub_level(SubLevel&& level,
-                         usize push_pivot_count = 0)
+  void add_new_sub_level(SubLevel&& level, usize push_pivot_count = 0)
   {
-    if (batt::is_case<InMemoryNodeSegmentedLevel>(level)) {
-      InMemoryNodeSegmentedLevel& right_level = std::get<InMemoryNodeSegmentedLevel>(level);
-
-      right_level.push_front_pivots(push_pivot_count);
-
-      BATT_CHECK_NOT_NULLPTR(this->back());
-      BATT_CHECK_NOT_NULLPTR(right_level.front());
-
-      if (batt::is_case<InMemoryNodeSegmentedLevel>(*this->back())) {
-        InMemoryNodeSegmentedLevel& left_level =
-            std::get<InMemoryNodeSegmentedLevel>(*this->back());
-        BATT_CHECK_NOT_NULLPTR(left_level.back());
-
-        if (left_level.back()->get_leaf_page_id() == right_level.front()->get_leaf_page_id()) {
-          right_level.front()->deduplicate(*left_level.back());
-          left_level.segments.pop_back();
-        }
-      }
+    if (push_pivot_count) {
+      BATT_CHECK(batt::is_case<InMemoryNodeSegmentedLevel>(level));
+      InMemoryNodeSegmentedLevel& segmented_sub_level = std::get<InMemoryNodeSegmentedLevel>(level);
+      segmented_sub_level.push_front_pivots(push_pivot_count);
     }
 
     this->sub_levels.emplace_back(std::move(level));
@@ -95,27 +80,48 @@ struct InMemoryNodeHybridLevel {
       other.push_front_pivots(push_pivot_count);
     }
 
-    BATT_CHECK_NOT_NULLPTR(this->back());
-    BATT_CHECK_NOT_NULLPTR(other.front());
-
-    if (batt::is_case<InMemoryNodeSegmentedLevel>(*this->back()) &&
-        batt::is_case<InMemoryNodeSegmentedLevel>(*other.front())) {
-      InMemoryNodeSegmentedLevel& left_level = std::get<InMemoryNodeSegmentedLevel>(*this->back());
-      BATT_CHECK_NOT_NULLPTR(left_level.back());
-
-      InMemoryNodeSegmentedLevel& right_level =
-          std::get<InMemoryNodeSegmentedLevel>(*other.front());
-      BATT_CHECK_NOT_NULLPTR(right_level.front());
-
-      if (left_level.back()->get_leaf_page_id() == right_level.front()->get_leaf_page_id()) {
-        right_level.front()->deduplicate(*left_level.back());
-        left_level.segments.pop_back();
-      }
-    }
-
     this->sub_levels.insert(this->sub_levels.end(),
                             std::make_move_iterator(other.sub_levels.begin()),
                             std::make_move_iterator(other.sub_levels.end()));
+  }
+
+  void deduplicate_and_add_sub_level(InMemoryNodeSegmentedLevel&& right_level,
+                                     usize push_pivot_count = 0)
+  {
+    right_level.push_front_pivots(push_pivot_count);
+
+    BATT_CHECK_NOT_NULLPTR(this->back());
+    BATT_CHECK_NOT_NULLPTR(right_level.front());
+
+    if (batt::is_case<InMemoryNodeSegmentedLevel>(*this->back())) {
+      InMemoryNodeSegmentedLevel& left_sub_level =
+          std::get<InMemoryNodeSegmentedLevel>(*this->back());
+      BATT_CHECK_NOT_NULLPTR(left_sub_level.back());
+
+      left_sub_level.deduplicate(right_level);
+    }
+
+    this->add_new_sub_level(std::move(right_level));
+  }
+
+  void deduplicate_and_add_sub_level(InMemoryNodeHybridLevel&& right_level,
+                                     usize push_pivot_count = 0)
+  {
+    right_level.push_front_pivots(push_pivot_count);
+
+    BATT_CHECK_NOT_NULLPTR(this->back());
+    BATT_CHECK_NOT_NULLPTR(right_level.front());
+
+    if (batt::is_case<InMemoryNodeSegmentedLevel>(*this->back()) &&
+        batt::is_case<InMemoryNodeSegmentedLevel>(*right_level.front())) {
+      InMemoryNodeSegmentedLevel& left_sub_level =
+          std::get<InMemoryNodeSegmentedLevel>(*this->back());
+      BATT_CHECK_NOT_NULLPTR(left_sub_level.back());
+
+      left_sub_level.deduplicate(right_level);
+    }
+
+    this->add_new_sub_level(std::move(right_level));
   }
 
   void push_front_pivots(usize node_pivot_count);

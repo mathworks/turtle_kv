@@ -247,10 +247,10 @@ Level InMemoryNodeHybridLevel::merge(Level&& sibling_level, usize node_pivot_cou
         this->add_new_sub_level(std::move(right_merged_level));
       },
       [&](SegmentedLevel& right_segmented_level) {
-        this->add_new_sub_level(std::move(right_segmented_level), node_pivot_count);
+        this->deduplicate_and_add_sub_level(std::move(right_segmented_level), node_pivot_count);
       },
       [&](HybridLevel& right_hybrid_level) {
-        this->add_new_sub_level(std::move(right_hybrid_level), node_pivot_count);
+        this->deduplicate_and_add_sub_level(std::move(right_hybrid_level), node_pivot_count);
       });
 
   return *this;

@@ -24,6 +24,7 @@
 
 namespace turtle_kv {
 
+struct InMemoryNodeHybridLevel;
 struct InMemoryNode;
 struct BatchUpdateContext;
 class KeyQuery;
@@ -305,6 +306,10 @@ struct InMemoryNodeSegmentedLevel {
    * level exists in).
    */
   InMemoryNodeLevel merge(InMemoryNodeLevel&& sibling_level, usize node_pivot_count) &&;
+
+  void deduplicate(InMemoryNodeSegmentedLevel& right_level, usize push_pivot_count = 0);
+
+  void deduplicate(InMemoryNodeHybridLevel& right_level, usize push_pivot_count = 0);
 
   /** \brief Prints a human-readable representation of the level.
    */
