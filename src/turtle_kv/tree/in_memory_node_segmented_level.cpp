@@ -12,6 +12,8 @@
 
 #include <batteries/case_of.hpp>
 
+#include <type_traits>
+
 namespace turtle_kv {
 
 using Level = InMemoryNodeLevel;
@@ -94,6 +96,35 @@ bool InMemoryNodeSegment::is_inactive() const
         << BATT_INSPECT(live_ranges);
   }
   return inactive;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+usize InMemoryNodeSegment::num_cut_points() const
+{
+  Slice<const Interval<u32>> live_ranges = this->filter.live();
+
+  // If the first element is live, don't include 0 as a cut point, only include the
+  // upper bound.
+  //
+  bool first_element_live = !live_ranges.empty() &&
+                            live_ranges.front().lower_bound == PiecewiseFilter<u32>::kMinLowerBound;
+  bool ends_at_max = !live_ranges.empty() &&
+                     live_ranges.back().upper_bound == PiecewiseFilter<u32>::kMaxUpperBound;
+
+  return live_ranges.size() * 2 - (first_element_live ? 1 : 0) - (ends_at_max ? 1 : 0);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+bool InMemoryNodeSegment::deduplicate(const InMemoryNodeSegment& other)
+{
+  if (this->page_id_slot.page_id != other.page_id_slot.page_id) {
+    return false;
+  }
+  this->active_pivots |= other.active_pivots;
+  this->filter.merge(other.filter);
+  return true;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -358,33 +389,33 @@ Level InMemoryNodeSegmentedLevel::merge(Level&& sibling_level, usize node_pivot_
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-void InMemoryNodeSegmentedLevel::deduplicate(InMemoryNodeSegmentedLevel& right_level,
-                                             usize push_pivot_count)
+template <typename T>
+void InMemoryNodeSegmentedLevel::deduplicate(T& right_level, usize push_pivot_count)
 {
   right_level.push_front_pivots(push_pivot_count);
 
   BATT_CHECK_NOT_NULLPTR(this->back());
   BATT_CHECK_NOT_NULLPTR(right_level.front());
-  if (this->back()->get_leaf_page_id() == right_level.front()->get_leaf_page_id()) {
-    right_level.front()->deduplicate(*this->back());
-    this->segments.pop_back();
+
+  if constexpr (std::is_same_v<T, SegmentedLevel>) {
+    // Base case: two segmented levels. If the two segements at the seam are the same, discard one.
+    //
+    if (right_level.front()->deduplicate(*this->back())) {
+      this->segments.pop_back();
+    }
+  } else {
+    // If we have a HybridLevel, only try to deduplicate if the first sub level is
+    // a SegmentedLevel.
+    //
+    if (batt::is_case<SegmentedLevel>(*right_level.front())) {
+      auto& right_sub_level = std::get<SegmentedLevel>(*right_level.front());
+      this->deduplicate(right_sub_level);
+    }
   }
 }
 
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-void InMemoryNodeSegmentedLevel::deduplicate(InMemoryNodeHybridLevel& right_level,
-                                             usize push_pivot_count)
-{
-  right_level.push_front_pivots(push_pivot_count);
-
-  BATT_CHECK_NOT_NULLPTR(this->back());
-  BATT_CHECK_NOT_NULLPTR(right_level.front());
-  if (batt::is_case<InMemoryNodeSegmentedLevel>(*right_level.front())) {
-    auto& right_sub_level = std::get<InMemoryNodeSegmentedLevel>(*right_level.front());
-    this->deduplicate(right_sub_level);
-  }
-}
+template void InMemoryNodeSegmentedLevel::deduplicate(SegmentedLevel&, usize);
+template void InMemoryNodeSegmentedLevel::deduplicate(HybridLevel&, usize);
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //

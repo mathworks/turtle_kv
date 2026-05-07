@@ -8,6 +8,8 @@
 
 #include <batteries/case_of.hpp>
 
+#include <type_traits>
+
 namespace turtle_kv {
 
 using Level = InMemoryNodeLevel;
@@ -16,6 +18,69 @@ using MergedLevel = InMemoryNodeMergedLevel;
 using SegmentedLevel = InMemoryNodeSegmentedLevel;
 using HybridLevel = InMemoryNodeHybridLevel;
 using Segment = InMemoryNodeSegment;
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+bool InMemoryNodeHybridLevel::empty() const
+{
+  return this->sub_levels.empty();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Slice<const HybridLevel::SubLevel> InMemoryNodeHybridLevel::get_levels() const
+{
+  return as_const_slice(this->sub_levels);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+HybridLevel::SubLevel* InMemoryNodeHybridLevel::front()
+{
+  if (this->empty()) {
+    return nullptr;
+  }
+
+  return &this->sub_levels.front();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+HybridLevel::SubLevel* InMemoryNodeHybridLevel::back()
+{
+  if (this->empty()) {
+    return nullptr;
+  }
+
+  return &this->sub_levels.back();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void InMemoryNodeHybridLevel::add_new_sub_level(HybridLevel::SubLevel&& level,
+                                                 usize push_pivot_count)
+{
+  if (push_pivot_count) {
+    BATT_CHECK(batt::is_case<SegmentedLevel>(level));
+    SegmentedLevel& segmented_sub_level = std::get<SegmentedLevel>(level);
+    segmented_sub_level.push_front_pivots(push_pivot_count);
+  }
+
+  this->sub_levels.emplace_back(std::move(level));
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void InMemoryNodeHybridLevel::add_new_sub_level(HybridLevel&& other, usize push_pivot_count)
+{
+  if (push_pivot_count) {
+    other.push_front_pivots(push_pivot_count);
+  }
+
+  this->sub_levels.insert(this->sub_levels.end(),
+                          std::make_move_iterator(other.sub_levels.begin()),
+                          std::make_move_iterator(other.sub_levels.end()));
+}
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
@@ -234,6 +299,40 @@ StatusOr<ValueView> InMemoryNodeHybridLevel::find_key(const InMemoryNode& node,
 
   return result;
 }
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <typename T>
+void InMemoryNodeHybridLevel::deduplicate_and_add_sub_level(T&& right_level, usize push_pivot_count)
+{
+  right_level.push_front_pivots(push_pivot_count);
+
+  BATT_CHECK_NOT_NULLPTR(this->back());
+  BATT_CHECK_NOT_NULLPTR(right_level.front());
+
+  // Attempt deduplication if the last sub level in this HybridLevel is a SegmentedLevel.
+  //
+  bool attempt_deduplication = batt::is_case<SegmentedLevel>(*this->back());
+
+  if constexpr (std::is_same_v<std::decay_t<T>, HybridLevel>) {
+    // If `right_level` is also a HybridLevel, we will attempt deduplication if the first sub level
+    // is a SegmentedLevel.
+    //
+    attempt_deduplication = attempt_deduplication  &&
+        batt::is_case<SegmentedLevel>(*right_level.front());
+  }
+
+  if (attempt_deduplication) {
+    SegmentedLevel& left_sub_level = std::get<SegmentedLevel>(*this->back());
+    BATT_CHECK_NOT_NULLPTR(left_sub_level.back());
+    left_sub_level.deduplicate(right_level);
+  }
+
+  this->add_new_sub_level(std::move(right_level));
+}
+
+template void InMemoryNodeHybridLevel::deduplicate_and_add_sub_level(SegmentedLevel&&, usize);
+template void InMemoryNodeHybridLevel::deduplicate_and_add_sub_level(HybridLevel&&, usize);
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //

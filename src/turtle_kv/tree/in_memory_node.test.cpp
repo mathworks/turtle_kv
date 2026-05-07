@@ -31,6 +31,7 @@
 #include <array>
 #include <atomic>
 #include <random>
+#include <unordered_set>
 #include <utility>
 
 namespace {
@@ -709,6 +710,806 @@ TEST(InMemoryNodeTest, SubtreeDeletions)
   LOG(INFO) << BATT_INSPECT(InMemoryNode::metrics().merge_then_split_count);
 
   LOG(INFO) << BATT_INSPECT(scan_latency);
+}
+
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+// InMemoryNodeLevel::merge tests
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+
+using turtle_kv::ActivePivotsSet128;
+using turtle_kv::InMemoryNodeEmptyLevel;
+using turtle_kv::InMemoryNodeHybridLevel;
+using turtle_kv::InMemoryNodeLevel;
+using turtle_kv::InMemoryNodeMergedLevel;
+using turtle_kv::InMemoryNodeSegment;
+using turtle_kv::InMemoryNodeSegmentedLevel;
+using turtle_kv::KeyOrder;
+using turtle_kv::MergeCompactor;
+using turtle_kv::PiecewiseFilter;
+
+using EmptyLevel = InMemoryNodeEmptyLevel;
+using MergedLevel = InMemoryNodeMergedLevel;
+using SegmentedLevel = InMemoryNodeSegmentedLevel;
+using HybridLevel = InMemoryNodeHybridLevel;
+using Segment = InMemoryNodeSegment;
+using Level = InMemoryNodeLevel;
+
+class InMemoryNodeLevelMergeTest : public ::testing::Test
+{
+ public:
+  Segment make_segment(u64 page_id, const std::vector<i32>& active_pivot_indices)
+  {
+    Segment segment;
+    segment.page_id_slot = llfs::PageIdSlot::from_page_id(llfs::PageId{page_id});
+    for (i32 pivot_i : active_pivot_indices) {
+      segment.active_pivots.set(pivot_i, true);
+    }
+    return segment;
+  }
+
+  SegmentedLevel make_segmented_level(const std::vector<Segment>& segments)
+  {
+    SegmentedLevel level;
+    for (auto& seg : segments) {
+      level.segments.emplace_back(std::move(seg));
+    }
+    return level;
+  }
+
+  MergedLevel make_merged_level(usize item_count, std::string_view key_prefix)
+  {
+    const usize value_size = 100;
+    std::vector<EditView> items;
+    items.reserve(item_count);
+
+    RandomStringGenerator key_gen;
+    key_gen.set_size(24);
+
+    std::unordered_set<KeyView> seen;
+    while (items.size() < item_count) {
+      std::string key_str(key_prefix);
+      key_str += key_gen(this->rng_);
+
+      KeyView key = this->string_store_.store(key_str);
+      if (seen.count(key)) {
+        continue;
+      }
+      seen.emplace(key);
+
+      char ch = 'a' + (items.size() % 26);
+      std::string_view value = this->string_store_.store(std::string(value_size, ch));
+      items.emplace_back(key, ValueView::from_str(value));
+    }
+
+    std::sort(items.begin(), items.end(), KeyOrder{});
+
+    MergedLevel level;
+    level.result_set.append(std::move(items));
+    return level;
+  }
+
+  HybridLevel make_hybrid_level(const std::vector<HybridLevel::SubLevel>& sub_levels)
+  {
+    HybridLevel level;
+    for (auto& sl : sub_levels) {
+      level.sub_levels.emplace_back(std::move(sl));
+    }
+    return level;
+  }
+
+  u64 random_active_pivots(i32 max_pivot)
+  {
+    std::uniform_int_distribution<i32> dist(0, 1);
+    u64 pivots = 0;
+    for (i32 i = 0; i < max_pivot; ++i) {
+      if (dist(this->rng_)) {
+        pivots = turtle_kv::set_bit(pivots, i, true);
+      }
+    }
+    if (pivots == 0) {
+      // Make sure at leas one pivot in the bit set is active.
+      //
+      std::uniform_int_distribution<i32> fallback(0, max_pivot - 1);
+      pivots = turtle_kv::set_bit(pivots, fallback(this->rng_), true);
+    }
+    return pivots;
+  }
+
+  static constexpr u32 kFilterItemCount = 1000;
+
+  void apply_random_filter_drops(Segment& seg, usize max_drops)
+  {
+    std::uniform_int_distribution<usize> count_dist(0, max_drops);
+    usize n_drops = count_dist(this->rng_);
+
+    for (usize i = 0; i < n_drops; ++i) {
+      std::uniform_int_distribution<u32> start_dist(0, kFilterItemCount - 1);
+      u32 start = start_dist(this->rng_);
+
+      std::uniform_int_distribution<u32> end_dist(start, kFilterItemCount);
+      u32 end = end_dist(this->rng_);
+
+      seg.filter.drop_index_range({start, end});
+    }
+  }
+
+  Segment make_random_segment(u64 page_id, i32 max_pivot)
+  {
+    u64 pivots = this->random_active_pivots(max_pivot);
+    Segment seg = this->make_segment(page_id, {});
+    for (i32 p = 0; p < max_pivot; ++p) {
+      seg.active_pivots.set(p, turtle_kv::get_bit(pivots, p));
+    }
+    this->apply_random_filter_drops(seg, /*max_drops=*/3);
+    return seg;
+  }
+
+  SegmentedLevel make_random_segmented_level(u64 base_page_id,
+                                             i32 max_pivot,
+                                             usize min_count = 1,
+                                             usize max_count = 32)
+  {
+    std::uniform_int_distribution<usize> count_dist(min_count, max_count);
+    usize n_segments = count_dist(this->rng_);
+
+    std::vector<Segment> segments;
+    for (usize i = 0; i < n_segments; ++i) {
+      segments.push_back(this->make_random_segment(base_page_id + i, max_pivot));
+    }
+    return this->make_segmented_level(std::move(segments));
+  }
+
+  void verify_pivots_shifted(const std::vector<Segment>& originals,
+                             const SegmentedLevel& result,
+                             usize node_pivot_count,
+                             usize offset = 0,
+                             bool check_original_inactive = false)
+  {
+    for (usize i = 0; i < originals.size(); ++i) {
+      const auto& original = originals[i];
+      const auto& seg = result.get_segment(offset + i);
+      EXPECT_EQ(seg.get_leaf_page_id().page_id, original.get_leaf_page_id().page_id);
+
+      for (i32 p = 0; p < 64; ++p) {
+        if (original.is_pivot_active(p)) {
+          i32 shifted = p + static_cast<i32>(node_pivot_count);
+          EXPECT_TRUE(seg.is_pivot_active(shifted))
+              << "Segment " << i << " pivot " << p << " should be shifted to " << shifted;
+          if (check_original_inactive) {
+            EXPECT_FALSE(seg.is_pivot_active(p))
+                << "Segment " << i << " original pivot " << p << " should not be active";
+          }
+        }
+      }
+    }
+  }
+
+  void verify_pivots_unchanged(const std::vector<Segment>& originals,
+                               const SegmentedLevel& result,
+                               usize offset = 0)
+  {
+    for (usize i = 0; i < originals.size(); ++i) {
+      const auto& original = originals[i];
+      const auto& seg = result.get_segment(offset + i);
+      EXPECT_EQ(seg.get_leaf_page_id().page_id, original.get_leaf_page_id().page_id);
+
+      for (i32 p = 0; p < 64; ++p) {
+        if (original.is_pivot_active(p)) {
+          EXPECT_TRUE(seg.is_pivot_active(p))
+              << "Segment " << i << " pivot " << p << " should be active";
+        }
+      }
+    }
+  }
+
+  void verify_segmented_merge_no_duplicates(const std::vector<Segment>& left_originals,
+                                            const std::vector<Segment>& right_originals,
+                                            const SegmentedLevel& result,
+                                            usize node_pivot_count)
+  {
+    ASSERT_EQ(result.segment_count(), left_originals.size() + right_originals.size());
+    this->verify_pivots_unchanged(left_originals, result);
+    this->verify_pivots_shifted(right_originals,
+                                result,
+                                node_pivot_count,
+                                /*offset=*/left_originals.size(),
+                                /*check_original_inactive=*/true);
+  }
+
+  void verify_pivots_deduplication(const Segment& left_original,
+                                   const Segment& right_original,
+                                   const Segment& deduped,
+                                   usize node_pivot_count)
+  {
+    for (i32 p = 0; p < 64; ++p) {
+      if (left_original.is_pivot_active(p)) {
+        EXPECT_TRUE(deduped.is_pivot_active(p))
+            << "Left pivot " << p << " should remain active after deduplication";
+      }
+      if (right_original.is_pivot_active(p)) {
+        i32 shifted = p + static_cast<i32>(node_pivot_count);
+        EXPECT_TRUE(deduped.is_pivot_active(shifted))
+            << "Right pivot " << p << " should be shifted to " << shifted << " after deduplication";
+      }
+    }
+  }
+
+  void verify_filter_union(const Segment& left_original,
+                           const Segment& right_original,
+                           const Segment& result_seg,
+                           u32 check_range = 100)
+  {
+    for (u32 idx = 0; idx < check_range; ++idx) {
+      bool expected =
+          left_original.filter.live_at_index(idx) || right_original.filter.live_at_index(idx);
+      EXPECT_EQ(result_seg.filter.live_at_index(idx), expected)
+          << "Filter mismatch at index " << idx;
+    }
+  }
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  std::default_random_engine rng_{330};
+  StableStringStore string_store_;
+};
+
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+// EmptyLevel::merge tests
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+
+TEST_F(InMemoryNodeLevelMergeTest, EmptyEmpty)
+{
+  EmptyLevel left;
+  Level right = EmptyLevel{};
+
+  Level result = std::move(left).merge(std::move(right), /*node_pivot_count=*/4);
+
+  EXPECT_TRUE(batt::is_case<EmptyLevel>(result));
+}
+
+TEST_F(InMemoryNodeLevelMergeTest, EmptyMerged)
+{
+  EmptyLevel left;
+  MergedLevel right = this->make_merged_level(64, "b_");
+  const usize expected_size = right.result_set.size();
+
+  Level result = std::move(left).merge(Level{std::move(right)}, /*node_pivot_count=*/4);
+
+  ASSERT_TRUE(batt::is_case<MergedLevel>(result));
+  auto& merged = std::get<MergedLevel>(result);
+  EXPECT_EQ(merged.result_set.size(), expected_size);
+}
+
+TEST_F(InMemoryNodeLevelMergeTest, EmptySegmented)
+{
+  constexpr usize kIterations = 100;
+
+  for (usize iter = 0; iter < kIterations; ++iter) {
+    this->rng_ = std::default_random_engine{iter};
+
+    std::uniform_int_distribution<usize> pivot_count_dist(4, 64);
+    usize node_pivot_count = pivot_count_dist(this->rng_);
+    i32 max_pivot = static_cast<i32>(node_pivot_count);
+
+    SegmentedLevel right = this->make_random_segmented_level(
+        /*base_page_id=*/iter * 100,
+        max_pivot);
+
+    std::vector<Segment> right_originals;
+    for (usize i = 0; i < right.segment_count(); ++i) {
+      right_originals.push_back(right.get_segment(i));
+    }
+
+    Level result = std::move(EmptyLevel{}).merge(Level{std::move(right)}, node_pivot_count);
+
+    ASSERT_TRUE(batt::is_case<SegmentedLevel>(result));
+    auto& segmented = std::get<SegmentedLevel>(result);
+
+    ASSERT_EQ(segmented.segment_count(), right_originals.size());
+    this->verify_pivots_shifted(right_originals,
+                                segmented,
+                                node_pivot_count,
+                                /*offset=*/0,
+                                /*check_original_inactive=*/true);
+  }
+}
+
+TEST_F(InMemoryNodeLevelMergeTest, EmptyHybrid)
+{
+  constexpr usize kIterations = 100;
+
+  for (usize iter = 0; iter < kIterations; ++iter) {
+    this->rng_ = std::default_random_engine{iter};
+
+    std::uniform_int_distribution<usize> pivot_count_dist(4, 64);
+    usize node_pivot_count = pivot_count_dist(this->rng_);
+    i32 max_pivot = static_cast<i32>(node_pivot_count);
+
+    SegmentedLevel sub_segmented = this->make_random_segmented_level(
+        /*base_page_id=*/iter * 100,
+        max_pivot);
+
+    std::vector<Segment> sub_originals;
+    for (usize i = 0; i < sub_segmented.segment_count(); ++i) {
+      sub_originals.push_back(sub_segmented.get_segment(i));
+    }
+
+    HybridLevel right = this->make_hybrid_level({std::move(sub_segmented)});
+
+    Level result = std::move(EmptyLevel{}).merge(Level{std::move(right)}, node_pivot_count);
+
+    ASSERT_TRUE(batt::is_case<HybridLevel>(result));
+    auto& hybrid = std::get<HybridLevel>(result);
+    ASSERT_EQ(hybrid.sub_levels.size(), 1u);
+    ASSERT_TRUE(batt::is_case<SegmentedLevel>(hybrid.sub_levels[0]));
+
+    auto& sub = std::get<SegmentedLevel>(hybrid.sub_levels[0]);
+    ASSERT_EQ(sub.segment_count(), sub_originals.size());
+    this->verify_pivots_shifted(sub_originals,
+                                sub,
+                                node_pivot_count,
+                                /*offset=*/0,
+                                /*check_original_inactive=*/true);
+  }
+}
+
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+// MergedLevel::merge tests
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+
+TEST_F(InMemoryNodeLevelMergeTest, MergedEmpty)
+{
+  MergedLevel left = this->make_merged_level(64, "a_");
+  const usize expected_size = left.result_set.size();
+
+  Level result = std::move(left).merge(Level{EmptyLevel{}}, /*node_pivot_count=*/4);
+
+  ASSERT_TRUE(batt::is_case<MergedLevel>(result));
+  auto& merged = std::get<MergedLevel>(result);
+  EXPECT_EQ(merged.result_set.size(), expected_size);
+}
+
+TEST_F(InMemoryNodeLevelMergeTest, MergedMerged)
+{
+  MergedLevel left = this->make_merged_level(128, "a_");
+  MergedLevel right = this->make_merged_level(64, "b_");
+
+  auto left_items = left.result_set.get();
+  auto right_items = right.result_set.get();
+  std::vector<std::string> all_keys;
+  for (const auto& item : left_items) {
+    all_keys.emplace_back(get_key(item));
+  }
+  for (const auto& item : right_items) {
+    all_keys.emplace_back(get_key(item));
+  }
+
+  Level result = std::move(left).merge(Level{std::move(right)}, /*node_pivot_count=*/4);
+
+  ASSERT_TRUE(batt::is_case<MergedLevel>(result));
+  auto& merged = std::get<MergedLevel>(result);
+  EXPECT_EQ(merged.result_set.size(), all_keys.size());
+
+  auto result_items = merged.result_set.get();
+  std::vector<std::string> result_keys;
+  for (const auto& item : result_items) {
+    result_keys.emplace_back(get_key(item));
+  }
+
+  EXPECT_EQ(result_keys, all_keys);
+}
+
+TEST_F(InMemoryNodeLevelMergeTest, MergedSegmented)
+{
+  constexpr usize kIterations = 100;
+
+  for (usize iter = 0; iter < kIterations; ++iter) {
+    this->rng_ = std::default_random_engine{iter};
+
+    std::uniform_int_distribution<usize> pivot_count_dist(4, 64);
+    usize node_pivot_count = pivot_count_dist(this->rng_);
+    i32 max_pivot = static_cast<i32>(node_pivot_count);
+
+    MergedLevel left = this->make_merged_level(32, "a_");
+    usize left_size = left.result_set.size();
+
+    SegmentedLevel right = this->make_random_segmented_level(
+        /*base_page_id=*/iter * 100,
+        max_pivot);
+
+    std::vector<Segment> right_originals;
+    for (usize i = 0; i < right.segment_count(); ++i) {
+      right_originals.push_back(right.get_segment(i));
+    }
+
+    Level result = std::move(left).merge(Level{std::move(right)}, node_pivot_count);
+
+    ASSERT_TRUE(batt::is_case<HybridLevel>(result));
+    auto& hybrid = std::get<HybridLevel>(result);
+
+    ASSERT_EQ(hybrid.sub_levels.size(), 2u);
+    ASSERT_TRUE(batt::is_case<MergedLevel>(hybrid.sub_levels[0]));
+    ASSERT_TRUE(batt::is_case<SegmentedLevel>(hybrid.sub_levels[1]));
+
+    auto& merged_sub = std::get<MergedLevel>(hybrid.sub_levels[0]);
+    EXPECT_EQ(merged_sub.result_set.size(), left_size);
+
+    auto& seg_sub = std::get<SegmentedLevel>(hybrid.sub_levels[1]);
+    ASSERT_EQ(seg_sub.segment_count(), right_originals.size());
+    this->verify_pivots_shifted(right_originals, seg_sub, node_pivot_count);
+  }
+}
+
+TEST_F(InMemoryNodeLevelMergeTest, MergedHybrid)
+{
+  constexpr usize kIterations = 100;
+
+  for (usize iter = 0; iter < kIterations; ++iter) {
+    this->rng_ = std::default_random_engine{iter};
+
+    std::uniform_int_distribution<usize> pivot_count_dist(4, 64);
+    usize node_pivot_count = pivot_count_dist(this->rng_);
+    i32 max_pivot = static_cast<i32>(node_pivot_count);
+
+    MergedLevel left = this->make_merged_level(32, "a_");
+    usize left_size = left.result_set.size();
+
+    SegmentedLevel sub_seg = this->make_random_segmented_level(
+        /*base_page_id=*/iter * 100,
+        max_pivot);
+
+    std::vector<Segment> sub_originals;
+    for (usize i = 0; i < sub_seg.segment_count(); ++i) {
+      sub_originals.push_back(sub_seg.get_segment(i));
+    }
+
+    HybridLevel right = this->make_hybrid_level({std::move(sub_seg)});
+
+    Level result = std::move(left).merge(Level{std::move(right)}, node_pivot_count);
+
+    ASSERT_TRUE(batt::is_case<HybridLevel>(result));
+    auto& hybrid = std::get<HybridLevel>(result);
+    ASSERT_EQ(hybrid.sub_levels.size(), 2u);
+
+    ASSERT_TRUE(batt::is_case<MergedLevel>(hybrid.sub_levels[0]));
+    ASSERT_TRUE(batt::is_case<SegmentedLevel>(hybrid.sub_levels[1]));
+
+    auto& merged_sub = std::get<MergedLevel>(hybrid.sub_levels[0]);
+    EXPECT_EQ(merged_sub.result_set.size(), left_size);
+
+    auto& seg_sub = std::get<SegmentedLevel>(hybrid.sub_levels[1]);
+    ASSERT_EQ(seg_sub.segment_count(), sub_originals.size());
+    this->verify_pivots_shifted(sub_originals, seg_sub, node_pivot_count);
+  }
+}
+
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+// SegmentedLevel::merge tests
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+
+TEST_F(InMemoryNodeLevelMergeTest, SegmentedEmpty)
+{
+  SegmentedLevel left = this->make_segmented_level({
+      this->make_segment(500, {0, 1}),
+      this->make_segment(501, {1, 2}),
+  });
+
+  Level result = std::move(left).merge(Level{EmptyLevel{}}, /*node_pivot_count=*/4);
+
+  ASSERT_TRUE(batt::is_case<SegmentedLevel>(result));
+  auto& segmented = std::get<SegmentedLevel>(result);
+  EXPECT_EQ(segmented.segment_count(), 2u);
+  EXPECT_TRUE(segmented.get_segment(0).is_pivot_active(0));
+  EXPECT_TRUE(segmented.get_segment(0).is_pivot_active(1));
+}
+
+TEST_F(InMemoryNodeLevelMergeTest, SegmentedMerged)
+{
+  SegmentedLevel left = this->make_segmented_level({this->make_segment(600, {0})});
+  MergedLevel right = this->make_merged_level(32, "b_");
+
+  Level result = std::move(left).merge(Level{std::move(right)}, /*node_pivot_count=*/4);
+
+  ASSERT_TRUE(batt::is_case<HybridLevel>(result));
+  auto& hybrid = std::get<HybridLevel>(result);
+  EXPECT_EQ(hybrid.sub_levels.size(), 2u);
+  EXPECT_TRUE(batt::is_case<SegmentedLevel>(hybrid.sub_levels[0]));
+  EXPECT_TRUE(batt::is_case<MergedLevel>(hybrid.sub_levels[1]));
+}
+
+TEST_F(InMemoryNodeLevelMergeTest, SegmentedSegmented_NoDuplicates)
+{
+  constexpr usize kIterations = 100;
+
+  for (usize iter = 0; iter < kIterations; ++iter) {
+    this->rng_ = std::default_random_engine{iter};
+
+    std::uniform_int_distribution<usize> pivot_count_dist(4, 64);
+    usize node_pivot_count = pivot_count_dist(this->rng_);
+    i32 max_pivot = static_cast<i32>(node_pivot_count);
+
+    SegmentedLevel left = this->make_random_segmented_level(
+        /*base_page_id=*/iter * 100,
+        max_pivot);
+
+    SegmentedLevel right = this->make_random_segmented_level(
+        /*base_page_id=*/iter * 100 + 50,
+        max_pivot);
+
+    std::vector<Segment> left_originals;
+    for (usize i = 0; i < left.segment_count(); ++i) {
+      left_originals.push_back(left.get_segment(i));
+    }
+    std::vector<Segment> right_originals;
+    for (usize i = 0; i < right.segment_count(); ++i) {
+      right_originals.push_back(right.get_segment(i));
+    }
+
+    Level result = std::move(left).merge(Level{std::move(right)}, node_pivot_count);
+
+    ASSERT_TRUE(batt::is_case<SegmentedLevel>(result));
+    auto& segmented = std::get<SegmentedLevel>(result);
+
+    this->verify_segmented_merge_no_duplicates(left_originals,
+                                               right_originals,
+                                               segmented,
+                                               node_pivot_count);
+  }
+}
+
+TEST_F(InMemoryNodeLevelMergeTest, SegmentedSegmented_WithDuplicate)
+{
+  constexpr usize kIterations = 100;
+
+  for (usize iter = 0; iter < kIterations; ++iter) {
+    this->rng_ = std::default_random_engine{iter};
+
+    std::uniform_int_distribution<usize> pivot_count_dist(4, 64);
+    usize node_pivot_count = pivot_count_dist(this->rng_);
+    i32 max_pivot = static_cast<i32>(node_pivot_count);
+
+    constexpr u64 kSharedPageId = 99999;
+
+    Segment left_shared = this->make_random_segment(kSharedPageId, max_pivot);
+    Segment right_shared = this->make_random_segment(kSharedPageId, max_pivot);
+
+    Segment left_original = left_shared;
+    Segment right_original = right_shared;
+
+    SegmentedLevel left = this->make_segmented_level({std::move(left_shared)});
+    SegmentedLevel right = this->make_segmented_level({std::move(right_shared)});
+
+    Level result = std::move(left).merge(Level{std::move(right)}, node_pivot_count);
+
+    ASSERT_TRUE(batt::is_case<SegmentedLevel>(result));
+    auto& segmented = std::get<SegmentedLevel>(result);
+
+    ASSERT_EQ(segmented.segment_count(), 1u);
+
+    auto& deduped = segmented.get_segment(0);
+    EXPECT_EQ(deduped.get_leaf_page_id().page_id, llfs::PageId{kSharedPageId});
+    this->verify_pivots_deduplication(left_original, right_original, deduped, node_pivot_count);
+    this->verify_filter_union(left_original,
+                              right_original,
+                              deduped,
+                              /*check_range=*/kFilterItemCount);
+  }
+}
+
+TEST_F(InMemoryNodeLevelMergeTest, SegmentedHybrid)
+{
+  constexpr usize kIterations = 100;
+
+  for (usize iter = 0; iter < kIterations; ++iter) {
+    this->rng_ = std::default_random_engine{iter};
+
+    std::uniform_int_distribution<usize> pivot_count_dist(4, 64);
+    usize node_pivot_count = pivot_count_dist(this->rng_);
+    i32 max_pivot = static_cast<i32>(node_pivot_count);
+
+    SegmentedLevel left = this->make_random_segmented_level(
+        /*base_page_id=*/iter * 100,
+        max_pivot);
+
+    std::vector<Segment> left_originals;
+    for (usize i = 0; i < left.segment_count(); ++i) {
+      left_originals.push_back(left.get_segment(i));
+    }
+
+    SegmentedLevel sub_seg = this->make_random_segmented_level(
+        /*base_page_id=*/iter * 100 + 50,
+        max_pivot);
+
+    std::vector<Segment> right_sub_originals;
+    for (usize i = 0; i < sub_seg.segment_count(); ++i) {
+      right_sub_originals.push_back(sub_seg.get_segment(i));
+    }
+
+    HybridLevel right = this->make_hybrid_level({std::move(sub_seg)});
+
+    Level result = std::move(left).merge(Level{std::move(right)}, node_pivot_count);
+
+    ASSERT_TRUE(batt::is_case<HybridLevel>(result));
+    auto& hybrid = std::get<HybridLevel>(result);
+    ASSERT_EQ(hybrid.sub_levels.size(), 2u);
+    ASSERT_TRUE(batt::is_case<SegmentedLevel>(hybrid.sub_levels[0]));
+    ASSERT_TRUE(batt::is_case<SegmentedLevel>(hybrid.sub_levels[1]));
+
+    auto& left_sub = std::get<SegmentedLevel>(hybrid.sub_levels[0]);
+    this->verify_pivots_unchanged(left_originals, left_sub);
+
+    auto& right_sub = std::get<SegmentedLevel>(hybrid.sub_levels[1]);
+    ASSERT_EQ(right_sub.segment_count(), right_sub_originals.size());
+    this->verify_pivots_shifted(right_sub_originals, right_sub, node_pivot_count);
+  }
+}
+
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+// HybridLevel::merge tests
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+
+TEST_F(InMemoryNodeLevelMergeTest, HybridEmpty)
+{
+  MergedLevel sub_merged = this->make_merged_level(32, "a_");
+  const usize expected_size = sub_merged.result_set.size();
+  HybridLevel left = this->make_hybrid_level({std::move(sub_merged)});
+
+  Level result = std::move(left).merge(Level{EmptyLevel{}}, /*node_pivot_count=*/4);
+
+  ASSERT_TRUE(batt::is_case<HybridLevel>(result));
+  auto& hybrid = std::get<HybridLevel>(result);
+  EXPECT_EQ(hybrid.sub_levels.size(), 1u);
+  auto& merged_sub = std::get<MergedLevel>(hybrid.sub_levels[0]);
+  EXPECT_EQ(merged_sub.result_set.size(), expected_size);
+}
+
+TEST_F(InMemoryNodeLevelMergeTest, HybridMerged)
+{
+  SegmentedLevel sub_seg = this->make_segmented_level({this->make_segment(1000, {4})});
+  HybridLevel left = this->make_hybrid_level({std::move(sub_seg)});
+
+  MergedLevel right = this->make_merged_level(32, "b_");
+
+  Level result = std::move(left).merge(Level{std::move(right)}, /*node_pivot_count=*/4);
+
+  ASSERT_TRUE(batt::is_case<HybridLevel>(result));
+  auto& hybrid = std::get<HybridLevel>(result);
+  EXPECT_EQ(hybrid.sub_levels.size(), 2u);
+  EXPECT_TRUE(batt::is_case<SegmentedLevel>(hybrid.sub_levels[0]));
+  EXPECT_TRUE(batt::is_case<MergedLevel>(hybrid.sub_levels[1]));
+}
+
+TEST_F(InMemoryNodeLevelMergeTest, HybridSegmented)
+{
+  constexpr usize kIterations = 100;
+
+  for (usize iter = 0; iter < kIterations; ++iter) {
+    this->rng_ = std::default_random_engine{iter};
+
+    std::uniform_int_distribution<usize> pivot_count_dist(4, 64);
+    usize node_pivot_count = pivot_count_dist(this->rng_);
+    i32 max_pivot = static_cast<i32>(node_pivot_count);
+
+    MergedLevel sub_merged = this->make_merged_level(16, "a_");
+    HybridLevel left = this->make_hybrid_level({std::move(sub_merged)});
+
+    SegmentedLevel right = this->make_random_segmented_level(
+        /*base_page_id=*/iter * 100,
+        max_pivot);
+
+    std::vector<Segment> right_originals;
+    for (usize i = 0; i < right.segment_count(); ++i) {
+      right_originals.push_back(right.get_segment(i));
+    }
+
+    Level result = std::move(left).merge(Level{std::move(right)}, node_pivot_count);
+
+    ASSERT_TRUE(batt::is_case<HybridLevel>(result));
+    auto& hybrid = std::get<HybridLevel>(result);
+
+    ASSERT_EQ(hybrid.sub_levels.size(), 2u);
+    EXPECT_TRUE(batt::is_case<MergedLevel>(hybrid.sub_levels[0]));
+    ASSERT_TRUE(batt::is_case<SegmentedLevel>(hybrid.sub_levels[1]));
+
+    auto& seg_sub = std::get<SegmentedLevel>(hybrid.sub_levels[1]);
+    ASSERT_EQ(seg_sub.segment_count(), right_originals.size());
+    this->verify_pivots_shifted(right_originals, seg_sub, node_pivot_count);
+  }
+}
+
+TEST_F(InMemoryNodeLevelMergeTest, HybridHybrid_NoDuplicate)
+{
+  constexpr usize kIterations = 100;
+
+  for (usize iter = 0; iter < kIterations; ++iter) {
+    this->rng_ = std::default_random_engine{iter};
+
+    std::uniform_int_distribution<usize> pivot_count_dist(4, 64);
+    usize node_pivot_count = pivot_count_dist(this->rng_);
+    i32 max_pivot = static_cast<i32>(node_pivot_count);
+
+    MergedLevel left_sub = this->make_merged_level(16, "a_");
+    usize left_sub_size = left_sub.result_set.size();
+    HybridLevel left = this->make_hybrid_level({std::move(left_sub)});
+
+    SegmentedLevel right_sub = this->make_random_segmented_level(
+        /*base_page_id=*/iter * 100,
+        max_pivot);
+
+    std::vector<Segment> right_sub_originals;
+    for (usize i = 0; i < right_sub.segment_count(); ++i) {
+      right_sub_originals.push_back(right_sub.get_segment(i));
+    }
+
+    HybridLevel right = this->make_hybrid_level({std::move(right_sub)});
+
+    Level result = std::move(left).merge(Level{std::move(right)}, node_pivot_count);
+
+    ASSERT_TRUE(batt::is_case<HybridLevel>(result));
+    auto& hybrid = std::get<HybridLevel>(result);
+    ASSERT_EQ(hybrid.sub_levels.size(), 2u);
+    ASSERT_TRUE(batt::is_case<MergedLevel>(hybrid.sub_levels[0]));
+    ASSERT_TRUE(batt::is_case<SegmentedLevel>(hybrid.sub_levels[1]));
+
+    auto& merged_sub = std::get<MergedLevel>(hybrid.sub_levels[0]);
+    EXPECT_EQ(merged_sub.result_set.size(), left_sub_size);
+
+    auto& seg_sub = std::get<SegmentedLevel>(hybrid.sub_levels[1]);
+    ASSERT_EQ(seg_sub.segment_count(), right_sub_originals.size());
+    this->verify_pivots_shifted(right_sub_originals, seg_sub, node_pivot_count);
+  }
+}
+
+TEST_F(InMemoryNodeLevelMergeTest, HybridHybrid_WithDuplicate)
+{
+  constexpr usize kIterations = 100;
+
+  for (usize iter = 0; iter < kIterations; ++iter) {
+    this->rng_ = std::default_random_engine{iter};
+
+    std::uniform_int_distribution<usize> pivot_count_dist(4, 64);
+    usize node_pivot_count = pivot_count_dist(this->rng_);
+    i32 max_pivot = static_cast<i32>(node_pivot_count);
+
+    constexpr u64 kSharedPageId = 1400;
+
+    Segment left_shared = this->make_random_segment(kSharedPageId, max_pivot);
+    Segment right_shared = this->make_random_segment(kSharedPageId, max_pivot);
+
+    Segment left_original = left_shared;
+    Segment right_original = right_shared;
+
+    SegmentedLevel left_sub_seg = this->make_segmented_level({std::move(left_shared)});
+    HybridLevel left = this->make_hybrid_level({std::move(left_sub_seg)});
+
+    Segment extra_seg = this->make_random_segment(/*page_id=*/iter * 100 + 1401, max_pivot);
+    SegmentedLevel right_sub_seg = this->make_segmented_level({
+        std::move(right_shared),
+        std::move(extra_seg),
+    });
+    HybridLevel right = this->make_hybrid_level({std::move(right_sub_seg)});
+
+    Level result = std::move(left).merge(Level{std::move(right)}, node_pivot_count);
+
+    ASSERT_TRUE(batt::is_case<HybridLevel>(result));
+    auto& hybrid = std::get<HybridLevel>(result);
+
+    ASSERT_EQ(hybrid.sub_levels.size(), 2u);
+
+    auto& left_final_sub = std::get<SegmentedLevel>(hybrid.sub_levels[0]);
+    EXPECT_EQ(left_final_sub.segment_count(), 0u);
+
+    auto& right_final_sub = std::get<SegmentedLevel>(hybrid.sub_levels[1]);
+    EXPECT_EQ(right_final_sub.segment_count(), 2u);
+
+    auto& deduped = right_final_sub.get_segment(0);
+    EXPECT_EQ(deduped.get_leaf_page_id().page_id, llfs::PageId{kSharedPageId});
+    this->verify_pivots_deduplication(left_original, right_original, deduped, node_pivot_count);
+    this->verify_filter_union(left_original,
+                              right_original,
+                              deduped,
+                              /*check_range=*/kFilterItemCount);
+  }
 }
 
 }  // namespace

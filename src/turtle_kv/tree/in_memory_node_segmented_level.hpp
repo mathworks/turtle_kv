@@ -106,27 +106,6 @@ struct InMemoryNodeSegment {
     return this->filter.find_live_range(i);
   }
 
-  usize num_cut_points() const
-  {
-    Slice<const Interval<u32>> live_ranges = this->filter.live();
-
-    // If the first element is live, don't include 0 as a cut point, only include the
-    // upper bound.
-    //
-    bool first_element_live = !live_ranges.empty() && live_ranges.front().lower_bound ==
-                                                          PiecewiseFilter<u32>::kMinLowerBound;
-    bool ends_at_max = !live_ranges.empty() &&
-                       live_ranges.back().upper_bound == PiecewiseFilter<u32>::kMaxUpperBound;
-
-    return live_ranges.size() * 2 - (first_element_live ? 1 : 0) - (ends_at_max ? 1 : 0);
-  }
-
-  void deduplicate(const InMemoryNodeSegment& other)
-  {
-    this->active_pivots |= other.active_pivots;
-    this->filter.merge(other.filter);
-  }
-
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   /** \brief Panic if filter invariants are not satisfied.
@@ -156,6 +135,17 @@ struct InMemoryNodeSegment {
   StatusOr<llfs::PinnedPage> load_leaf_page(llfs::PageLoader& page_loader,
                                             llfs::PinPageToJob pin_page_to_job,
                                             llfs::PageCacheOvercommit& overcommit) const;
+
+  /** \brief Calculates the number of element needed for the serialized array representation of
+   * PiecewiseFilter.
+   */
+  usize num_cut_points() const;
+
+  /** \brief Deduplicates two identical segments, if their page ids are the same.
+   * 
+   * If the deduplication occurs, `true` is returned. Otherwise, `false` is returned.
+   */
+  [[nodiscard]] bool deduplicate(const InMemoryNodeSegment& other);
 
   /** \brief Prints a human-readable representation of this Segment.
    */
@@ -212,7 +202,7 @@ struct InMemoryNodeSegmentedLevel {
 
   InMemoryNodeSegment* back()
   {
-        if (this->segments.empty()) {
+    if (this->segments.empty()) {
       return nullptr;
     }
 
@@ -292,6 +282,9 @@ struct InMemoryNodeSegmentedLevel {
    */
   usize segment_filter_cut_points() const;
 
+  /** \brief Removes the specified number pivots from the end of the `active_pivots` bit set for
+   * each segment in this level.
+   */
   void push_front_pivots(usize node_pivot_count);
 
   StatusOr<ValueView> find_key(const InMemoryNode& node, KeyQuery& query, i32 key_pivot_i) const;
@@ -307,9 +300,11 @@ struct InMemoryNodeSegmentedLevel {
    */
   InMemoryNodeLevel merge(InMemoryNodeLevel&& sibling_level, usize node_pivot_count) &&;
 
-  void deduplicate(InMemoryNodeSegmentedLevel& right_level, usize push_pivot_count = 0);
-
-  void deduplicate(InMemoryNodeHybridLevel& right_level, usize push_pivot_count = 0);
+  /** \brief Deduplicates segments on the seam between two levels from two different nodes that
+   * have arisen due to a prior node split.
+   */
+  template <typename T>
+  void deduplicate(T& right_level, usize push_pivot_count = 0);
 
   /** \brief Prints a human-readable representation of the level.
    */

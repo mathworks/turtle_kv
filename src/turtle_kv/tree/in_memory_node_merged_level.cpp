@@ -19,6 +19,68 @@ using SegmentedLevel = InMemoryNodeSegmentedLevel;
 using HybridLevel = InMemoryNodeHybridLevel;
 using Segment = InMemoryNodeSegment;
 
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+usize InMemoryNodeMergedLevel::estimate_segment_count(const TreeOptions& tree_options) const
+{
+  const usize packed_size = this->result_set.get_packed_size();
+  if (packed_size == 0) {
+    return 0;
+  }
+
+  const usize capacity_per_segment = tree_options.flush_size() - tree_options.max_item_size();
+  const usize estimated = (packed_size + capacity_per_segment - 1) / capacity_per_segment;
+
+  BATT_CHECK_GE(estimated * capacity_per_segment, packed_size);
+  BATT_CHECK_LT((estimated - 1) * capacity_per_segment, packed_size)
+      << BATT_INSPECT(estimated) << BATT_INSPECT(capacity_per_segment);
+
+  return estimated;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+InMemoryNodeMergedLevel InMemoryNodeMergedLevel::concat(InMemoryNodeMergedLevel&& that)
+{
+  return InMemoryNodeMergedLevel{
+      .result_set = MergeCompactor::ResultSet<false>::concat(std::move(this->result_set),
+                                                             std::move(that.result_set)),
+      .segment_future_ids_ = {}};
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+bool InMemoryNodeMergedLevel::set_items_flushed(const CInterval<KeyView>& flush_key_crange)
+{
+  this->result_set.drop_key_range(flush_key_crange);
+  return this->result_set.empty();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+bool InMemoryNodeMergedLevel::set_items_flushed(const Interval<KeyView>& flush_key_range)
+{
+  this->result_set.drop_key_range_half_open(flush_key_range);
+  return this->result_set.empty();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+MergeCompactor::ResultSet<false>* InMemoryNodeMergedLevel::front()
+{
+  if (this->result_set.empty()) {
+    return nullptr;
+  }
+
+  return &this->result_set;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+MergeCompactor::ResultSet<false>* InMemoryNodeMergedLevel::back()
+{
+  return this->front();
+}
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
