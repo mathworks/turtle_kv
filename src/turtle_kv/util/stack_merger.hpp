@@ -168,6 +168,8 @@ class StackMerger
   {
     const usize n_items = this->size();
 
+    BATT_CHECK_NOT_NULLPTR(this->begin_);
+
     for (usize child_i = n_items; child_i > 1;) {
       --child_i;
       const usize parent_i = Self::get_parent(child_i);
@@ -206,6 +208,7 @@ class StackMerger
   {
     if (this->begin_ != this->static_array_.data()) {
       delete[] this->begin_;
+      this->begin_ = nullptr;
     }
   }
 
