@@ -34,6 +34,8 @@ struct DefaultStackMergerCompare {
 
 }  // namespace detail
 
+/** \brief A priority queue implemented as a ternary min-heap.
+ */
 template <typename T,
           typename CompareFn = detail::DefaultStackMergerCompare<T>,
           usize kStaticSize = 64>

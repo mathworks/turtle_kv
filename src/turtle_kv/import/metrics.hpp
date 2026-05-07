@@ -117,6 +117,11 @@ struct NullLatencyMetric {
   {
   }
 
+  template <typename... A>
+  void update_nanos(A&&...) const noexcept
+  {
+  }
+
   double nonzero_count() const noexcept
   {
     return -1;
@@ -127,7 +132,7 @@ struct NullLatencyMetric {
     return -1;
   }
 
-  double rate_per_second() const noexcept
+  double rate_per_second(bool = true) const noexcept
   {
     return -1;
   }
