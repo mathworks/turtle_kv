@@ -176,9 +176,12 @@ class StackMerger
    */
   void check_invariants()
   {
+    BATT_CHECK_NOT_NULLPTR(this->begin_);
+
     const usize n_items = this->size();
 
-    BATT_CHECK_NOT_NULLPTR(this->begin_);
+    BATT_CHECK_LE(n_items, this->capacity_);
+    BATT_CHECK_LE(std::distance(this->begin_, this->end_), this->capacity_);
 
     for (usize child_i = n_items; child_i > 1;) {
       --child_i;
@@ -196,6 +199,13 @@ class StackMerger
       BATT_CHECK(this->compare(this->begin_[parent_i], this->begin_[child_i]))
           << BATT_INSPECT(parent_i) << BATT_INSPECT(child_i) << " " << this->dump_items();
     }
+  }
+
+  /** \brief Returns the maximum number of items the merger can currently hold.
+   */
+  usize capacity() const noexcept
+  {
+    return this->capacity_;
   }
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -240,8 +250,10 @@ class StackMerger
     //
     if (capacity > this->static_array_.size()) {
       this->begin_ = new ItemRef[capacity];
+      this->capacity_ = capacity;
     } else {
       this->begin_ = this->static_array_.data();
+      this->capacity_ = this->static_array_.size();
     }
   }
 
@@ -337,9 +349,10 @@ class StackMerger
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  ItemRef* begin_;
-  ItemRef* end_;
+  ItemRef* begin_ = nullptr;
+  ItemRef* end_ = nullptr;
   CompareFn compare_;
+  usize capacity_ = 0;
   std::array<ItemRef, kStaticSize> static_array_;
 };
 
