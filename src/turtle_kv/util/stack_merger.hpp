@@ -81,11 +81,15 @@ class StackMerger
   explicit StackMerger(usize capacity = 0) noexcept
   {
     this->reserve(capacity);
+    BATT_CHECK_EQ(this->size(), 0);
+    BATT_CHECK(this->empty());
   }
 
   explicit StackMerger(const Slice<T>& items) noexcept
   {
     this->initialize(items, /*minimum_capacity=*/0);
+    BATT_CHECK_EQ(this->size(), items.size());
+    BATT_CHECK_EQ(this->empty(), items.empty());
   }
 
   ~StackMerger() noexcept
@@ -236,6 +240,7 @@ class StackMerger
     if (this->begin_ != this->static_array_.data()) {
       delete[] this->begin_;
       this->begin_ = nullptr;
+      this->end_ = nullptr;
     }
   }
 
