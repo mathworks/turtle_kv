@@ -215,7 +215,7 @@ struct KeyQuery {
 
     // If the filter says yes, the query key might be in the set; can't reject.
     //
-    const bool reject = BATT_COLLECT_LATENCY_SAMPLE(
+    const bool reject = TURTLE_KV_COLLECT_LATENCY_SAMPLE(
         Every2ToTheConst<16>{},
         Self::metrics().filter_lookup_latency,
         (bloom_filter_page.bloom_filter.query(this->bloom_filter_query) == false));
@@ -269,7 +269,6 @@ StatusOr<ValueView> find_key_in_leaf(const llfs::PageIdSlot& leaf_page_id,
                                      KeyQuery& query,
                                      usize& item_index_out);
 
-StatusOr<u32> find_key_lower_bound_index(llfs::PageId leaf_page_id,
-                                         KeyQuery& query);
+StatusOr<u32> find_key_lower_bound_index(llfs::PageId leaf_page_id, KeyQuery& query);
 
 }  // namespace turtle_kv
