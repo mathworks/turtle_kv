@@ -92,6 +92,9 @@ class StackMerger
     BATT_CHECK_EQ(this->empty(), items.empty());
   }
 
+  StackMerger(const StackMerger&) = delete;
+  StackMerger& operator=(const StackMerger&) = delete;
+
   ~StackMerger() noexcept
   {
     this->release_storage();
