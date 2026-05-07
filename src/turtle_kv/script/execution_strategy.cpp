@@ -268,9 +268,22 @@ StatusOr<usize> Parallel::activate(ExecutionStrategy*) /*override*/
 
   for (i32 thread_i = 0; thread_i < this->n_threads_; ++thread_i) {
     this->threads_.emplace_back([thread_i, this] {
+      auto on_thread_exit = batt::finally([&] {
+        if (this->context_.kv_store) {
+          this->context_.kv_store->reset_thread_context();
+          this->context_.kv_store->release_thread_context();
+        }
+      });
+
       VLOG(1) << BATT_INSPECT(thread_i) << " started";
       for (;;) {
         VLOG(1) << BATT_INSPECT(thread_i) << " idle";
+
+        auto on_loop_iteration_exit = batt::finally([&] {
+          if (this->context_.kv_store) {
+            this->context_.kv_store->reset_thread_context();
+          }
+        });
 
         //----- --- -- -  -  -   -
         // Wait for the stage to start.
@@ -287,7 +300,7 @@ StatusOr<usize> Parallel::activate(ExecutionStrategy*) /*override*/
 
         VLOG(1) << BATT_INSPECT(thread_i) << " entered stage";
 
-        auto on_scope_exit = batt::finally([&] {
+        auto on_stage_exit = batt::finally([&] {
           VLOG(1) << BATT_INSPECT(thread_i) << " finished stage";
 
           // Wait for the stage to finish.
@@ -325,25 +338,25 @@ StatusOr<usize> Parallel::activate(ExecutionStrategy*) /*override*/
             if (next_op_i >= op_count) {
               break;
             }
-            BATT_ASSERT_EQ(next_op_i % this->n_threads_, shard_k);
-            BATT_ASSERT_EQ((next_op_i + kStepSize) % this->n_threads_, shard_k);
+            BATT_CHECK_EQ(next_op_i % this->n_threads_, shard_k);
+            BATT_CHECK_EQ((next_op_i + kStepSize) % this->n_threads_, shard_k);
 
             // Calculate the end of the claimed operations.
             //
             const i64 last_op_i =
                 std::min(op_count - ops_per_thread_rem + shard_k, next_op_i + kStepSize);
 
-            BATT_ASSERT_EQ((last_op_i + kStepSize) % this->n_threads_, shard_k);
+            BATT_CHECK_EQ((last_op_i + kStepSize) % this->n_threads_, shard_k);
 
             // Execute claimed operations.
             //
             for (; next_op_i != last_op_i; next_op_i += this->n_threads_) {
-              BATT_ASSERT_EQ(next_op_i % this->n_threads_, shard_k);
-              BATT_ASSERT_LT(next_op_i, op_count);
+              BATT_CHECK_EQ(next_op_i % this->n_threads_, shard_k);
+              BATT_CHECK_LT(next_op_i, op_count);
 
               state.status.Update(execute_op(this->context_, this->stage_ops_[next_op_i]));
             }
-            BATT_ASSERT_EQ(next_op_i % this->n_threads_, shard_k);
+            BATT_CHECK_EQ(next_op_i % this->n_threads_, shard_k);
           }
         }
       }
@@ -483,6 +496,11 @@ StatusOr<usize> Concurrent::retire(ExecutionStrategy* parent) /*override*/
   for (auto& task_ops : this->all_tasks_) {
     op_count += task_ops.size();
     threads.emplace_back([this, p_ops = &task_ops, task_status = &status[threads.size()]] {
+      auto on_thread_exit = batt::finally([&] {
+        this->context_.kv_store->reset_thread_context();
+        this->context_.kv_store->release_thread_context();
+      });
+
       for (Operation& op : *p_ops) {
         task_status->Update(execute_op(this->context_, op));
         if (!task_status->ok()) {

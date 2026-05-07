@@ -1,8 +1,18 @@
+//=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
+//
+// Part of the TurtleKV Project, under Apache License v2.0.
+// See https://www.apache.org/licenses/LICENSE-2.0 for license information.
+// SPDX short identifier: Apache-2.0
+//
+//+++++++++++-+-+--+----- --- -- -  -  -   -
+
 #pragma once
+#define TURTLE_KV_UTIL_STACK_MERGER_HPP
 
 #include <turtle_kv/import/int_types.hpp>
 #include <turtle_kv/import/slice.hpp>
 
+#include <batteries/async/debug_info.hpp>
 #include <batteries/utility.hpp>
 
 #include <glog/logging.h>
@@ -73,12 +83,19 @@ class StackMerger
   explicit StackMerger(usize capacity = 0) noexcept
   {
     this->reserve(capacity);
+    BATT_CHECK_EQ(this->size(), 0);
+    BATT_CHECK(this->empty());
   }
 
   explicit StackMerger(const Slice<T>& items) noexcept
   {
     this->initialize(items, /*minimum_capacity=*/0);
+    BATT_CHECK_EQ(this->size(), items.size());
+    BATT_CHECK_EQ(this->empty(), items.empty());
   }
+
+  StackMerger(const StackMerger&) = delete;
+  StackMerger& operator=(const StackMerger&) = delete;
 
   ~StackMerger() noexcept
   {
@@ -168,17 +185,39 @@ class StackMerger
    */
   void check_invariants()
   {
+    BATT_CHECK_NOT_NULLPTR(this->begin_);
+
     const usize n_items = this->size();
 
-    for (usize child_i = n_items; child_i > 1;) {
+    BATT_CHECK_LE(n_items, this->capacity_);
+    BATT_CHECK_LE(std::distance(this->begin_, this->end_), this->capacity_);
+
+    usize child_i = 0;
+    usize parent_i = 0;
+
+    BATT_DEBUG_INFO(                                        //
+        BATT_INSPECT(child_i) <<                            //
+        BATT_INSPECT(parent_i) <<                           //
+        BATT_INSPECT((void*)this->begin_) <<                //
+        BATT_INSPECT((void*)this->static_array_.data()) <<  //
+        BATT_INSPECT(n_items));
+
+    for (child_i = n_items; child_i > 1;) {
       --child_i;
-      const usize parent_i = Self::get_parent(child_i);
+      parent_i = Self::get_parent(child_i);
 
       BATT_CHECK_LT(parent_i, n_items);
       BATT_CHECK_LT(child_i, n_items);
       BATT_CHECK(this->compare(this->begin_[parent_i], this->begin_[child_i]))
           << BATT_INSPECT(parent_i) << BATT_INSPECT(child_i) << " " << this->dump_items();
     }
+  }
+
+  /** \brief Returns the maximum number of items the merger can currently hold.
+   */
+  usize capacity() const noexcept
+  {
+    return this->capacity_;
   }
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -206,8 +245,14 @@ class StackMerger
 
   void release_storage()
   {
-    if (this->begin_ != this->static_array_.data()) {
-      delete[] this->begin_;
+    if (this->begin_ != nullptr) {
+      if (this->begin_ != this->static_array_.data()) {
+        delete[] this->begin_;
+      }
+      this->begin_ = nullptr;
+      this->end_ = nullptr;
+    } else {
+      BATT_CHECK_EQ(this->end_, nullptr);
     }
   }
 
@@ -215,6 +260,9 @@ class StackMerger
    */
   void reserve(usize capacity)
   {
+    BATT_CHECK_EQ(this->begin_, nullptr);
+    BATT_CHECK_EQ(this->end_, nullptr);
+
     static_assert(sizeof(T) >= 8);
     static_assert(alignof(T) >= 8);
 
@@ -222,9 +270,12 @@ class StackMerger
     //
     if (capacity > this->static_array_.size()) {
       this->begin_ = new ItemRef[capacity];
+      this->capacity_ = capacity;
     } else {
       this->begin_ = this->static_array_.data();
+      this->capacity_ = this->static_array_.size();
     }
+    this->end_ = this->begin_;
   }
 
   /** \brief Returns true iff the left argument comes before the right in min-heap order.
@@ -319,9 +370,10 @@ class StackMerger
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  ItemRef* begin_;
-  ItemRef* end_;
+  ItemRef* begin_ = nullptr;
+  ItemRef* end_ = nullptr;
   CompareFn compare_;
+  usize capacity_ = 0;
   std::array<ItemRef, kStaticSize> static_array_;
 };
 

@@ -598,6 +598,9 @@ Status ChangeLogWriter::collect_blocks(CollectedBlocksState& output) noexcept
     }
   }
 
+  // TODO [tastolfi 2026-05-05] reverse each thread's stack, then collect in round-robin order
+  //  std::reverse(output.blocks.begin(), output.blocks.end());
+
   return OkStatus();
 }
 

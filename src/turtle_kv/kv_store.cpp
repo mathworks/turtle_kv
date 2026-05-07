@@ -837,6 +837,15 @@ void KVStore::reset_thread_context() noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+void KVStore::release_thread_context() noexcept
+{
+  ThreadContext& thread_context = this->per_thread_.get(this);
+
+  thread_context.release();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 llfs::PageLoader& KVStore::ThreadContext::get_page_loader()
 {
   const u64 n = query_page_loader_reset_every_n();

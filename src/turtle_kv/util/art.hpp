@@ -984,9 +984,9 @@ class ARTBase
       u8* start = reinterpret_cast<u8*>(this->thread_extents_.back().get());
 
       // TODO [tastolfi 2026-05-04] remove
-      BATT_CHECK_OK(pkey().add_region(batt::MutableBuffer{start, 4096}));
+      // BATT_CHECK_OK(pkey().add_region(batt::MutableBuffer{start, 4096}));
       // TODO [tastolfi 2026-05-04] remove
-      BATT_CHECK_OK(pkey().add_region(batt::MutableBuffer{start + (4096 + kExtentSize), 4096}));
+      // BATT_CHECK_OK(pkey().add_region(batt::MutableBuffer{start + (4096 + kExtentSize), 4096}));
 
       // TODO [tastolfi 2026-05-04] revert 4096
       this->data_ = start + 4096;

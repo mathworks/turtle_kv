@@ -70,7 +70,8 @@ class KVStore : public Table
     Optional<PageSliceStorage> scan_result_storage;
     u64 query_count = 0;
     ChangeLogWriter& change_log_writer_;
-    ChangeLogWriter::Context change_log_writer_context_;
+    Optional<ChangeLogWriter::Context> log_context_;
+    ChangeLogWriter::Context& change_log_writer_context_{*this->log_context_};
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -79,8 +80,20 @@ class KVStore : public Table
         , storage_context{kv_store->storage_context_}
         , query_page_loader{this->page_cache}
         , change_log_writer_{*kv_store->change_log_writer_}
-        , change_log_writer_context_{this->change_log_writer_}
+        , log_context_{this->change_log_writer_}
     {
+    }
+
+    /** \brief Releases all resources for this context; the thread that calls this function MUST NOT
+     * use the KVStore instance afterwards!
+     */
+    void release() noexcept
+    {
+      this->log_context_ = None;
+      this->scan_result_storage = None;
+      this->query_result_storage = None;
+      this->query_page_loader = None;
+      this->storage_context = nullptr;
     }
 
     llfs::PageLoader& get_page_loader();
@@ -225,7 +238,13 @@ class KVStore : public Table
     return this->page_cache_;
   }
 
+  /** \brief Clears any caches for this KVStore scoped to the current thread.
+   */
   void reset_thread_context() noexcept;
+
+  /** \brief
+   */
+  void release_thread_context() noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:

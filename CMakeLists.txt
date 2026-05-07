@@ -4,9 +4,13 @@ project(turtle_kv CXX)
 include(${COR_CMAKE_INCLUDE_DIR}/common.cmake)
 include(${CMAKE_BINARY_DIR}/conan_find_requirements.cmake)
 
-# Enable link-time optimization. NOTE: currently breaks arm64 Linux (M1)
+# Disable link-time optimization if the compilation flags are not compatible.
 #
-set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
+if ("${CMAKE_CXX_FLAGS} ${CMAKE_CXX_FLAGS_DEBUG} ${CMAKE_CXX_FLAGS_RELEASE} ${CMAKE_CXX_FLAGS_RELWITHDEBINFO}"
+    MATCHES "-fsanitize=address|-fno-lto")
+  message("\nNDTE: Disabling LTO because of compile flags: ${CMAKE_MATCH_0}\n")
+  set(CMAKE_INTERPROCEDURAL_OPTIMIZATION FALSE)
+endif ()
 
 # The src dir should appear in the include path.
 #

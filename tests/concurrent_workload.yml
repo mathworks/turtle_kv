@@ -17,7 +17,6 @@ script:
         key_dist: uniform
         key_size: 24
         value_size: 10
-        n_threads: 8
     - concurrent:
         tasks:
           - point_query:

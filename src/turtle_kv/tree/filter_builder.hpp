@@ -1,3 +1,11 @@
+//=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
+//
+// Part of the TurtleKV Project, under Apache License v2.0.
+// See https://www.apache.org/licenses/LICENSE-2.0 for license information.
+// SPDX short identifier: Apache-2.0
+//
+//+++++++++++-+-+--+----- --- -- -  -  -   -
+
 #pragma once
 #define TURTLE_KV_FILTER_BUILDER_HPP
 
@@ -26,7 +34,9 @@
 #include <llfs/page_layout_id.hpp>
 #include <llfs/pinned_page.hpp>
 
+#if TURTLE_KV_USE_QUOTIENT_FILTER
 #include <vqf/vqf_filter.h>
+#endif  // TURTLE_KV_USE_QUOTIENT_FILTER
 
 #include <batteries/async/debug_info.hpp>
 #include <batteries/async/types.hpp>
@@ -176,7 +186,7 @@ Status build_bloom_filter_for_leaf(boost::intrusive_ptr<FilterPageWriteState>&& 
                                                       items,
                                                       BATT_OVERLOADS_OF(get_key),
                                                       llfs::BloomFilterLayout::kBlocked512,
-                                                      filter_bits_per_key,
+                                                      llfs::BitsPerKey{filter_bits_per_key},
                                                       /*opt_hash_count=*/None,
                                                       leaf_page_id,
                                                       llfs::ComputeChecksum{false},
@@ -218,6 +228,8 @@ struct QuotientFilterMetrics {
   StatsMetric<u64> bits_per_key_stats;
   LatencyMetric build_page_latency;
 };
+
+#if TURTLE_KV_USE_QUOTIENT_FILTER
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
@@ -357,6 +369,8 @@ Status build_quotient_filter_for_leaf(boost::intrusive_ptr<FilterPageWriteState>
 
   return OkStatus();
 }
+
+#endif  // TURTLE_KV_USE_QUOTIENT_FILTER
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 
