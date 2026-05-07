@@ -248,6 +248,9 @@ class StackMerger
    */
   void reserve(usize capacity)
   {
+    BATT_CHECK_EQ(this->begin_, nullptr);
+    BATT_CHECK_EQ(this->end_, nullptr);
+
     static_assert(sizeof(T) >= 8);
     static_assert(alignof(T) >= 8);
 
