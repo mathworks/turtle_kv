@@ -25,8 +25,8 @@ fi
 
 # Select the build configuration.
 #
-#cor select --clean --profile=linux-gcc12-x86_64 --build-type=Release
-cor select --clean --profile=linux-gcc12-x86_64 --build-type=RelWithDebInfo
+cor select --clean --profile=linux-gcc12-x86_64 --build-type=Release
+#cor select --clean --profile=linux-gcc12-x86_64 --build-type=RelWithDebInfo
 
 # Build.
 #

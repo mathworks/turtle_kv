@@ -187,16 +187,19 @@ class StackMerger
     BATT_CHECK_LE(n_items, this->capacity_);
     BATT_CHECK_LE(std::distance(this->begin_, this->end_), this->capacity_);
 
-    for (usize child_i = n_items; child_i > 1;) {
-      --child_i;
-      const usize parent_i = Self::get_parent(child_i);
+    usize child_i = 0;
+    usize parent_i = 0;
 
-      BATT_DEBUG_INFO(                                        //
-          BATT_INSPECT(child_i) <<                            //
-          BATT_INSPECT(parent_i) <<                           //
-          BATT_INSPECT((void*)this->begin_) <<                //
-          BATT_INSPECT((void*)this->static_array_.data()) <<  //
-          BATT_INSPECT(n_items));
+    BATT_DEBUG_INFO(                                        //
+        BATT_INSPECT(child_i) <<                            //
+        BATT_INSPECT(parent_i) <<                           //
+        BATT_INSPECT((void*)this->begin_) <<                //
+        BATT_INSPECT((void*)this->static_array_.data()) <<  //
+        BATT_INSPECT(n_items));
+
+    for (child_i = n_items; child_i > 1;) {
+      --child_i;
+      parent_i = Self::get_parent(child_i);
 
       BATT_CHECK_LT(parent_i, n_items);
       BATT_CHECK_LT(child_i, n_items);
