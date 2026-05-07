@@ -255,6 +255,7 @@ class StackMerger
       this->begin_ = this->static_array_.data();
       this->capacity_ = this->static_array_.size();
     }
+    this->end_ = this->begin_;
   }
 
   /** \brief Returns true iff the left argument comes before the right in min-heap order.
