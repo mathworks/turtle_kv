@@ -25,13 +25,15 @@ fi
 
 # Select the build configuration.
 #
-cor select --clean --profile=linux-gcc12-x86_64 --build-type=Release
+#cor select --clean --profile=linux-gcc12-x86_64 --build-type=Release
+cor select --clean --profile=linux-gcc12-x86_64 --build-type=RelWithDebInfo
 
 # Build.
 #
 # cor install makes sure deps are uploaded to the cache server first;
 # TODO [tastolfi 2025-09-27] - Add a `cor pre-cache <options> <package_name>/<version> ...` command
 #
-cor install --clean
-cor build   --clean
-cor test    --only
+cor clean
+cor install
+cor build
+cor test --only
