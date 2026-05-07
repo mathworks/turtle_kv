@@ -246,9 +246,9 @@ class StackMerger
     if (this->begin_ != nullptr) {
       if (this->begin_ != this->static_array_.data()) {
         delete[] this->begin_;
-        this->begin_ = nullptr;
-        this->end_ = nullptr;
       }
+      this->begin_ = nullptr;
+      this->end_ = nullptr;
     } else {
       BATT_CHECK_EQ(this->end_, nullptr);
     }
