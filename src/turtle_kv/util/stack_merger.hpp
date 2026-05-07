@@ -80,7 +80,7 @@ class StackMerger
 
   explicit StackMerger(usize capacity = 0) noexcept
   {
-    this->reserve(capacity, __LINE__);
+    this->reserve(capacity);
     BATT_CHECK_EQ(this->size(), 0);
     BATT_CHECK(this->empty());
   }
@@ -223,7 +223,7 @@ class StackMerger
   void initialize(const Slice<T>& items, usize minimum_capacity)
   {
     const usize n_items = items.size();
-    this->reserve(std::max(minimum_capacity, n_items), __LINE__);
+    this->reserve(std::max(minimum_capacity, n_items));
 
     // Initialize item pointers.
     //
@@ -256,9 +256,9 @@ class StackMerger
 
   /** \brief Initializes internal storage.
    */
-  void reserve(usize capacity, int line)
+  void reserve(usize capacity)
   {
-    BATT_CHECK_EQ(this->begin_, nullptr) << BATT_INSPECT(line);
+    BATT_CHECK_EQ(this->begin_, nullptr);
     BATT_CHECK_EQ(this->end_, nullptr);
 
     static_assert(sizeof(T) >= 8);
