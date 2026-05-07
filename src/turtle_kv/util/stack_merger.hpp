@@ -174,6 +174,13 @@ class StackMerger
       --child_i;
       const usize parent_i = Self::get_parent(child_i);
 
+      BATT_DEBUG_INFO(                                        //
+          BATT_INSPECT(child_i) <<                            //
+          BATT_INSPECT(parent_i) <<                           //
+          BATT_INSPECT((void*)this->begin_) <<                //
+          BATT_INSPECT((void*)this->static_array_.data()) <<  //
+          BATT_INSPECT(n_items));
+
       BATT_CHECK_LT(parent_i, n_items);
       BATT_CHECK_LT(child_i, n_items);
       BATT_CHECK(this->compare(this->begin_[parent_i], this->begin_[child_i]))
