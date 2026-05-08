@@ -19,6 +19,8 @@ Vidya Silai
 
 To delete a key/value pair from TurtleKV, a client should call the \texttt{remove} function on their \texttt{KVStore} object and pass in the key to delete.
 
+When a client performs a point query on a deleted key using the \texttt{get} method, the the status \texttt{kNotFound} is returned.
+
 %%------------------------------------------------------------------------------
 \section{New TurtleTree Algorithms}
 
@@ -80,13 +82,15 @@ Update buffer merging involves merging each level one by one. The following rule
 \begin{itemize}
     \item Merging an \texttt{EmptyLevel} with another level type will result in a level with the other level type.
     \item Merging two \texttt{MergedLevel}s involves concatenating the two \texttt{ResultSet} objects to form a new \texttt{MergedLevel}.
+    \item If a \texttt{SegmentedLevel} is the right level in the merge, always shift each segment's \texttt{active\_pivot} bit set to the left by the number of pivots in the left node. This also applies to \texttt{HybridLevel}s that have \texttt{SegmentedLevel} sub-levels.
+    \item Merging a \texttt{MergedLevel} and a \texttt{SegmentedLevel} will output a \texttt{HybridLevel} ($\S$\ref{section:datastructureupdates:hybridlevel}).
     \item Merging two \texttt{SegmentedLevel}s involves the following steps:
     \begin{enumerate}
-        \item In the \texttt{SegmentedLevel} from the right node, shift each segment's \texttt{active\_pivot} bit set to the left by the number of pivots in the left node.
+        \item Shift each segment's \texttt{active\_pivot} bit set to the left as described above.
         \item Concatenate the segment vectors from both \texttt{SegmentedLevel}s.
-        \item Iterate over this newly concatenated segment vector to identify duplicate segments that exist due to a previous split. For these duplicates, merge the \texttt{PiecewiseFilter}s ($\S$\ref{section:datastructureupdates:piecewisefilter}), take the union of the \texttt{active\_pivot} bit sets, and then erase the duplicate.
+        \item Check the last segment of the left level and the first segment of the right level. If these segments are duplicates (i.e., they have the same \texttt{PageId}) that have arisen as a result of a prior node split, we must deduplicate. To do this, merge the \texttt{PiecewiseFilter}s ($\S$\ref{section:datastructureupdates:piecewisefilter}), take the union of the \texttt{active\_pivot} bit sets, and then erase the duplicate.
     \end{enumerate}
-    \item Merging a \texttt{MergedLevel} and a \texttt{SegmentedLevel} will output a \texttt{HybridLevel} ($\S$\ref{section:datastructureupdates:hybridlevel}).
+    \item Merging two \texttt{HybridLevel}s will result in another \texttt{HybridLevel}. The rules for shifting the right level's \texttt{active\_pivot} bit set to the left apply as described above.
 \end{itemize}
 
 \subsubsection{Parent Node Merge Updates}\label{section:newturtletreealogs:parentnodemerge}
