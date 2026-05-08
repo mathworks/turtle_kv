@@ -698,10 +698,6 @@ TEST_F(ChangeLogTest, CorruptBlockInMiddle)
     // The visit should succeed but only read blocks before the corruption
     ASSERT_TRUE(visit_status.ok()) << "Visit failed with: " << visit_status;
 
-    // TODO: [Gabe Bornstein 4/14/26] Change this check when we update how we read past corrupt
-    // blocks. Currently, this check for # of blocks before we reach a corrupt block. We'll update
-    // it to be # of valid blocks with a lower EditOffset than the corrupt block.
-    //
     EXPECT_EQ(slots_read, corrupt_block_index)
         << "Expected to read " << corrupt_block_index
         << " slots (from blocks before corruption), but read " << slots_read;

@@ -129,9 +129,6 @@ class ChangeLogFile
    */
   batt::StatusOr<std::vector<boost::intrusive_ptr<ChangeLogBlock>>> read_blocks_into_vector();
 
-  // TODO: [Gabe Bornstein 1/20/26] Consider using concepts here to define required parameters and
-  // return types?
-  //
   /** \brief Read over all the blocks currently in the ChangeLogFile, calling process_block for each
    * block.
    * process_block is responsible for determining when to stop reading blocks, and what to do
@@ -183,9 +180,6 @@ class ChangeLogFile
 BATT_OBJECT_PRINT_IMPL((inline), ChangeLogFile::Config, (block_size, block_count, block0_offset))
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-// TODO: [Gabe Bornstein 1/16/26] Do I need to update other ChangeLogFile member data? Like lower,
-// upper bound? They aren't recovered from ::open.
-//
 template <typename ConsumeBlockFn>
 batt::Status ChangeLogFile::read_blocks(ConsumeBlockFn consume_block)
 {
@@ -235,9 +229,9 @@ batt::Status ChangeLogFile::read_blocks(ConsumeBlockFn consume_block)
     StatusOr<boost::intrusive_ptr<ChangeLogBlock>> block =
         ChangeLogBlock::recover(std::move(block_memory), block_range.lower_bound);
 
+    // Keep reading subsequent block if we read an invalid block.
+    //
     if (!block.ok()) {
-      VLOG(1) << "Failed to recover block at" << BATT_INSPECT(file_offset) << ";"
-              << BATT_INSPECT(block_range) << BATT_INSPECT(n_blocks_read);
       continue;
     }
 

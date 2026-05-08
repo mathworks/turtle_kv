@@ -262,40 +262,37 @@ u64 query_page_loader_reset_every_n()
     Optional<RuntimeOptions> runtime_options,
     llfs::ScopedIoRing&& scoped_io_ring) noexcept
 {
+  if (!runtime_options) {
+    runtime_options = RuntimeOptions::with_default_values();
+  }
+
   BATT_REQUIRE_OK(storage_context.add_existing_named_file(dir_path / leaf_page_file_name()));
   BATT_REQUIRE_OK(storage_context.add_existing_named_file(dir_path / node_page_file_name()));
   BATT_REQUIRE_OK(storage_context.add_existing_named_file(dir_path / filter_page_file_name()));
   BATT_REQUIRE_OK(storage_context.add_existing_named_file(dir_path / checkpoint_log_file_name()));
 
-#if 0
-  // TODO: [Gabe Bornstein 4/30/26] Move ChangeLogWriter after run_recovery. We can add a new
-  // KVStore function, KVStore::set_change_log_writer().
+  // Initialize the PageCache.
+  //  Note: must be after adding all the PageDevice llfs files.
   //
-  BATT_ASSIGN_OK_RESULT(std::unique_ptr<ChangeLogWriter> change_log_writer,
-                        ChangeLogWriter::open(dir_path / change_log_file_name()));
+  BATT_ASSIGN_OK_RESULT(batt::SharedPtr<llfs::PageCache> p_page_cache,
+                        storage_context.get_page_cache());
 
-  change_log_writer->start(task_scheduler.schedule_task());
-#endif
+  // Register all page types for the KV store.
+  //  Note: must be before recovering the latest checkpoint.
+  //
+  BATT_REQUIRE_OK(KVStore::register_page_layouts(*p_page_cache));
 
+  // Open the checkpoint volume, which contains all checkpoints.
+  //  Note: must be after registering the page layouts.
+  //
   BATT_ASSIGN_OK_RESULT(std::unique_ptr<llfs::Volume> checkpoint_log_volume,
                         open_checkpoint_log(storage_context,  //
                                             dir_path / checkpoint_log_file_name()));
 
-  if (!runtime_options) {
-    runtime_options = RuntimeOptions::with_default_values();
-  }
-
-  // Recover the checkpoint
+  // Recover the lastest checkpoint.
   //
   BATT_ASSIGN_OK_RESULT(Checkpoint latest_checkpoint,
                         KVStore::recover_latest_checkpoint(*checkpoint_log_volume));
-
-  // TODO [Gabe Bornstein 4/8/26] [tastolfi 2026-04-08] What I am worried about is that we are
-  // opening the ChangeLogWriter *before* doing recovery; to me this could spell trouble.  It makes
-  // sense that run_recovery takes the path to the change log file; I think a good side-effect of
-  // successful `run_recovery` could be to figure out what the correct values for the append and
-  // trim points are, and create the ChangeLogWriter after we know that information.
-  //
 
   std::unique_ptr<KVStore> kv_store{new KVStore{
       task_scheduler,
@@ -304,9 +301,6 @@ u64 query_page_loader_reset_every_n()
       storage_context.shared_from_this(),
       tree_options,
       *runtime_options,
-#if 0
-      std::move(change_log_writer),
-#endif
       std::move(checkpoint_log_volume),
       std::move(latest_checkpoint),
   }};
@@ -376,6 +370,24 @@ u64 query_page_loader_reset_every_n()
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+/*static*/ Status KVStore::register_page_layouts(llfs::PageCache& page_cache)
+{
+  BATT_REQUIRE_OK(NodePageView::register_layout(page_cache));
+  BATT_REQUIRE_OK(LeafPageView::register_layout(page_cache));
+
+#if TURTLE_KV_USE_BLOOM_FILTER
+  BATT_REQUIRE_OK(llfs::BloomFilterPageView::register_layout(page_cache));
+#endif
+
+#if TURTLE_KV_USE_QUOTIENT_FILTER
+  BATT_REQUIRE_OK(VqfFilterPageView::register_layout(page_cache));
+#endif
+
+  return OkStatus();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 /*explicit*/ KVStore::KVStore(batt::TaskScheduler& task_scheduler,
                               batt::WorkerPool& worker_pool,
                               llfs::ScopedIoRing&& scoped_io_ring,
@@ -430,14 +442,7 @@ u64 query_page_loader_reset_every_n()
 
   BATT_CHECK_OK(KVStore::global_init());
 
-  BATT_CHECK_OK(NodePageView::register_layout(this->page_cache()));
-  BATT_CHECK_OK(LeafPageView::register_layout(this->page_cache()));
-  BATT_CHECK_OK(llfs::BloomFilterPageView::register_layout(this->page_cache()));
-
   if (this->tree_options_.filter_bits_per_key() != 0) {
-    BATT_CHECK_OK(llfs::BloomFilterPageView::register_layout(this->page_cache()));
-    BATT_CHECK_OK(VqfFilterPageView::register_layout(this->page_cache()));
-
     Status status = this->page_cache().assign_paired_device(this->tree_options_.leaf_size(),
                                                             kPairedFilterForLeaf,
                                                             this->tree_options_.filter_page_size());

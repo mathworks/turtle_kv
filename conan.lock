@@ -9,7 +9,7 @@
         "gflags/2.2.2",
         "glog/0.7.1",
         "gtest/1.17.0",
-        "keyvcr/0.2.1",
+        "keyvcr/0.2.2",
         "libbacktrace/cci.20240730",
         "libfuse/3.16.2",
         "libpfm4/4.13.0",

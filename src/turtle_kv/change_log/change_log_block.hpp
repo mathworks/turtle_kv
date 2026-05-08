@@ -512,9 +512,6 @@ class ChangeLogBlock::RecoveryChecksPassed
 };
 
 struct ChangeLogBlock::EphemeralState {
-  // TODO: [Gabe Bornstein 2/2/26] Consider turning grant and read lock into Variant
-  //
-
   /** \brief The Volume root log Grant passed in at construction time; a pre-reservation of
    * space in the Volume root log for the slot data that will be appended to this buffer.
    */

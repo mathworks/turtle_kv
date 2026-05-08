@@ -99,7 +99,7 @@ class TurtleKvRecipe(ConanFile):
 
         if platform.system() == "Linux":
             if self.options.with_keyvcr:
-                self.requires("keyvcr/[>=0.2.1 <1]", **VISIBLE)
+                self.requires("keyvcr/[>=0.2.2 <1]", **VISIBLE)
             if self.options.use_quotient_filter:
                 self.requires("vqf/[>=0.2.6 <1]", **VISIBLE)
             self.requires("libfuse/[>=3.16.2 <4]", **VISIBLE)

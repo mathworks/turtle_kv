@@ -131,6 +131,10 @@ class KVStore : public Table
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  /** \brief Performs various process-wide initialization.
+   */
+  static Status global_init();
+
   static Status configure_storage_context(llfs::StorageContext& storage_context,
                                           const TreeOptions& tree_options,
                                           const RuntimeOptions& runtime_options) noexcept;
@@ -158,12 +162,13 @@ class KVStore : public Table
       const TreeOptions& tree_options,
       Optional<RuntimeOptions> runtime_options = None) noexcept;
 
-  // TODO [tastolfi 2026-04-02] Should probably be private. <deferred>
-  //
-  static batt::StatusOr<turtle_kv::Checkpoint> recover_latest_checkpoint(
-      llfs::Volume& checkpoint_log_volume);
+  /** \brief Registers all required page layouts.  Must be done once per page cache instance.
+   */
+  static Status register_page_layouts(llfs::PageCache& page_cache);
 
-  static Status global_init();
+  /** \brief Returns the latest checkpoint recovered from the passed volume.
+   */
+  static StatusOr<Checkpoint> recover_latest_checkpoint(llfs::Volume& checkpoint_log_volume);
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -210,9 +215,6 @@ class KVStore : public Table
   }
 
   void set_checkpoint_distance(usize chi) noexcept;
-
-  batt::StatusOr<boost::intrusive_ptr<MemTable>> recover_latest_mem_table(
-      const std::filesystem::path& path);
 
   usize get_checkpoint_distance() const noexcept
   {
