@@ -102,9 +102,9 @@ PackedNodePage* build_node_page(const MutableBuffer& buffer, const InMemoryNode&
   //+++++++++++-+-+--+----- --- -- -  -  -   -
   // Pack the update buffer
 
-  using EmptyLevel = InMemoryNode::UpdateBuffer::EmptyLevel;
-  using SegmentedLevel = InMemoryNode::UpdateBuffer::SegmentedLevel;
-  using Segment = InMemoryNode::UpdateBuffer::Segment;
+  using EmptyLevel = InMemoryNodeEmptyLevel;
+  using SegmentedLevel = InMemoryNodeSegmentedLevel;
+  using Segment = InMemoryNodeSegment;
 
   // Initialize the array containing cut points for segment filters.
   //
@@ -129,7 +129,7 @@ PackedNodePage* build_node_page(const MutableBuffer& buffer, const InMemoryNode&
         packed_node->update_buffer.level_start[level_i] = BATT_CHECKED_CAST(u8, dst_segment_i);
       }
 
-      const InMemoryNode::UpdateBuffer::Level& src_level = src_node.update_buffer.levels[level_i];
+      const InMemoryNodeLevel& src_level = src_node.update_buffer.levels[level_i];
 
       if (batt::is_case<EmptyLevel>(src_level)) {
         continue;

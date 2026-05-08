@@ -1,5 +1,10 @@
 #pragma once
 
+#include <turtle_kv/tree/in_memory_node_empty_level.hpp>
+#include <turtle_kv/tree/in_memory_node_hybrid_level.hpp>
+#include <turtle_kv/tree/in_memory_node_merged_level.hpp>
+#include <turtle_kv/tree/in_memory_node_segmented_level.hpp>
+
 #include <turtle_kv/tree/active_pivots_set.hpp>
 #include <turtle_kv/tree/batch_update.hpp>
 #include <turtle_kv/tree/in_memory_leaf.hpp>
@@ -55,6 +60,14 @@ struct InMemoryNode {
     /** \brief Captures statistics about the number of levels per node.
      */
     StatsMetric<u16> level_depth_stats;
+
+    /** \brief The total time spent on merging two Subtrees and updating parent metadata.
+     */
+    LatencyMetric merge_latency;
+
+    /** \brief The number of times a merge operation was followed by a split operation.
+     */
+    CountMetric<u64> merge_then_split_count;
   };
 
   static Metrics& metrics()
@@ -74,314 +87,12 @@ struct InMemoryNode {
   struct UpdateBuffer {
     using Self = UpdateBuffer;
 
-    struct SegmentedLevel;
-
-    //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-    //
-    /** \brief Mutable, in-memory representation of a serialized buffer segment (one leaf page).
-     */
-    struct Segment {
-      using Self = Segment;
-
-      /** \brief The id of the leaf page for this segment.
-       */
-      llfs::PageIdSlot page_id_slot;
-
-      /** \brief A bit set of pivots in whose key range this segment contains items.
-       */
-      ActivePivotsSet128 active_pivots;
-
-      /** \brief A filter over the flushed items in this segment.
-       */
-      PiecewiseFilter</*OffsetT=*/u32> filter;
-
-      //+++++++++++-+-+--+----- --- -- -  -  -   -
-
-      /** \brief Returns a reference to the PageId of this segment's leaf page, plus weak reference
-       * to its cache slot (if known).
-       */
-      const llfs::PageIdSlot& get_leaf_page_id() const
-      {
-        return this->page_id_slot;
-      }
-
-      /** \brief Returns the active pivots bit set.
-       */
-      ActivePivotsSet128 get_active_pivots() const
-      {
-        return this->active_pivots;
-      }
-
-      /** \brief Marks this segment as containing (or not) active keys addressed to `pivot_i`.
-       */
-      void set_pivot_active(i32 pivot_i, bool active)
-      {
-        this->active_pivots.set(pivot_i, active);
-      }
-
-      /** \brief Returns true iff this segment has active keys addressed to `pivot_i`.
-       */
-      bool is_pivot_active(i32 pivot_i) const
-      {
-        return this->active_pivots.get(pivot_i);
-      }
-
-      template <typename Traits>
-      Interval<u32> drop_key_range(const BasicInterval<Traits>& key_range,
-                                   const Slice<const PackedKeyValue>& items)
-      {
-        return drop_item_range(this->filter, items, key_range, llfs::KeyRangeOrder{});
-      }
-
-      void drop_index_range(Interval<u32> i)
-      {
-        this->filter.drop_index_range(i);
-      }
-
-      bool is_index_filtered(const SegmentedLevel&, u32 index) const
-      {
-        return !this->filter.live_at_index(index);
-      }
-
-      u32 live_lower_bound(const SegmentedLevel&, u32 item_i) const
-      {
-        return this->filter.live_lower_bound(item_i);
-      }
-
-      Interval<u32> get_live_item_range(const SegmentedLevel&, Interval<u32> i) const
-      {
-        return this->filter.find_live_range(i);
-      }
-
-      usize num_cut_points() const
-      {
-        Slice<const Interval<u32>> live_ranges = this->filter.live();
-
-        // If the first element is live, don't include 0 as a cut point, only include the
-        // upper bound.
-        //
-        bool first_element_live = !live_ranges.empty() && live_ranges.front().lower_bound ==
-                                                              PiecewiseFilter<u32>::kMinLowerBound;
-        bool ends_at_max = !live_ranges.empty() &&
-                           live_ranges.back().upper_bound == PiecewiseFilter<u32>::kMaxUpperBound;
-
-        return live_ranges.size() * 2 - (first_element_live ? 1 : 0) - (ends_at_max ? 1 : 0);
-      }
-
-      //+++++++++++-+-+--+----- --- -- -  -  -   -
-
-      /** \brief Panic if filter invariants are not satisfied.
-       */
-      void check_invariants(const char* file, int line) const;
-
-      /** \brief Inserts a new pivot bit in this->active_pivots at position
-       * `pivot_i`.  This is called when a child subtree needs to be split.
-       */
-      void insert_pivot(i32 pivot_i, bool is_active);
-
-      /** \brief Removes the specified number (`count`) pivots from the front of this segment.  This
-       * is used while splitting a node's update buffer.
-       */
-      void pop_front_pivots(i32 count);
-
-      /** \brief Returns true iff this segment is not active for any pivots.
-       */
-      bool is_inactive() const;
-
-      /** \brief Loads the leaf page for this Segment, returning the resulting llfs::PinnedPage.
-       */
-      StatusOr<llfs::PinnedPage> load_leaf_page(llfs::PageLoader& page_loader,
-                                                llfs::PinPageToJob pin_page_to_job,
-                                                llfs::PageCacheOvercommit& overcommit) const;
-
-      /** \brief Prints a human-readable representation of this Segment.
-       */
-      SmallFn<void(std::ostream&)> dump(bool multi_line = true) const;
-    };
-
-    //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-    //
-    /** \brief An empty update buffer level.
-     */
-    struct EmptyLevel {
-      using Self = EmptyLevel;
-
-      void drop_after_pivot(i32 split_pivot_i [[maybe_unused]],
-                            const KeyView& split_pivot_key [[maybe_unused]],
-                            llfs::PageLoader& page_loader [[maybe_unused]],
-                            const TreeOptions& tree_options [[maybe_unused]])
-      {
-        // Nothing to do!
-      }
-
-      void drop_before_pivot(i32 split_pivot_i [[maybe_unused]],
-                             const KeyView& split_pivot_key [[maybe_unused]],
-                             llfs::PageLoader& page_loader [[maybe_unused]],
-                             const TreeOptions& tree_options [[maybe_unused]])
-      {
-        // Nothing to do!
-      }
-
-      SmallFn<void(std::ostream&)> dump() const;
-    };
-
-    //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-    //
-    /** \brief Mutable, in-memory representation of a non-empty serialized update buffer level.
-     */
-    struct SegmentedLevel {
-      using Self = SegmentedLevel;
-      using Segment = InMemoryNode::UpdateBuffer::Segment;
-
-      //+++++++++++-+-+--+----- --- -- -  -  -   -
-
-      SmallVec<Segment, 32> segments;
-
-      //+++++++++++-+-+--+----- --- -- -  -  -   -
-
-      bool empty() const
-      {
-        return this->segments.empty();
-      }
-
-      usize segment_count() const
-      {
-        return this->segments.size();
-      }
-
-      Segment& get_segment(usize i)
-      {
-        return this->segments[i];
-      }
-
-      const Segment& get_segment(usize i) const
-      {
-        return this->segments[i];
-      }
-
-      Slice<const Segment> get_segments_slice() const
-      {
-        return as_const_slice(this->segments);
-      }
-
-      //+++++++++++-+-+--+----- --- -- -  -  -   -
-
-      /** \brief Removes the specified segment from this level.
-       *
-       * Should only be called by SegmentedLevelAlgorithms::flush_pivot_up_to_key.
-       */
-      void drop_segment(usize i);
-
-      /** \brief Removes the specified set of pivots from this level.
-       *
-       * Used to implement node splits.
-       */
-      void drop_pivot_range(const Interval<i32>& pivot_i_range,
-                            const Interval<KeyView>& pivot_key_range,
-                            llfs::PageLoader& page_loader,
-                            const TreeOptions& tree_options);
-
-      /** \brief Drops all pivots before (but not including) the specified pivot.
-       *
-       */
-      void drop_before_pivot(i32 pivot_i,
-                             const KeyView& pivot_key,
-                             llfs::PageLoader& page_loader,
-                             const TreeOptions& tree_options);
-
-      /** \brief Drops all pivots after (and including) the specified pivot.
-       *
-       */
-      void drop_after_pivot(i32 pivot_i,
-                            const KeyView& pivot_key,
-                            llfs::PageLoader& page_loader,
-                            const TreeOptions& tree_options);
-
-      /** \brief Returns true iff the specified pivot is active for any of the Segments in this
-       * level.
-       */
-      bool is_pivot_active(i32 pivot_i) const;
-
-      /** \brief Verifies that all items appear in this level in key-sorted order; panic if this is
-       * not the case.
-       *
-       * Warning: This is a very expensive operation!  Do not call it on a performance-critical code
-       * path.
-       */
-      void check_items_sorted(const InMemoryNode& node, llfs::PageLoader& page_loader) const;
-
-      /** \brief Prints a human-readable representation of the level.
-       */
-      SmallFn<void(std::ostream&)> dump() const;
-    };
-
-    //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-    //
-    struct MergedLevel {
-      using Self = MergedLevel;
-
-      //+++++++++++-+-+--+----- --- -- -  -  -   -
-
-      MergeCompactor::ResultSet</*decay_to_items=*/false> result_set;
-      std::vector<TreeSerializeContext::BuildPageJobId> segment_future_ids_;
-
-      //+++++++++++-+-+--+----- --- -- -  -  -   -
-
-      void drop_key_range(const Interval<KeyView>& key_drop_range)
-      {
-        this->result_set.drop_key_range_half_open(key_drop_range);
-      }
-
-      void drop_after_pivot(i32 pivot_i [[maybe_unused]],
-                            const KeyView& pivot_key,
-                            llfs::PageLoader& page_loader [[maybe_unused]],
-                            const TreeOptions& tree_options [[maybe_unused]])
-      {
-        this->drop_key_range(Interval<KeyView>{
-            .lower_bound = pivot_key,
-            .upper_bound = global_max_key(),
-        });
-      }
-
-      void drop_before_pivot(i32 pivot_i [[maybe_unused]],
-                             const KeyView& pivot_key,
-                             llfs::PageLoader& page_loader [[maybe_unused]],
-                             const TreeOptions& tree_options [[maybe_unused]])
-      {
-        this->drop_key_range(Interval<KeyView>{
-            .lower_bound = global_min_key(),
-            .upper_bound = pivot_key,
-        });
-      }
-
-      usize estimate_segment_count(const TreeOptions& tree_options) const
-      {
-        const usize packed_size = this->result_set.get_packed_size();
-        if (packed_size == 0) {
-          return 0;
-        }
-
-        const usize capacity_per_segment = tree_options.flush_size() - tree_options.max_item_size();
-        const usize estimated = (packed_size + capacity_per_segment - 1) / capacity_per_segment;
-
-        BATT_CHECK_GE(estimated * capacity_per_segment, packed_size);
-        BATT_CHECK_LT((estimated - 1) * capacity_per_segment, packed_size)
-            << BATT_INSPECT(estimated) << BATT_INSPECT(capacity_per_segment);
-
-        return estimated;
-      }
-
-      /** \brief Returns the number of segment leaf page build jobs added to the context.
-       */
-      StatusOr<usize> start_serialize(const InMemoryNode& node, TreeSerializeContext& context);
-
-      StatusOr<SegmentedLevel> finish_serialize(const InMemoryNode& node,
-                                                TreeSerializeContext& context);
-
-      SmallFn<void(std::ostream&)> dump() const;
-    };
-
-    using Level = std::variant<EmptyLevel, MergedLevel, SegmentedLevel>;
+    using Segment = InMemoryNodeSegment;
+    using EmptyLevel = InMemoryNodeEmptyLevel;
+    using MergedLevel = InMemoryNodeMergedLevel;
+    using SegmentedLevel = InMemoryNodeSegmentedLevel;
+    using HybridLevel = InMemoryNodeHybridLevel;
+    using Level = InMemoryNodeLevel;
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -412,7 +123,7 @@ struct InMemoryNode {
   SmallVec<Subtree, 64> children;
   SmallVec<llfs::PinnedPage, 64> child_pages;
   SmallVec<usize, 64> pending_bytes;
-  u64 pending_bytes_is_exact = 0;
+  ActivePivotsSet128 pending_bytes_is_exact = {};
   Optional<i32> latest_flush_pivot_i_;
   SmallVec<KeyView, 65> pivot_keys_;
   KeyView max_key_;
@@ -517,8 +228,8 @@ struct InMemoryNode {
 
   void add_pending_bytes(usize pivot_i, usize byte_count)
   {
-    this->pending_bytes_is_exact = set_bit(this->pending_bytes_is_exact, pivot_i, false);
-    BATT_CHECK_EQ(get_bit(this->pending_bytes_is_exact, pivot_i), false);
+    this->pending_bytes_is_exact.set(pivot_i, false);
+    BATT_CHECK_EQ(this->pending_bytes_is_exact.get(pivot_i), false);
 
     this->pending_bytes[pivot_i] += byte_count;
   }
@@ -585,9 +296,25 @@ struct InMemoryNode {
    */
   Status try_flush(BatchUpdateContext& context);
 
+  /** \brief Attempt to collapse one level of the tree. Returns the node's single pivot.
+   * TODO [tastolfi 2026-05-04] describe the conditions under which this fn will panic
+   */
+  Subtree shrink_or_panic();
+
+  /** \brief Merge the node in place with its right sibling.
+   *
+   * Returns nullptr if `sibling` is completely consumed; otherwise, returns the modified sibling
+   * since a borrow occurred.
+   */
+  Status try_merge(BatchUpdateContext& context, std::unique_ptr<InMemoryNode> sibling) noexcept;
+
   /** \brief Splits the specified child, inserting a new pivot immediately after `pivot_i`.
    */
   Status split_child(BatchUpdateContext& update_context, i32 pivot_i);
+
+  /** \brief Merges the specified child with a sibling.
+   */
+  Status merge_child(BatchUpdateContext& update_context, i32 pivot_i) noexcept;
 
   /** \brief Returns true iff there are no MergedLevels or unserialized Subtree children in this
    * node.
@@ -602,9 +329,9 @@ struct InMemoryNode {
                                             i32 pivot_i,
                                             const Interval<KeyView>& pivot_key_range);
 
-  /** \brief Merges and compacts all live edits in all levels/segments, producing a single level (if
-   * not size-tiered), or a series of non-key-overlapping levels with a single segment in each (if
-   * size-tiered).
+  /** \brief Merges and compacts all live edits in all levels/segments, producing a single level
+   * (if not size-tiered), or a series of non-key-overlapping levels with a single segment in each
+   * (if size-tiered).
    *
    * This can be done if node splitting fails, to reduce the serialized space required by getting
    * rid of all the non-zero flushed key upper bounds.  This should NOT be done under normal

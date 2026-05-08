@@ -221,7 +221,8 @@ Status Subtree::apply_batch_update(const TreeOptions& tree_options,
 
   // If this is the root level and tree needs to grow/shrink in height, do so now.
   //
-  if (is_root) {
+  SubtreeViability new_subtree_viability = new_subtree->get_viability();
+  if (is_root && !is_root_viable(new_subtree_viability)) { 
     BATT_REQUIRE_OK(
         Subtree::make_root_viable(*new_subtree, tree_options, update.context, key_upper_bound));
   }
@@ -245,8 +246,6 @@ Status Subtree::apply_batch_update(const TreeOptions& tree_options,
         return OkStatus();
       },
       [&](NeedsSplit needs_split) {
-        // TODO [vsilai 2025-12-09]: revist when VLDB changes are merged in.
-        //
         if (normal_flush_might_fix_root(needs_split)) {
           Status flush_status = new_subtree.try_flush(update_context);
           if (flush_status.ok() && batt::is_case<Viable>(new_subtree.get_viability())) {
@@ -262,9 +261,12 @@ Status Subtree::apply_batch_update(const TreeOptions& tree_options,
         return status;
       },
       [&](const NeedsMerge& needs_merge) {
-        BATT_CHECK(!needs_merge.single_pivot)
-            << "TODO [tastolfi 2025-03-26] implement flush and shrink";
-        return OkStatus();
+        Status status = new_subtree.flush_and_shrink(update_context);
+
+        if (!status.ok()) {
+          LOG(INFO) << "flush_and_shrink failed;" << BATT_INSPECT(needs_merge);
+        }
+        return status;
       }));
 
   return OkStatus();
@@ -296,6 +298,50 @@ Status Subtree::split_and_grow(BatchUpdateContext& update_context,
                                   IsRoot{true}));
 
   this->impl_ = std::move(new_root);
+
+  return OkStatus();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Status Subtree::flush_and_shrink(BatchUpdateContext& context) noexcept
+{
+  BATT_CHECK(!this->locked_.load());
+
+  BATT_CHECK(!this->is_serialized());
+
+  usize retries = 0;
+
+  // TODO [vsilai 2026-04-28]: Consider allowing shrink with non-empty levels (pending bytes > 0),
+  // when all the levels of this node and its child will fit in a single buffer.
+  //
+  SubtreeViability root_viability = this->get_viability();
+  while (!is_root_viable(root_viability) && retries < kMaxPivots) {
+    BATT_CHECK(batt::is_case<NeedsMerge>(root_viability));
+
+    ++retries;
+
+    // First, try flushing. If flushing makes the root viable, return immediately.
+    //
+    Status flush_status = this->try_flush(context);
+    if (!flush_status.ok() && flush_status != batt::StatusCode::kUnavailable) {
+      return flush_status;
+    }
+
+    // Nothing was available to flush since either the node's update buffer is empty or we have
+    // a leaf root. If possible and necessary, try collapsing one level of the tree.
+    //
+    if (flush_status == batt::StatusCode::kUnavailable) {
+      BATT_REQUIRE_OK(this->try_shrink());
+      retries = 0;
+    }
+
+    root_viability = this->get_viability();
+  }
+
+  if (retries >= kMaxPivots) {
+    return batt::Status{batt::StatusCode::kInternal};
+  }
 
   return OkStatus();
 }
@@ -529,6 +575,41 @@ StatusOr<Optional<Subtree>> Subtree::try_split(BatchUpdateContext& context)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+Status Subtree::try_merge(BatchUpdateContext& context, Subtree&& sibling) noexcept
+{
+  BATT_CHECK(!this->locked_.load());
+
+  BATT_ASSIGN_OK_RESULT(i32 this_height, this->get_height(context.page_loader, context.overcommit));
+  BATT_ASSIGN_OK_RESULT(i32 sibling_height,
+                        sibling.get_height(context.page_loader, context.overcommit));
+
+  BATT_CHECK_EQ(this_height, sibling_height);
+
+  return batt::case_of(
+      this->impl_,
+
+      [&](const llfs::PageIdSlot& page_id_slot) -> Status {
+        BATT_PANIC() << "Cannot try merging a serialized subtree!";
+
+        return {batt::StatusCode::kUnimplemented};
+      },
+
+      [&](auto& in_memory) -> Status {
+        using PtrT = std::decay_t<decltype(in_memory)>;
+
+        BATT_CHECK(batt::is_case<PtrT>(sibling.impl_))
+            << "Sibling Subtree must be the same in-memory type as this Subtree!";
+        auto& sibling_ptr = std::get<PtrT>(sibling.impl_);
+        BATT_CHECK_NOT_NULLPTR(sibling_ptr);
+
+        BATT_REQUIRE_OK(in_memory->try_merge(context, std::move(sibling_ptr)));
+
+        return OkStatus();
+      });
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 Status Subtree::try_flush(BatchUpdateContext& context)
 {
   BATT_CHECK(!this->locked_.load());
@@ -541,12 +622,47 @@ Status Subtree::try_flush(BatchUpdateContext& context)
       },
 
       [&](const std::unique_ptr<InMemoryLeaf>& leaf [[maybe_unused]]) -> Status {
-        return OkStatus();
+        return {batt::StatusCode::kUnavailable};
       },
 
       [&](const std::unique_ptr<InMemoryNode>& node) -> Status {
         return node->try_flush(context);
       });
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Status Subtree::try_shrink() noexcept
+{
+  BATT_CHECK(!this->locked_.load());
+
+  StatusOr<Subtree> new_root = batt::case_of(
+      this->impl_,
+
+      [&](const llfs::PageIdSlot& page_id_slot [[maybe_unused]]) -> StatusOr<Subtree> {
+        return {batt::StatusCode::kUnimplemented};
+      },
+
+      [&](const std::unique_ptr<InMemoryLeaf>& leaf [[maybe_unused]]) -> StatusOr<Subtree> {
+        // If the root is a leaf and there are no items in the leaf, set the root to be an empty
+        // subtree.
+        //
+        if (!leaf->get_item_count()) {
+          return llfs::PageIdSlot::from_page_id(llfs::PageId{});
+        }
+
+        return {std::move(*this)};
+      },
+
+      [&](const std::unique_ptr<InMemoryNode>& node) -> StatusOr<Subtree> {
+        return node->shrink_or_panic();
+      });
+
+  BATT_REQUIRE_OK(new_root);
+
+  this->impl_ = std::move(new_root->impl_);
+
+  return OkStatus();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -646,4 +762,57 @@ void Subtree::lock()
   this->locked_.store(true);
 }
 
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Status Subtree::unpack_if_necessary(llfs::PageLoader& page_loader,
+                                    llfs::PageCacheOvercommit& overcommit,
+                                    batt::WorkerPool& worker_pool,
+                                    const TreeOptions& tree_options,
+                                    i32 height) noexcept
+{
+  BATT_CHECK_GT(height, 0);
+
+  if (this->is_serialized()) {
+    llfs::PageIdSlot& page_id_slot = std::get<llfs::PageIdSlot>(this->impl_);
+
+    BATT_CHECK(page_id_slot.is_valid());
+
+    const llfs::PageLayoutId expected_layout = Subtree::expected_layout_for_height(height);
+
+    StatusOr<llfs::PinnedPage> status_or_pinned_page = page_id_slot.load_through(
+        page_loader,
+        llfs::PageLoadOptions{
+            expected_layout,
+            llfs::PinPageToJob::kDefault,
+            llfs::OkIfNotFound{false},
+            llfs::LruPriority{(height > 2) ? kNodeLruPriority : kLeafLruPriority},
+            overcommit,
+        });
+
+    BATT_REQUIRE_OK(status_or_pinned_page) << BATT_INSPECT(height);
+
+    llfs::PinnedPage& pinned_page = *status_or_pinned_page;
+
+    if (height == 1) {
+      const PackedLeafPage& packed_leaf = PackedLeafPage::view_of(pinned_page);
+
+      std::unique_ptr<InMemoryLeaf> new_leaf = InMemoryLeaf::unpack(batt::make_copy(pinned_page),
+                                                                    tree_options,
+                                                                    packed_leaf,
+                                                                    worker_pool);
+
+      this->impl_ = std::move(new_leaf);
+    } else {
+      const PackedNodePage& packed_node = PackedNodePage::view_of(pinned_page);
+
+      BATT_ASSIGN_OK_RESULT(
+          std::unique_ptr<InMemoryNode> node,
+          InMemoryNode::unpack(batt::make_copy(pinned_page), tree_options, packed_node));
+
+      this->impl_ = std::move(node);
+    }
+  }
+
+  return OkStatus();
+}
 }  // namespace turtle_kv
