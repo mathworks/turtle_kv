@@ -239,14 +239,19 @@ StatusOr<usize> Interleave::retire(ExecutionStrategy* parent) /*override*/
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 // class Parallel
 
+namespace {
+constexpr i32 kMaxThreads = 256;
+}
+
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 Parallel::Parallel(ScriptContext& context, i32 n_threads) noexcept
     : context_{context}
-    , n_threads_{n_threads}
-    , barrier_{n_threads + 1, batt::DoNothing{}}
+    , n_threads_{std::min(kMaxThreads, n_threads)}
+    , barrier_{this->n_threads_ + 1, batt::DoNothing{}}
     , threads_{}
-    , thread_state_{new batt::CpuCacheLineIsolated<ThreadState>[n_threads]}
+    , thread_state_{new batt::CpuCacheLineIsolated<ThreadState>[std::min<usize>(kMaxThreads,
+                                                                                this->n_threads_)]}
     , done_{false}
 {
 }
