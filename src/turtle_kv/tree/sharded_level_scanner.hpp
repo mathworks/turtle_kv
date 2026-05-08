@@ -9,6 +9,8 @@
 
 #include <turtle_kv/import/metrics.hpp>
 
+#include <batteries/suppress.hpp>
+
 namespace turtle_kv {
 
 /** \brief Contains the necessary data needed to initialize a ShardedKeyValueSlice.
@@ -279,8 +281,12 @@ inline auto ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::peek_next_impl(bool
         this->load_full_leaf_ = batt::BoolStatus::kTrue;
         BATT_CHECK(!this->needs_load_segment_);
 
+        BATT_SUPPRESS_IF_GCC("-Wdangling-reference")
+        //----- --- -- -  -  -   -
         const PackedLeafPage& leaf =
             PackedLeafPage::view_of(this->full_leaf_data_->leaf_page.get_page_buffer());
+        //----- --- -- -  -  -   -
+        BATT_UNSUPPRESS_IF_GCC()
 
         this->advance_to_pivot_full_leaf(target_pivot_i, *segment, leaf);
 
@@ -423,8 +429,12 @@ inline auto ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::continue_full_leaf_
     ActivePivotsSetT active_pivots,
     const Segment* segment) noexcept -> Optional<Item>
 {
+  BATT_SUPPRESS_IF_GCC("-Wdangling-reference")
+  //----- --- -- -  -  -   -
   const PackedLeafPage& leaf_page =
       PackedLeafPage::view_of(this->full_leaf_data_->leaf_page.get_page_buffer());
+  //----- --- -- -  -  -   -
+  BATT_UNSUPPRESS_IF_GCC()
 
   const usize begin_i = this->item_i_;
   u32 end_i = begin_i;

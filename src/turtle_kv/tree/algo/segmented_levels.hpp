@@ -10,6 +10,7 @@
 #include <turtle_kv/import/status.hpp>
 
 #include <batteries/assert.hpp>
+#include <batteries/suppress.hpp>
 
 #include <algorithm>
 #include <type_traits>
@@ -185,7 +186,11 @@ struct SegmentedLevelAlgorithms {
                                                    llfs::PinPageToJob::kDefault,
                                                    this->overcommit_));
 
+      BATT_SUPPRESS_IF_GCC("-Wdangling-reference")
+      //----- --- -- -  -  -   -
       const PackedLeafPage& leaf = PackedLeafPage::view_of(pinned_page.get_page_buffer());
+      //----- --- -- -  -  -   -
+      BATT_UNSUPPRESS_IF_GCC()
 
       auto flushed_last = leaf.lower_bound(max_key);
       if (flushed_last != leaf.items_end() && get_key(*flushed_last) == max_key) {

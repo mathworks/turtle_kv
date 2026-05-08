@@ -266,6 +266,8 @@ StatusOr<usize> Parallel::activate(ExecutionStrategy*) /*override*/
 
   this->done_.store(false);
 
+  LOG(INFO) << "Parallel::activate; n_threads=" << this->n_threads_;
+
   for (i32 thread_i = 0; thread_i < this->n_threads_; ++thread_i) {
     this->threads_.emplace_back([thread_i, this] {
       auto on_thread_exit = batt::finally([&] {
@@ -486,7 +488,7 @@ StatusOr<usize> Concurrent::step() /*override*/
 //
 StatusOr<usize> Concurrent::retire(ExecutionStrategy* parent) /*override*/
 {
-  VLOG(1) << "Concurrent::retire; n_tasks=" << this->all_tasks_.size();
+  LOG(INFO) << "Concurrent::retire; n_tasks=" << this->all_tasks_.size();
   BATT_CHECK(this->next_task_.empty());
 
   usize op_count = 0;

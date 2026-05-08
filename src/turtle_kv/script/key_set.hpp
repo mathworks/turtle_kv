@@ -48,6 +48,8 @@ class KeySet
 
   explicit KeySet() noexcept;
 
+  ~KeySet() noexcept;
+
   KeySet(const KeySet&) = delete;
   KeySet& operator=(const KeySet&) = delete;
 

@@ -17,7 +17,17 @@ namespace turtle_kv {
 {
   BATT_CHECK_GE(n_bytes, Self::kMinSize);
 
-  void* const memory = std::aligned_alloc(Self::kDefaultAlign, n_bytes);
+  const usize align_size =
+      std::min<usize>(usize{1} << batt::log2_ceil(n_bytes), Self::kDefaultAlign);
+
+  const usize align_mask = align_size - 1;
+
+  // Round up to the nearest multiple of `align_size`.
+  //
+  n_bytes = (n_bytes + align_mask) & ~align_mask;
+
+  void* const memory = std::aligned_alloc(align_size, n_bytes);
+
   BATT_CHECK_NOT_NULLPTR(memory);
 
   return ChangeLogBlock::ScopedMemory{memory, n_bytes};

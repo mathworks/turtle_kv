@@ -20,6 +20,7 @@
 #include <llfs/testing/scenario_runner.hpp>
 
 #include <batteries/checked_cast.hpp>
+#include <batteries/suppress.hpp>
 
 #include <map>
 #include <random>
@@ -316,7 +317,11 @@ void SegmentedLevelScannerTest::Scenario::run_with_pivot_count(usize pivot_count
       result_set_keys.emplace_back(get_key(item));
     }
     for (FakePinnedPage& page : generated.leaf_pages) {
+      BATT_SUPPRESS_IF_GCC("-Wdangling-reference")
+      //----- --- -- -  -  -   -
       auto& leaf_view = PackedLeafPage::view_of(page.get_page_buffer());
+      //----- --- -- -  -  -   -
+      BATT_UNSUPPRESS_IF_GCC()
       for (const auto& item : leaf_view.items_slice()) {
         leaf_page_keys.emplace_back(get_key(item));
       }
@@ -344,7 +349,11 @@ void SegmentedLevelScannerTest::Scenario::run_with_pivot_count(usize pivot_count
 
   for (usize segment_i = 0; segment_i < fake_node.level_.segment_count(); ++segment_i) {
     FakeSegment& fake_segment = fake_node.level_.get_segment(segment_i);
+    BATT_SUPPRESS_IF_GCC("-Wdangling-reference")
+    //----- --- -- -  -  -   -
     auto& leaf_view = PackedLeafPage::view_of(generated.leaf_pages[segment_i].get_page_buffer());
+    //----- --- -- -  -  -   -
+    BATT_UNSUPPRESS_IF_GCC()
 
     if (debug_output) {
       std::cout << BATT_INSPECT(segment_i) << BATT_INSPECT(leaf_view.get_key_crange()) << "\t"

@@ -14,11 +14,15 @@
 
 #include <llfs/page_cache_overcommit.hpp>
 
+#include <batteries/suppress.hpp>
+
 #include <ostream>
 #include <type_traits>
 #include <utility>
 
 namespace turtle_kv {
+
+BATT_SUPPRESS_IF_GCC("-Wself-move")
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 //
@@ -50,6 +54,8 @@ concept MemTableExternalAllocation =                        //
   //
   { const_obj.size() } -> std::convertible_to<usize>;
 };
+
+BATT_UNSUPPRESS_IF_GCC()
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 //

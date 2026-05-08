@@ -14,6 +14,8 @@
 #include <llfs/page_loader.hpp>
 #include <llfs/pinned_page.hpp>
 
+#include <batteries/suppress.hpp>
+
 namespace turtle_kv {
 
 class SegmentedLevelScannerBase
@@ -255,7 +257,11 @@ inline auto SegmentedLevelScanner<NodeT, LevelT, PageLoaderT>::peek_next_impl(bo
   //----- --- -- -  -  -   -
   // Return the slice containing all items up to the next gap.
 
+  BATT_SUPPRESS_IF_GCC("-Wdangling-reference")
+  //----- --- -- -  -  -   -
   const PackedLeafPage& leaf_page = PackedLeafPage::view_of(this->pinned_leaf_.get_page_buffer());
+  //----- --- -- -  -  -   -
+  BATT_UNSUPPRESS_IF_GCC()
 
   const usize begin_i = this->item_i_;
   u32 end_i = begin_i;

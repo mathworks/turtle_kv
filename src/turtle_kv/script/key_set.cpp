@@ -24,6 +24,17 @@ namespace turtle_kv {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+KeySet::~KeySet() noexcept
+{
+  for (std::atomic<Level*>& p_level : this->levels_) {
+    if (p_level.load() != nullptr) {
+      delete p_level.load();
+    }
+  }
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 usize KeySet::size() const noexcept
 {
   return this->next_index_->load();
