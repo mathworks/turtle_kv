@@ -244,7 +244,8 @@ class KVStore : public Table
    */
   void reset_thread_context() noexcept;
 
-  /** \brief
+  /** \brief Deinitializes thread-specific state for this KVStore; the calling thread must not use
+   * the KVStore after calling this function.
    */
   void release_thread_context() noexcept;
 
