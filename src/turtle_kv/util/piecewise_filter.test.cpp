@@ -1,3 +1,11 @@
+//=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
+//
+// Part of the TurtleKV Project, under Apache License v2.0.
+// See https://www.apache.org/licenses/LICENSE-2.0 for license information.
+// SPDX short identifier: Apache-2.0
+//
+//+++++++++++-+-+--+----- --- -- -  -  -   -
+
 #include <turtle_kv/util/piecewise_filter.hpp>
 //
 #include <turtle_kv/util/piecewise_filter.hpp>
@@ -39,24 +47,24 @@ TEST(PiecewiseFilterTest, InvalidFilterTest)
 {
   // Interval starting with zero twice.
   //
-  std::vector<Interval<usize>> dropped{Interval<usize>{0, 10},
-                                       Interval<usize>{20, 30},
-                                       Interval<usize>{0, 40}};
-  StatusOr<PiecewiseFilter<usize>> filter = PiecewiseFilter<usize>::from_dropped(as_slice(dropped));
+  std::vector<Interval<usize>> live{Interval<usize>{0, 10},
+                                    Interval<usize>{20, 30},
+                                    Interval<usize>{0, 40}};
+  StatusOr<PiecewiseFilter<usize>> filter = PiecewiseFilter<usize>::from_live(as_slice(live));
   EXPECT_FALSE(filter.ok());
   EXPECT_EQ(filter.status(), Status{::batt::StatusCode::kInvalidArgument});
 
   // Overlapping intervals.
   //
-  dropped = {Interval<usize>{0, 20}, Interval<usize>{10, 25}};
-  filter = PiecewiseFilter<usize>::from_dropped(as_slice(dropped));
+  live = {Interval<usize>{0, 20}, Interval<usize>{10, 25}};
+  filter = PiecewiseFilter<usize>::from_live(as_slice(live));
   EXPECT_FALSE(filter.ok());
   EXPECT_EQ(filter.status(), Status{::batt::StatusCode::kInvalidArgument});
 
   // Backward interval.
   //
-  dropped = {Interval<usize>{0, 30}, Interval<usize>{50, 40}};
-  filter = PiecewiseFilter<usize>::from_dropped(as_slice(dropped));
+  live = {Interval<usize>{0, 30}, Interval<usize>{50, 40}};
+  filter = PiecewiseFilter<usize>::from_live(as_slice(live));
   EXPECT_FALSE(filter.ok());
   EXPECT_EQ(filter.status(), Status{::batt::StatusCode::kInvalidArgument});
 }
@@ -65,7 +73,7 @@ TEST(PiecewiseFilterTest, InvalidFilterTest)
 //
 TEST(PiecewiseFilterTest, QueryTest)
 {
-  const usize num_items = 1000;
+  const usize num_items = 10000;
 
   for (usize seed = 0; seed < 100; ++seed) {
     std::default_random_engine rng{seed};
@@ -73,7 +81,7 @@ TEST(PiecewiseFilterTest, QueryTest)
     PiecewiseFilter<usize> filter;
     EXPECT_TRUE(filter.check_invariants());
 
-    // All items start unfiltered.
+    // All items start live.
     //
     std::set<usize> live_items;
     for (usize i = 0; i < num_items; ++i) {
@@ -95,7 +103,9 @@ TEST(PiecewiseFilterTest, QueryTest)
         live_items.erase(j);
       }
 
-      filter.drop_index_range(Interval<usize>{start_i, end_i});
+      Interval<usize> new_dropped = filter.drop_index_range(Interval<usize>{start_i, end_i});
+      EXPECT_LE(new_dropped.lower_bound, start_i) << BATT_INSPECT(seed);
+      EXPECT_GE(new_dropped.upper_bound, end_i) << BATT_INSPECT(seed);
     }
 
     EXPECT_TRUE(filter.check_invariants());
@@ -103,7 +113,9 @@ TEST(PiecewiseFilterTest, QueryTest)
     // Test live_at_index
     //
     for (usize i = 0; i < num_items; ++i) {
-      EXPECT_EQ(filter.live_at_index(i), live_items.count(i) > 0);
+      bool expected_live = live_items.count(i) > 0;
+      bool actual_live = filter.live_at_index(i);
+      EXPECT_EQ(actual_live, expected_live) << BATT_INSPECT(seed) << BATT_INSPECT(i);
     }
 
     // Test live_lower_bound
@@ -111,7 +123,8 @@ TEST(PiecewiseFilterTest, QueryTest)
     for (usize i = 0; i < num_items; ++i) {
       auto iter = live_items.lower_bound(i);
       usize expected = (iter != live_items.end()) ? *iter : num_items;
-      EXPECT_EQ(filter.live_lower_bound(i), expected);
+      usize actual = filter.live_lower_bound(i);
+      EXPECT_EQ(actual, expected) << BATT_INSPECT(seed) << BATT_INSPECT(i);
     }
 
     // Test find_live_range
@@ -124,22 +137,25 @@ TEST(PiecewiseFilterTest, QueryTest)
       usize end_i = pick_interval_end(rng);
 
       auto iter = live_items.lower_bound(start_i);
+      Interval<usize> expected_range;
+      
       if (iter == live_items.end() || *iter >= end_i) {
-        EXPECT_EQ(filter.find_live_range(Interval<usize>{start_i, end_i}),
-                  (Interval<usize>{end_i, end_i}));
+        expected_range = Interval<usize>{end_i, end_i};
       } else {
         usize first = *iter;
-        usize last = first;
-        auto next = iter;
+        usize last = first + 1;
+        auto next = std::next(iter);
 
         while (next != live_items.end() && *next < end_i && *next == last) {
           ++last;
           ++next;
         }
 
-        EXPECT_EQ(filter.find_live_range(Interval<usize>{start_i, end_i}),
-                  (Interval<usize>{first, last}));
+        expected_range = Interval<usize>{first, last};
       }
+
+      Interval<usize> actual_range = filter.find_live_range(Interval<usize>{start_i, end_i});
+      EXPECT_EQ(actual_range, expected_range) << BATT_INSPECT(seed);
     }
   }
 }
@@ -173,7 +189,6 @@ TEST(PiecewiseFilterTest, KeyQueryTest)
 
     // First verify that everything should be live since nothing has been dropped yet.
     //
-    EXPECT_EQ(filter.dropped_total(), 0);
     EXPECT_TRUE(filter.check_invariants());
 
     Interval<u32> next_live_interval = filter.find_live_range(Interval<u32>{0, num_keys});
@@ -182,9 +197,11 @@ TEST(PiecewiseFilterTest, KeyQueryTest)
     // Drop an interval in the middle of the items range, and query the filter.
     //
     CInterval<std::string_view> cinterval_dropped{keys[100], keys[300]};
-    drop_item_range(filter, batt::as_const_slice(keys), cinterval_dropped, KeyRangeOrder{});
+    Interval<u32> after =
+        drop_item_range(filter, batt::as_const_slice(keys), cinterval_dropped, KeyRangeOrder{});
 
-    EXPECT_EQ(filter.dropped_total(), 201);
+    EXPECT_LE(after.lower_bound, 100);
+    EXPECT_GT(after.upper_bound, 300);
 
     EXPECT_TRUE(filter.live_at_index(99));
     EXPECT_TRUE(filter.live_at_index(301));
@@ -209,8 +226,11 @@ TEST(PiecewiseFilterTest, KeyQueryTest)
     // Drop another interval that is not adjacent to the previously dropped one.
     //
     Interval<std::string_view> interval_dropped{keys[600], keys.back()};
-    drop_item_range(filter, batt::as_const_slice(keys), interval_dropped, KeyRangeOrder{});
+    Interval<u32> after2 =
+        drop_item_range(filter, batt::as_const_slice(keys), interval_dropped, KeyRangeOrder{});
 
+    EXPECT_LE(after2.lower_bound, 600);
+    EXPECT_EQ(after2.upper_bound, keys.size() - 1);
     EXPECT_TRUE(filter.live_at_index(num_keys - 1));
     EXPECT_TRUE(filter.live_at_index(400));
     EXPECT_FALSE(filter.live_at_index(600));
@@ -231,8 +251,11 @@ TEST(PiecewiseFilterTest, KeyQueryTest)
     // Drop another range in the middle, this time with overlap until the end.
     //
     cinterval_dropped = CInterval<std::string_view>{keys[500], keys[num_keys - 1]};
-    drop_item_range(filter, batt::as_const_slice(keys), cinterval_dropped, KeyRangeOrder{});
+    Interval<u32> after3 =
+        drop_item_range(filter, batt::as_const_slice(keys), cinterval_dropped, KeyRangeOrder{});
 
+    EXPECT_LE(after3.lower_bound, 500);
+    EXPECT_GE(after3.upper_bound, num_keys);
     EXPECT_FALSE(filter.live_at_index(num_keys - 1));
     EXPECT_TRUE(filter.live_at_index(301));
 
@@ -246,9 +269,10 @@ TEST(PiecewiseFilterTest, KeyQueryTest)
 
     // Drop everything.
     //
-    filter.drop_index_range(Interval<u32>{0, num_keys});
+    auto everything = Interval<u32>{0, num_keys};
+    Interval<u32> after4 = filter.drop_index_range(everything);
 
-    EXPECT_EQ(filter.dropped_total(), num_keys);
+    EXPECT_EQ(after4, everything);
 
     EXPECT_FALSE(filter.live_at_index(0));
     next_live_index = filter.live_lower_bound(0);

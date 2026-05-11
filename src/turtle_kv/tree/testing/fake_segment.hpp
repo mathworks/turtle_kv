@@ -1,3 +1,11 @@
+//=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
+//
+// Part of the TurtleKV Project, under Apache License v2.0.
+// See https://www.apache.org/licenses/LICENSE-2.0 for license information.
+// SPDX short identifier: Apache-2.0
+//
+//+++++++++++-+-+--+----- --- -- -  -  -   -
+
 #pragma once
 
 #include <turtle_kv/tree/testing/fake_page_loader.hpp>
@@ -94,33 +102,29 @@ struct FakeSegment {
   {
     const bool inactive = this->active_pivots_.is_empty();
     if (inactive) {
-      Slice<const Interval<u32>> filter_dropped_ranges = this->filter_.dropped();
-      BATT_CHECK_EQ(filter_dropped_ranges.size(), 1);
-      BATT_CHECK_EQ(filter_dropped_ranges[0].lower_bound, 0);
-    }
+    Slice<const Interval<u32>> live_ranges = this->filter_.live();
+    BATT_CHECK_EQ(live_ranges.size(), 1) << BATT_INSPECT(live_ranges);
+    BATT_CHECK_EQ(live_ranges[0].upper_bound, PiecewiseFilter<u32>::kMaxUpperBound)
+        << BATT_INSPECT(live_ranges);
+  }
     return inactive;
   }
 
   template <typename Traits>
-  void drop_key_range(const BasicInterval<Traits>& key_range,
-                      const Slice<const PackedKeyValue>& items)
+  Interval<u32> drop_key_range(const BasicInterval<Traits>& key_range,
+                               const Slice<const PackedKeyValue>& items)
   {
-    drop_item_range(this->filter_, items, key_range, llfs::KeyRangeOrder{});
+    return drop_item_range(this->filter_, items, key_range, llfs::KeyRangeOrder{});
   }
 
-  void drop_index_range(Interval<u32> i)
+  Interval<u32> drop_index_range(Interval<u32> i)
   {
-    this->filter_.drop_index_range(i);
+    return this->filter_.drop_index_range(i);
   }
 
   bool is_index_filtered(const FakeLevel&, u32 index) const
   {
     return !this->filter_.live_at_index(index);
-  }
-
-  bool is_unfiltered() const
-  {
-    return !this->filter_.dropped_total();
   }
 
   u32 live_lower_bound(const FakeLevel&, u32 item_i) const

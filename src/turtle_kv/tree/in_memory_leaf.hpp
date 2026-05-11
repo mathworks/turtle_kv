@@ -32,11 +32,19 @@ struct InMemoryLeaf {
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   llfs::PinnedPage pinned_leaf_page_;
+  SmallVec<llfs::PinnedPage, 1> sibling_pages_;
   TreeOptions tree_options;
   Optional<MergeCompactor::ResultSet</*decay_to_items=*/true>> result_set;
   std::shared_ptr<const batt::RunningTotal> shared_edit_size_totals_;
   Optional<batt::RunningTotal::slice_type> edit_size_totals;
   mutable std::atomic<u64> future_id_{~u64{0}};
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  static std::unique_ptr<InMemoryLeaf> unpack(llfs::PinnedPage&& pinned_leaf_page,
+                                              const TreeOptions& tree_options,
+                                              const PackedLeafPage& packed_leaf,
+                                              batt::WorkerPool& worker_pool) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -97,6 +105,8 @@ struct InMemoryLeaf {
   StatusOr<std::unique_ptr<InMemoryLeaf>> try_split();
 
   StatusOr<SplitPlan> make_split_plan() const;
+
+  Status try_merge(BatchUpdateContext& context, std::unique_ptr<InMemoryLeaf> sibling) noexcept;
 
   Status apply_batch_update(BatchUpdate& update) noexcept;
 

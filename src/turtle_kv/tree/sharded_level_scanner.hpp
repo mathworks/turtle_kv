@@ -448,7 +448,7 @@ inline auto ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::continue_full_leaf_
   Interval<u32> live_range = segment->get_live_item_range(
       *this->level_,
       Interval<u32>{BATT_CHECKED_CAST(u32, begin_i), BATT_CHECKED_CAST(u32, leaf_page.key_count)});
-
+  
   BATT_CHECK(!live_range.empty());
   end_i = live_range.upper_bound;
 

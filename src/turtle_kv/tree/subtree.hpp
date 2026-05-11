@@ -159,9 +159,18 @@ class Subtree
    */
   StatusOr<Optional<Subtree>> try_split(BatchUpdateContext& context);
 
-  /** \brief Attempt to make the root viable by flushing a batch.
+  /** \brief Merges the Subtree in place with `sibling`.
+   */
+  Status try_merge(BatchUpdateContext& context, Subtree&& sibling) noexcept;
+
+  /** \brief Attempt to make the root viable by flushing a batch. If nothing is available to
+   *  flush, returns batt::StatusCode::kUnavailable.
    */
   Status try_flush(BatchUpdateContext& context);
+
+  /** \brief Attempt to collapse a level of the tree.
+   */
+  Status try_shrink() noexcept;
 
   /** \brief Returns true iff this Subtree has no in-memory modifications.
    */
@@ -193,11 +202,26 @@ class Subtree
    */
   bool is_locked() const;
 
+  /** \brief Converts a serialized Subtree to its in-memory equivalent, modifying the Subtree in
+   * place. If the Subtree is already an in-memory type, this function does nothing.
+   */
+  Status unpack_if_necessary(llfs::PageLoader& page_loader,
+                             llfs::PageCacheOvercommit& overcommit,
+                             batt::WorkerPool& worker_pool,
+                             const TreeOptions& tree_options,
+                             i32 height) noexcept;
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
   Status split_and_grow(BatchUpdateContext& context,
                         const TreeOptions& tree_options,
                         const KeyView& key_upper_bound);
+
+  /** \brief Called when the root of the tree is a node with a single pivot. This function
+   * flushes the root's update buffer until its is either empty
+   * (causing the tree to shrink in height) or until it gains more pivots.
+   */
+  Status flush_and_shrink(BatchUpdateContext& context) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 

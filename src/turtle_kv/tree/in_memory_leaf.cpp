@@ -1,3 +1,11 @@
+//=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
+//
+// Part of the TurtleKV Project, under Apache License v2.0.
+// See https://www.apache.org/licenses/LICENSE-2.0 for license information.
+// SPDX short identifier: Apache-2.0
+//
+//+++++++++++-+-+--+----- --- -- -  -  -   -
+
 #include <turtle_kv/tree/in_memory_leaf.hpp>
 //
 
@@ -6,9 +14,53 @@
 #include <turtle_kv/tree/packed_leaf_page.hpp>
 #include <turtle_kv/tree/the_key.hpp>
 
+#include <batteries/algo/parallel_transform.hpp>
 #include <batteries/utility.hpp>
 
 namespace turtle_kv {
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+/*static*/ std::unique_ptr<InMemoryLeaf> InMemoryLeaf::unpack(
+    llfs::PinnedPage&& pinned_leaf_page,
+    const TreeOptions& tree_options,
+    const PackedLeafPage& packed_leaf,
+    batt::WorkerPool& worker_pool) noexcept
+{
+  std::unique_ptr<InMemoryLeaf> new_leaf =
+      std::make_unique<InMemoryLeaf>(batt::make_copy(pinned_leaf_page), tree_options);
+
+  Slice<const PackedKeyValue> packed_items = packed_leaf.items_slice();
+  std::vector<EditView> buffer;
+  buffer.reserve(packed_items.size());
+
+  {
+    batt::ScopedWorkContext context{worker_pool};
+
+    const ParallelAlgoDefaults& algo_defaults = parallel_algo_defaults();
+    const batt::TaskCount max_tasks{worker_pool.size() + 1};
+
+    batt::parallel_transform(
+        context,
+        packed_items.begin(),
+        packed_items.end(),
+        buffer.data(),
+        [](const PackedKeyValue& pkv) -> EditView {
+          return to_edit_view(pkv);
+        },
+        /*min_task_size = */ algo_defaults.copy_edits.min_task_size,
+        /*max_tasks = */ max_tasks);
+  }
+
+  MergeCompactor::ResultSet</*decay_to_items=*/true> result_set;
+  const ItemView* first_edit = (const ItemView*)buffer.data();
+  result_set.append(std::move(buffer), as_slice(first_edit, packed_items.size()));
+  new_leaf->result_set = std::move(result_set);
+
+  new_leaf->set_edit_size_totals(compute_running_total(worker_pool, *(new_leaf->result_set)));
+
+  return {std::move(new_leaf)};
+}
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
@@ -17,7 +69,9 @@ SubtreeViability InMemoryLeaf::get_viability()
   const usize total_size = this->get_items_size();
 
   if (total_size < this->tree_options.flush_size() / 4) {
-    return NeedsMerge{};
+    NeedsMerge needs_merge;
+    needs_merge.zero_items = (total_size == 0);
+    return needs_merge;
   } else if (total_size > this->tree_options.flush_size()) {
     return NeedsSplit{};
   } else {
@@ -150,6 +204,44 @@ auto InMemoryLeaf::make_split_plan() const -> StatusOr<SplitPlan>
   BATT_CHECK_LE(plan.second_size, plan.max_viable_size);
 
   return plan;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Status InMemoryLeaf::try_merge(BatchUpdateContext& context,
+                               std::unique_ptr<InMemoryLeaf> sibling) noexcept
+{
+  BATT_CHECK(this->result_set);
+  BATT_CHECK(sibling->result_set);
+
+  if (sibling->result_set->empty()) {
+    BATT_CHECK(batt::is_case<Viable>(this->get_viability()))
+        << "Sibling leaf is not viable, so this leaf must be viable!";
+    return OkStatus();
+  }
+
+  if (this->result_set->empty()) {
+    BATT_CHECK(batt::is_case<Viable>(sibling->get_viability()))
+        << "This leaf is not viable, so sibling leaf must be viable!";
+    this->pinned_leaf_page_ = std::move(sibling->pinned_leaf_page_);
+    this->result_set = std::move(sibling->result_set);
+    this->shared_edit_size_totals_ = sibling->shared_edit_size_totals_;
+    this->edit_size_totals = std::move(sibling->edit_size_totals);
+    return OkStatus();
+  }
+
+  BATT_CHECK_LT(this->get_max_key(), sibling->get_min_key());
+
+  this->result_set = MergeCompactor::ResultSet<true>::concat(std::move(*this->result_set),
+                                                             std::move(*(sibling->result_set)));
+
+  this->set_edit_size_totals(context.compute_running_total(*this->result_set));
+
+  // Retain a pin on the sibling's leaf page.
+  //
+  this->sibling_pages_.emplace_back(std::move(sibling->pinned_leaf_page_));
+
+  return OkStatus();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

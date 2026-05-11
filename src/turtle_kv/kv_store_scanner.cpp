@@ -421,6 +421,9 @@ Status KVStoreScanner::set_next_item()
 
   for (;;) {
     if (this->heap_.empty()) {
+      if (this->next_item_ && this->next_item_->value.is_delete()) {
+        this->next_item_ = None;
+      }
       return OkStatus();
     }
 
