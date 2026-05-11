@@ -376,12 +376,7 @@ TEST_F(ChangeLogTest, BlockBoundaryConditions)
           (*writer)->trim(offset + EditOffsetDelta{(i64)large_data.size()}).IgnoreError();
         });
 
-    if (!write_status.ok()) {
-      // TODO: [Gabe Bornstein 4/1/26] We never hit this condition, do we expect to?
-      //
-      LOG(INFO) << "Resource exhausted";
-      EXPECT_EQ(write_status, batt::StatusCode::kResourceExhausted);
-    }
+    ASSERT_TRUE(write_status.ok()) << BATT_INSPECT(write_status);
   }
 
   // Wait for writer to process appends before halting.
