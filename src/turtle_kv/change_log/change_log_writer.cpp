@@ -815,6 +815,7 @@ Status ChangeLogWriter::activate_blocks(WrittenBlocksState& input,
               << BATT_INSPECT(next_block->edit_offset_lower_bound())
               << BATT_INSPECT(next_block->edit_offset_upper_bound());
       cfg.increment_block_range(output.block_range);
+      BATT_CHECK(output.block_range.empty()) << BATT_INSPECT(output.block_range);
       continue;
     }
 

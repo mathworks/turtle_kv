@@ -113,6 +113,8 @@ struct ChangeLogConfig {
    */
   BlockIndex& increment_with_wrap(BlockIndex& block_index) const noexcept
   {
+    BATT_CHECK_LT(block_index, this->block_count);
+
     if (this->increment_no_wrap(block_index) == this->block_count) {
       block_index = BlockIndex{0};
     }
@@ -141,8 +143,9 @@ struct ChangeLogConfig {
     return this->wrap_block_range(block_range);
   }
 
-  /** \brief If the lower bound is this->block_count, shifts upper and lower bound down by
-   * block_count.
+  /** \brief If the lower bound at least this->block_count, shifts upper and lower bound down by
+   * block_count, modifying the passed interval so that afterwards the size is preserved, and
+   * lower_bound is in [0, this->block_count).
    */
   Interval<BlockIndex>& wrap_block_range(Interval<BlockIndex>& block_range) const noexcept
   {
@@ -169,26 +172,8 @@ struct ChangeLogConfig {
     return block_range;
   }
 
-  /** \brief Increments the upper bound of the passed interval, pulling the lower bound forward
-   * and wrapping if this makes the range size too large.
+  /** \brief Shifts the passed interval up by one, preserving the size.
    */
-  Interval<BlockIndex>& increment_upper_bound_with_wrap(
-      Interval<BlockIndex>& block_range) const noexcept
-  {
-    this->check_invariants(block_range);
-    auto on_scope_exit = batt::finally([&] {
-      this->check_invariants(block_range);
-    });
-
-    this->increment_no_wrap(block_range.upper_bound);
-    if (block_range.size() > this->block_count) {
-      this->increment_no_wrap(block_range.lower_bound);
-      this->wrap_block_range(block_range);
-    }
-
-    return block_range;
-  }
-
   Interval<BlockIndex>& increment_block_range(Interval<BlockIndex>& block_range) const noexcept
   {
     this->check_invariants(block_range);
@@ -235,10 +220,13 @@ struct ChangeLogConfig {
     block_range.upper_bound = std::max(block_range.upper_bound, index);
   }
 
-  /** \brief Panics if the passed interval is not well formed for this configuration.
+  /** \brief Panics if the passed (logical) interval is not well formed for this configuration.
+   *
+   * block_range.lower_bound is a physical index; block_range.upper_bound is logical.
    */
   void check_invariants(const Interval<BlockIndex>& block_range) const noexcept
   {
+    BATT_CHECK_LE(0, block_range.lower_bound);
     BATT_CHECK_LT(block_range.lower_bound, this->block_count);
     BATT_CHECK_LE(block_range.lower_bound, block_range.upper_bound);
     BATT_CHECK_LE(block_range.upper_bound - block_range.lower_bound, this->block_count);
