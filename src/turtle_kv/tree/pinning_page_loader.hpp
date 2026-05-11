@@ -108,9 +108,13 @@ class PinningPageLoader : public llfs::PageLoader
 #if TURTLE_KV_PROFILE_QUERIES
     LatencyTimer timer{Every2ToTheConst<16>{}, this->metrics_.try_pin_from_cache_latency};
 #endif
+
     StatusOr<llfs::PinnedPage> pinned_page =
         this->base_loader_.try_pin_cached_page(page_id, options);
+
+#if TURTLE_KV_PROFILE_QUERIES
     timer.stop();
+#endif
 
     this->hash_map_update(page_id, pinned_page, options);
 
@@ -134,8 +138,12 @@ class PinningPageLoader : public llfs::PageLoader
 #if TURTLE_KV_PROFILE_QUERIES
     LatencyTimer timer{Every2ToTheConst<16>{}, this->metrics_.get_page_from_cache_latency};
 #endif
+
     StatusOr<llfs::PinnedPage> pinned_page = this->base_loader_.load_page(page_id, options);
+
+#if TURTLE_KV_PROFILE_QUERIES
     timer.stop();
+#endif
 
     this->hash_map_update(page_id, pinned_page, options);
 

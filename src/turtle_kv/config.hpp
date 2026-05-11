@@ -1,4 +1,13 @@
+//=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
+//
+// Part of the TurtleKV Project, under Apache License v2.0.
+// See https://www.apache.org/licenses/LICENSE-2.0 for license information.
+// SPDX short identifier: Apache-2.0
+//
+//+++++++++++-+-+--+----- --- -- -  -  -   -
+
 #pragma once
+#define TURTLE_KV_CONFIG_HPP
 
 #if __cplusplus < 202002L
 #error "This code requires at least C++20. Please compile with -std=c++20 or higher."
@@ -17,11 +26,15 @@
 
 /** \brief Set to 1 to enable Bloom Filters.
  */
+#ifndef TURTLE_KV_USE_BLOOM_FILTER
 #define TURTLE_KV_USE_BLOOM_FILTER 0
+#endif
 
 /** \brief Set to 1 to enable Quotient Filters.
  */
+#ifndef TURTLE_KV_USE_QUOTIENT_FILTER
 #define TURTLE_KV_USE_QUOTIENT_FILTER 1
+#endif
 
 #if !(TURTLE_KV_USE_BLOOM_FILTER == 0 || TURTLE_KV_USE_BLOOM_FILTER == 1)
 #error TURTLE_KV_USE_BLOOM_FILTER must be 0 or 1
@@ -41,7 +54,9 @@
 
 /** \brief Whether filters are consulted during point queries.
  */
+#ifndef TURTLE_KV_ENABLE_LEAF_FILTERS
 #define TURTLE_KV_ENABLE_LEAF_FILTERS 1
+#endif
 
 /** \brief Enable/disable explicit support for gperftools/tcmalloc.
  */
@@ -54,7 +69,9 @@
 
 /** \brief Enable/disable collection of stats/metrics.
  */
+#ifndef TURTLE_KV_ENABLE_METRICS
 #define TURTLE_KV_ENABLE_METRICS 1
+#endif
 
 /** \brief Changes layout of leaf pages: if 1, then keys and values are packed together, else (if
  * 0), keys are packed with keys, values with values.
@@ -63,11 +80,15 @@
 
 /** \brief Enable/disable collection of detailed stats to profile update code paths.
  */
+#ifndef TURTLE_KV_PROFILE_UPDATES
 #define TURTLE_KV_PROFILE_UPDATES 1
+#endif
 
 /** \brief Enable/disable collection of detailed stats to profile query code paths.
  */
+#ifndef TURTLE_KV_PROFILE_QUERIES
 #define TURTLE_KV_PROFILE_QUERIES 1
+#endif
 
 /** \brief Enable/disable creating multiple batches from a single bigger memtable.
  */

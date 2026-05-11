@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 
+if ("${TURTLE_KV_OPTION_WITH_KEYVCR}" STREQUAL "True")
+
 file(GLOB Sources
   ./*.cpp
   ./*/*.cpp
@@ -16,3 +18,6 @@ target_link_libraries(
   keyvcr::keyvcr
   gtest::gtest
   )
+
+endif ()
+

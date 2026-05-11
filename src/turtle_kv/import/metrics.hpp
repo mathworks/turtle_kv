@@ -1,4 +1,13 @@
+//=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
+//
+// Part of the TurtleKV Project, under Apache License v2.0.
+// See https://www.apache.org/licenses/LICENSE-2.0 for license information.
+// SPDX short identifier: Apache-2.0
+//
+//+++++++++++-+-+--+----- --- -- -  -  -   -
+
 #pragma once
+#define TURTLE_KV_IMPORT_METRICS_HPP
 
 #include <turtle_kv/config.hpp>
 //
@@ -108,6 +117,11 @@ struct NullLatencyMetric {
   {
   }
 
+  template <typename... A>
+  void update_nanos(A&&...) const noexcept
+  {
+  }
+
   double nonzero_count() const noexcept
   {
     return -1;
@@ -118,7 +132,7 @@ struct NullLatencyMetric {
     return -1;
   }
 
-  double rate_per_second() const noexcept
+  double rate_per_second(bool = true) const noexcept
   {
     return -1;
   }

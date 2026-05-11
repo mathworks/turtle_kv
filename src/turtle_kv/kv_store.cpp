@@ -406,11 +406,11 @@ u64 query_page_loader_reset_every_n()
   BATT_CHECK_OK(NodePageView::register_layout(this->page_cache()));
   BATT_CHECK_OK(LeafPageView::register_layout(this->page_cache()));
   BATT_CHECK_OK(llfs::BloomFilterPageView::register_layout(this->page_cache()));
+#if TURTLE_KV_USE_QUOTIENT_FILTER
+  BATT_CHECK_OK(VqfFilterPageView::register_layout(this->page_cache()));
+#endif
 
   if (this->tree_options_.filter_bits_per_key() != 0) {
-    BATT_CHECK_OK(llfs::BloomFilterPageView::register_layout(this->page_cache()));
-    BATT_CHECK_OK(VqfFilterPageView::register_layout(this->page_cache()));
-
     Status status = this->page_cache().assign_paired_device(this->tree_options_.leaf_size(),
                                                             kPairedFilterForLeaf,
                                                             this->tree_options_.filter_page_size());
@@ -1425,7 +1425,7 @@ void KVStore::collect_stats(
     std::function<void(std::string_view /*name*/, double /*value*/)> fn) const noexcept
 {
   //----- --- -- -  -  -   -
-  const auto emit_latency = [&fn](std::string_view name, const LatencyMetric& metric) {
+  const auto emit_latency = [&fn](std::string_view name, const auto /*LatencyMetric*/& metric) {
     fn(batt::to_string(name, ".count"), metric.count.get());
     fn(batt::to_string(name, ".seconds"), metric.total_seconds());
   };
