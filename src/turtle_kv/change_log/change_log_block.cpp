@@ -145,7 +145,7 @@ void ChangeLogBlock::remove_ref(i32 count) noexcept
     ChangeLogBlock::free_allocated(this);
     //----- --- -- -  -  -   -
   }
-  BATT_CHECK_NE(old_count, 0);
+  BATT_CHECK_GT(old_count, 0);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
