@@ -414,8 +414,7 @@ u64 query_page_loader_reset_every_n()
     , per_thread_{}
     , state_{}
     , deltas_size_{0}
-    , checkpoint_token_pool_{std::make_shared<batt::Grant::Issuer>(
-          /*max_concurrent_checkpoint_jobs=*/1)}
+    , checkpoint_token_pool_{std::make_shared<batt::Grant::Issuer>(KVStore::kMaxCheckpointJobs)}
     , halt_{false}
     , info_task_{}
     , next_mem_table_edit_offset_{0}
@@ -551,6 +550,11 @@ void KVStore::halt()
   // Stop the ChangeLogWriter.
   //
   this->change_log_writer_->halt();
+
+  // Close the checkpoint token pool.
+  //
+  BATT_CHECK_NOT_NULLPTR(this->checkpoint_token_pool_);
+  this->checkpoint_token_pool_->close();
 
   // Close all Watches.
   //
@@ -1145,13 +1149,12 @@ Status KVStore::run_recovery(const std::filesystem::path& change_log_file_path) 
     this->set_recovery_status(Self::kRecoveryFailed);
   });
 
-  RecoveredChangeLogState recovered_state;
-
   EditOffset checkpoint_upper_bound = [this]() -> EditOffset {
     batt::Toggle<State>::Reader reader{this->state_};
     return reader->base_checkpoint_->edit_offset_upper_bound();
   }();
 
+  RecoveredChangeLogState recovered_state;
   {
     // Recover MemTable's from the ChangeLog
     //
@@ -1183,9 +1186,7 @@ Status KVStore::run_recovery(const std::filesystem::path& change_log_file_path) 
 
     // Visit all recoverable slots and retrieve the RecoveredChangeLogState.
     //
-    Status status = log->visit_slots(visitor_fn, &recovered_state);
-
-    BATT_REQUIRE_OK(status);
+    BATT_ASSIGN_OK_RESULT(recovered_state, log->visit_slots(visitor_fn));
   }
 
   // Adjust the trim point to match the checkpoint upper bound.  This avoids having to trim after we
@@ -1758,13 +1759,13 @@ void KVStore::collect_stats(
       }
     }
   }
-  const u64 on_disk_footprint = page_bytes_in_use + change_log_file.size();
+  const u64 on_disk_footprint = page_bytes_in_use + change_log_file.size_IS_INACCURATE();
 
   [[maybe_unused]] const double space_amp =
       (double)on_disk_footprint / (double)change_log_writer.received_user_byte_count.get();
 
   fn("kv_store.footprint.page_bytes", page_bytes_in_use);
-  fn("kv_store.footprint.log_bytes", change_log_file.size());
+  fn("kv_store.footprint.log_bytes", change_log_file.size_IS_INACCURATE());
   fn("kv_store.footprint.total_bytes", on_disk_footprint);
   fn("kv_store.log.user_bytes", change_log_writer.received_user_byte_count.get());
   fn("kv_store.log.block_bytes", change_log_writer.received_block_byte_count.get());

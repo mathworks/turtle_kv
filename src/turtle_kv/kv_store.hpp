@@ -129,6 +129,12 @@ class KVStore : public Table
    */
   static constexpr usize kMaxDeltasSize = 2;
 
+  /** \brief The maximum number of CheckpointJobs allowed to exist at a given time.
+   *
+   * default is 2 == the next one and the current one
+   */
+  static constexpr usize kMaxCheckpointJobs = 2;
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   /** \brief Performs various process-wide initialization.

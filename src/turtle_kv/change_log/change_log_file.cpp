@@ -26,14 +26,14 @@ namespace turtle_kv {
     llfs::close_fd(fd).IgnoreError();
   });
 
-  const u64 file_size = config.block0_offset + (config.block_size * config.block_count);
+  const u64 file_size = config.last_block_end_offset();
 
   BATT_REQUIRE_OK(llfs::truncate_fd(fd, file_size));
 
   PackedMetaBlock meta_block;
+  std::memset(&meta_block, 0, sizeof(PackedMetaBlock));
 
   config.pack_to(&meta_block.config);
-
   ChangeLogMetaState::with_initial_values().pack_to(&meta_block.meta_state);
 
   BATT_REQUIRE_OK(llfs::write_fd(fd,

@@ -46,6 +46,16 @@ struct ChangeLogMetaState {
 
 BATT_OBJECT_PRINT_IMPL((inline), ChangeLogMetaState, (block_range, trim_edit_offset))
 
+inline bool operator==(const ChangeLogMetaState& l, const ChangeLogMetaState& r)
+{
+  return l.block_range == r.block_range && l.trim_edit_offset == r.trim_edit_offset;
+}
+
+inline bool operator!=(const ChangeLogMetaState& l, const ChangeLogMetaState& r)
+{
+  return !(l == r);
+}
+
 struct PackedChangeLogMetaState {
   // The physical address in the ChangeLogFile of the oldest known
   // active block. The lower bound will never Greater Than the upper_bound. NOT guaranteed to be

@@ -59,9 +59,7 @@ class ChangeLogFile
   friend class ChangeLogWriter;
 
  public:
-  using ReadLockCounter = batt::CpuCacheLineIsolated<std::atomic<i64>>;
   using Metrics = ChangeLogFileMetrics;
-  using BlockBuffer = ChangeLogBlock;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -144,7 +142,7 @@ class ChangeLogFile
     return FileByteCount{this->config_.block_count * this->config_.block_size};
   }
 
-  auto size() const
+  auto size_IS_INACCURATE() const
   {
     // TODO [tastolfi 2026-04-20] fix this to be accurate
     //
@@ -192,12 +190,6 @@ batt::Status ChangeLogFile::read_blocks(ConsumeBlockFn consume_block)
 
   Config& cfg = this->config_;
 
-  std::unordered_set<i64> corrupted_block_offsets;
-
-  // Track the number of blocks successfully read and consumed.
-  //
-  usize n_blocks_read = 0;
-
   // Calculate the block range to read, based on the most recently written MetaState.
   //
   Interval<BlockIndex> block_range = cfg.block_range_to_recover(meta_state.block_range);
@@ -243,8 +235,6 @@ batt::Status ChangeLogFile::read_blocks(ConsumeBlockFn consume_block)
     } else if (!process_status.ok()) {
       return process_status;
     }
-
-    ++n_blocks_read;
   }
 
   return batt::OkStatus();
