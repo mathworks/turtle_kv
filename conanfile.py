@@ -85,10 +85,10 @@ class TurtleKvRecipe(ConanFile):
         }
 
         self.requires("abseil/20250127.0", **VISIBLE, **OVERRIDE)
-        self.requires("batteries/[>=0.68.0 <1]", **VISIBLE, **OVERRIDE)
+        self.requires("batteries/[>=0.69.0 <1]", **VISIBLE, **OVERRIDE)
         self.requires("boost/1.88.0", **VISIBLE, **OVERRIDE)
         self.requires("glog/0.7.1", **VISIBLE)
-        self.requires("llfs/[>=0.43.4 <1]", **VISIBLE)
+        self.requires("llfs/0.43.4", **VISIBLE)
         self.requires("pcg-cpp/cci.20220409", **VISIBLE)
         self.requires("yaml-cpp/[>=0.9.0 <1]")
         self.requires("zlib/1.3.1", **OVERRIDE)
