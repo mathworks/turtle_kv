@@ -209,7 +209,7 @@ TEST_F(ChangeLogTest, WriteAndReadMultipleSlots)
       return OkStatus();
     };
 
-    batt::Status visit_status = (*reader)->visit_slots(visitor_fn);
+    batt::Status visit_status = (*reader)->visit_slots(visitor_fn).status();
     ASSERT_TRUE(visit_status.ok()) << BATT_INSPECT(visit_status);
 
     // Verify we read all slots.
@@ -322,7 +322,7 @@ TEST_F(ChangeLogTest, ConcurrentWritesMultipleContexts)
       return OkStatus();
     };
 
-    batt::Status visit_status = (*reader)->visit_slots(visitor_fn);
+    batt::Status visit_status = (*reader)->visit_slots(visitor_fn).status();
     ASSERT_TRUE(visit_status.ok()) << BATT_INSPECT(visit_status);
 
     EXPECT_EQ(slots_read, num_threads * slots_per_thread);
@@ -376,12 +376,7 @@ TEST_F(ChangeLogTest, BlockBoundaryConditions)
           (*writer)->trim(offset + EditOffsetDelta{(i64)large_data.size()}).IgnoreError();
         });
 
-    if (!write_status.ok()) {
-      // TODO: [Gabe Bornstein 4/1/26] We never hit this condition, do we expect to?
-      //
-      LOG(INFO) << "Resource exhausted";
-      EXPECT_EQ(write_status, batt::StatusCode::kResourceExhausted);
-    }
+    ASSERT_TRUE(write_status.ok()) << BATT_INSPECT(write_status);
   }
 
   // Wait for writer to process appends before halting.
@@ -425,7 +420,7 @@ TEST_F(ChangeLogTest, ReadEmptyLog)
     return OkStatus();
   };
 
-  batt::Status visit_status = (*reader)->visit_slots(visitor_fn);
+  batt::Status visit_status = (*reader)->visit_slots(visitor_fn).status();
   ASSERT_TRUE(visit_status.ok()) << BATT_INSPECT(visit_status);
 
   EXPECT_EQ(slots_read, 0);
@@ -570,7 +565,7 @@ TEST_F(ChangeLogTest, ExceedCapacityWrapAround)
       return OkStatus();
     };
 
-    batt::Status visit_status = (*reader)->visit_slots(visitor_fn);
+    batt::Status visit_status = (*reader)->visit_slots(visitor_fn).status();
     ASSERT_TRUE(visit_status.ok()) << BATT_INSPECT(visit_status);
 
     EXPECT_GT(slots_read, 0);
@@ -693,7 +688,7 @@ TEST_F(ChangeLogTest, CorruptBlockInMiddle)
       return OkStatus();
     };
 
-    Status visit_status = (*reader)->visit_slots(visitor_fn);
+    Status visit_status = (*reader)->visit_slots(visitor_fn).status();
 
     // The visit should succeed but only read blocks before the corruption
     ASSERT_TRUE(visit_status.ok()) << "Visit failed with: " << visit_status;

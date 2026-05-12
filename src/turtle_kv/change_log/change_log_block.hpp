@@ -211,15 +211,15 @@ class ChangeLogBlock
    */
   void remove_ref(i32 count) noexcept;
 
+  /** \brief Returns the current reference count, for intrusive ptr.
+   */
   i32 ref_count() const noexcept
   {
     return this->ref_count_;
   }
 
-  /** \brief Return a referenece to this ChangeLogBlock's underlying grant.
+  /** \brief Returns the number of slots committed.
    */
-  batt::Grant& get_grant();
-
   usize slot_count() const noexcept
   {
     return this->slot_count_;
@@ -422,8 +422,8 @@ class ChangeLogBlock
   void revert_last_slot() noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
-  /** \brief Initialized to (int)this XOR kMagic while this object is valid; set to kExpired when
-   * it is destructed.
+  /** \brief Initialized to kMagic while this object is valid; set to kExpired when it is
+   * destructed.
    */
   big_u64 magic_;
 
@@ -432,7 +432,7 @@ class ChangeLogBlock
    */
   little_i64 edit_offset_lower_bound_;
 
-  /** \brief The total size (byte) of the block, including this object.
+  /** \brief The total size (byte) of the block, including this object (header).
    */
   little_u16 block_size_;
 
@@ -444,17 +444,17 @@ class ChangeLogBlock
    */
   little_u16 space_;
 
-  // Pad the next field (this->ref_count_) out to (void*) this + 24 bytes;
+  // Pad the next field (this->ref_count_) out to (void*) this + 28 bytes;
   //
   u8 padding0_[6];
 
   /** \brief Atomic reference counter to manage the lifetime of the buffer.
    */
-  std::atomic<i32> ref_count_;  // TODO [tastolfi 2025-12-16] move to ephemeral state
+  std::atomic<i32> ref_count_;
 
   /** \brief The next ChangeLogBlock in the current stack.
    */
-  ChangeLogBlock* next_;  // TODO [tastolfi 2025-12-16] move to ephemeral state
+  ChangeLogBlock* next_;
 
   /** \brief The XXH3 hash value of the data contents of this block.  Used during recovery to
    * detect and reject partial flushes.
@@ -536,14 +536,6 @@ struct ChangeLogBlock::EphemeralState {
 };
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-inline batt::Grant& ChangeLogBlock::get_grant()
-{
-  BATT_CHECK(batt::is_case<batt::Grant>(this->ephemeral_state().token_));
-  return std::get<batt::Grant>(this->ephemeral_state().token_);
-}
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //

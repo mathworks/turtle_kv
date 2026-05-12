@@ -17,13 +17,14 @@ namespace turtle_kv {
 {
   BATT_CHECK_GE(n_bytes, Self::kMinSize);
 
+  // Limit the alignment to at most `n_bytes` (and make sure it is a power of 2, if we reduce it)
+  //
   const usize align_size =
       std::min<usize>(usize{1} << batt::log2_ceil(n_bytes), Self::kDefaultAlign);
 
-  const usize align_mask = align_size - 1;
-
   // Round up to the nearest multiple of `align_size`.
   //
+  const usize align_mask = align_size - 1;
   n_bytes = (n_bytes + align_mask) & ~align_mask;
 
   void* const memory = std::aligned_alloc(align_size, n_bytes);
@@ -144,7 +145,7 @@ void ChangeLogBlock::remove_ref(i32 count) noexcept
     ChangeLogBlock::free_allocated(this);
     //----- --- -- -  -  -   -
   }
-  BATT_CHECK_NE(old_count, 0);
+  BATT_CHECK_GT(old_count, 0);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

@@ -67,22 +67,15 @@ class ChangeLogReader
 
   /** \brief Calls the passed SlotVisitor function for each recovered slot, in EditOffset order.
    */
-  Status visit_slots(const SlotVisitorFn& visitor,
-                     RecoveredChangeLogState* recovered_state = nullptr) noexcept;
+  StatusOr<RecoveredChangeLogState> visit_slots(const SlotVisitorFn& visitor) noexcept;
 
   /** \brief Convenience function; uses visit_slots to recover the log state.
    */
   StatusOr<RecoveredChangeLogState> recover_state() noexcept
   {
-    RecoveredChangeLogState recovered_state_out;
-
-    BATT_REQUIRE_OK(this->visit_slots(
-        [](auto&&...) -> Status {
-          return OkStatus();
-        },
-        &recovered_state_out));
-
-    return {recovered_state_out};
+    return this->visit_slots([](auto&&...) -> Status {
+      return OkStatus();
+    });
   }
 
   /** \brief Returns a reference to the ChangeLogFile we are reading.
