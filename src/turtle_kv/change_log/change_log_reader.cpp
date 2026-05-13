@@ -64,7 +64,8 @@ struct BlockIteratorCompare {
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 StatusOr<RecoveredChangeLogState> ChangeLogReader::visit_slots(
-    const SlotVisitorFn& visitor) noexcept
+    const SlotVisitorFn& visitor,
+    Optional<EditOffset> new_trim_edit_offset) noexcept
 {
   ChangeLogFile& change_log = this->change_log_file();
 
@@ -80,6 +81,15 @@ StatusOr<RecoveredChangeLogState> ChangeLogReader::visit_slots(
 
   VLOG(1) << BATT_INSPECT(read_meta_state);
 
+  // Set the target trim offset.
+  //
+  const EditOffset target_trim_edit_offset = [&] {
+    if (new_trim_edit_offset && *new_trim_edit_offset > read_meta_state.trim_edit_offset) {
+      return *new_trim_edit_offset;
+    }
+    return read_meta_state.trim_edit_offset;
+  }();
+
   // An index from BlockIndex to EditOffset
   //
   std::unordered_set<BlockIndex, BlockIndex::Hash> visited_block_set;
@@ -89,8 +99,8 @@ StatusOr<RecoveredChangeLogState> ChangeLogReader::visit_slots(
   std::vector<BlockIterator> block_iterators;
 
   for (auto& block : blocks_vec) {
-    if (block->edit_offset_upper_bound() <= read_meta_state.trim_edit_offset) {
-      VLOG(1) << "Skipping trimmed block;" << BATT_INSPECT(read_meta_state.trim_edit_offset)
+    if (block->edit_offset_upper_bound() <= target_trim_edit_offset) {
+      VLOG(1) << "Skipping trimmed block;" << BATT_INSPECT(target_trim_edit_offset)
               << BATT_INSPECT(block->edit_offset_upper_bound())
               << BATT_INSPECT(block->get_block_index());
       continue;
@@ -106,10 +116,11 @@ StatusOr<RecoveredChangeLogState> ChangeLogReader::visit_slots(
   // If there's no slots to process, return early.
   //
   if (block_iterators.empty()) {
+    // TODO [tastolfi 2026-05-12] refresh the meta block if this changes things?
     RecoveredChangeLogState recovered_state;
     recovered_state.block_range = Interval<BlockIndex>{BlockIndex{0}, BlockIndex{0}};
-    recovered_state.trim_edit_offset = read_meta_state.trim_edit_offset;
-    recovered_state.next_edit_offset = read_meta_state.trim_edit_offset;
+    recovered_state.trim_edit_offset = target_trim_edit_offset;
+    recovered_state.next_edit_offset = target_trim_edit_offset;
     recovered_state.active_blocks_upper_bounds.clear();
 
     VLOG(1) << "No slots to be processed in change log.";
@@ -121,7 +132,7 @@ StatusOr<RecoveredChangeLogState> ChangeLogReader::visit_slots(
 
   // The first expected slot edit offset is the trim edit offset.
   //
-  EditOffset expected_next_edit_offset = read_meta_state.trim_edit_offset;
+  EditOffset expected_next_edit_offset = target_trim_edit_offset;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
   // Process slots in EditOffset order.
@@ -146,7 +157,7 @@ StatusOr<RecoveredChangeLogState> ChangeLogReader::visit_slots(
     // need to filter out *slots* below the trim, since we should never be setting the trim such
     // that it bisects a block (i.e., every block is owned uniquely by a MemTable).
     //
-    BATT_CHECK_GE(edit_offset, read_meta_state.trim_edit_offset);
+    BATT_CHECK_GE(edit_offset, target_trim_edit_offset);
 
     // If there's a gap in our slots, we're missing data and can't continue.
     //
@@ -184,7 +195,7 @@ StatusOr<RecoveredChangeLogState> ChangeLogReader::visit_slots(
   RecoveredChangeLogState recovered_state;
 
   recovered_state.block_range = read_meta_state.block_range;
-  recovered_state.trim_edit_offset = read_meta_state.trim_edit_offset;
+  recovered_state.trim_edit_offset = target_trim_edit_offset;
   recovered_state.next_edit_offset = expected_next_edit_offset;
   recovered_state.active_blocks_upper_bounds.clear();
 

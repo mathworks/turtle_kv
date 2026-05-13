@@ -1167,11 +1167,9 @@ Status KVStore::run_recovery(const std::filesystem::path& change_log_file_path) 
                                 ChangeLogBlock* block,
                                 EditOffset edit_offset,
                                 ConstBuffer payload) -> batt::Status {
-      // Skip slots already recovered by checkpoint
+      // The reader should skip slots already recovered by checkpoint
       //
-      if (edit_offset < checkpoint_upper_bound) {
-        return batt::OkStatus();
-      }
+      BATT_CHECK_GE(edit_offset, checkpoint_upper_bound);
 
       // Recover this slot.
       //
@@ -1186,14 +1184,11 @@ Status KVStore::run_recovery(const std::filesystem::path& change_log_file_path) 
 
     // Visit all recoverable slots and retrieve the RecoveredChangeLogState.
     //
-    BATT_ASSIGN_OK_RESULT(recovered_state, log->visit_slots(visitor_fn));
+    BATT_ASSIGN_OK_RESULT(
+        recovered_state,
+        log->visit_slots(visitor_fn, /*new_trim_edit_offset=*/checkpoint_upper_bound));
   }
-
-  // Adjust the trim point to match the checkpoint upper bound.  This avoids having to trim after we
-  // create the writer.
-  //
-  BATT_CHECK_LE(recovered_state.trim_edit_offset, checkpoint_upper_bound);
-  recovered_state.trim_edit_offset = checkpoint_upper_bound;
+  BATT_CHECK_EQ(recovered_state.trim_edit_offset, checkpoint_upper_bound);
 
   // Now that we have recovered the change log state, we can create a new writer for future
   // apppends.
@@ -1529,6 +1524,12 @@ Status KVStore::commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_jo
   // Make sure recovery has fully completed before continuing.
   //
   BATT_REQUIRE_OK(this->wait_for_recovery());
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+  // TODO [tastolfi 2026-05-12] MAYBE? (TBD) call change_log_writer_->sync(/*non-urgent*/) here to
+  // make sure we don't commit a checkpoint that says it includes up to some edit offset *before*
+  // that edit offset is committed as the *true* history of the kv_store.
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   // Durably commit the checkpoint.
   //

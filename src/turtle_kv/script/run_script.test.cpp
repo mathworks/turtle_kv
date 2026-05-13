@@ -55,8 +55,9 @@ TEST_P(ScriptTest, Run)
 
   LOG(INFO) << BATT_INSPECT(script_yml);
 
-  batt::Status status =
-      turtle_kv::run_script(BATT_OK_RESULT_OR_PANIC(turtle_kv::data_root()), script_yml);
+  batt::Status status = turtle_kv::run_script(
+      BATT_OK_RESULT_OR_PANIC(turtle_kv::data_root()) / "turtle_kv_Test" / "run_script",
+      script_yml);
 
   ASSERT_TRUE(status.ok()) << BATT_INSPECT(status);
 }

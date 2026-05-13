@@ -2,7 +2,7 @@
     "version": "0.5",
     "requires": [
         "abseil/20250127.0",
-        "batteries/0.68.0",
+        "batteries/0.70.1",
         "boost/1.88.0",
         "bzip2/1.0.8",
         "cli11/2.5.0",
@@ -19,7 +19,7 @@
         "openssl/3.6.0",
         "pcg-cpp/cci.20220409",
         "protobuf/3.21.12",
-        "vqf/0.2.6",
+        "vqf/0.2.5",
         "xxhash/0.8.3",
         "yaml-cpp/0.9.0",
         "zlib/1.3.1"
