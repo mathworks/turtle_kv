@@ -67,7 +67,9 @@ class ChangeLogReader
 
   /** \brief Calls the passed SlotVisitor function for each recovered slot, in EditOffset order.
    */
-  StatusOr<RecoveredChangeLogState> visit_slots(const SlotVisitorFn& visitor) noexcept;
+  StatusOr<RecoveredChangeLogState> visit_slots(
+      const SlotVisitorFn& visitor,
+      Optional<EditOffset> new_trim_edit_offset = None) noexcept;
 
   /** \brief Convenience function; uses visit_slots to recover the log state.
    */

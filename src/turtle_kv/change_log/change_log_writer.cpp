@@ -165,6 +165,8 @@ struct ChangeLogWriter::ActiveBlocksState : ChangeLogFile::MetaState {
       , in_use_block_grant{
             BATT_OK_RESULT_OR_PANIC(block_grant_pool.issue_grant(0, batt::WaitForResource::kFalse))}
   {
+    BATT_CHECK_EQ(config.block_count, BATT_CHECKED_CAST(i64, block_grant_pool.available()));
+
     config.check_invariants(this->block_range);
 
     BATT_CHECK_EQ(recovered_state.active_blocks_upper_bounds.size(),
