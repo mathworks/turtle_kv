@@ -293,8 +293,11 @@ class BasicMemTable : public MemTableBase
    *
    * This function only calculates a non-zero value every `kBlocksPerExternalCacheAllocUpdate` new
    * ChangeLogBlocks added to the MemTable.
+   *
+   * IMPORTANT: This function must be called while holding the block_list_mutex_, and its return
+   * value must be passed to `handle_external_cache_alloc` once the mutex has been released.
    */
-  i64 update_external_cache_alloc();
+  [[nodiscard]] i64 update_external_cache_alloc();
 
   /** \brief Increases or decreases the AllocationTracker external alloc by the specified number of
    * bytes `cache_alloc_delta`.

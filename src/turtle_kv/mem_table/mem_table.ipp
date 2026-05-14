@@ -202,6 +202,9 @@ template <MemTableStorage StorageT, MemTableAllocationTracker AllocationTrackerT
 bool BasicMemTable<StorageT, AllocationTrackerT>::finalize(
     const SmallFn<EditOffset()>& get_next_edit_offset) noexcept
 {
+  // Update committed_bytes_total first, so that if prepared_bytes_total_ is observed to have the
+  // kFinalizedMask bit set, we can assume committed_bytes_total_ does too.
+  //
   const i64 prior_committed = this->committed_bytes_total_->fetch_or(Self::kFinalizedMask);
   const i64 prior_prepared = this->prepared_bytes_total_->fetch_or(Self::kFinalizedMask);
 
