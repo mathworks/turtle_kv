@@ -196,13 +196,13 @@ bool Checkpoint::is_durable() const noexcept
 Status Checkpoint::validate_next_batch_id(const DeltaBatchId& new_batch_id) const noexcept
 {
   {
-    // We must start with index 0!
+    // New batch groups must start with index 0!  (Batch groups are uniquely identified by their
+    // edit offset upper bound.)
     //
-    Optional<EditOffset> current_edit_offset = this->edit_offset_upper_bound();
-    if (!current_edit_offset || new_batch_id.edit_offset_upper_bound() > *current_edit_offset) {
-      if (new_batch_id.index_in_group() != 0) {
-        return {batt::StatusCode::kInvalidArgument};
-      }
+    const EditOffset current_edit_offset = this->edit_offset_upper_bound();
+    if (new_batch_id.edit_offset_upper_bound() > current_edit_offset &&
+        new_batch_id.index_in_group() != 0) {
+      return {batt::StatusCode::kInvalidArgument};
     }
   }
 
