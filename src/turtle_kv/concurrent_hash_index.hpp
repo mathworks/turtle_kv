@@ -25,6 +25,14 @@ namespace turtle_kv {
 namespace deprecated {
 
 #if 0
+
+inline u64 get_key_hash_val(const std::string_view& key)
+{
+  // Always set the lsb to 1, so that we can reserve 0 as a sentinel value ─────┐
+  //                                                                            ▼
+  return absl::container_internal::hash_default_hash<std::string_view>{}(key) | 1;
+}
+
 class ConcurrentHashIndex
 {
  public:

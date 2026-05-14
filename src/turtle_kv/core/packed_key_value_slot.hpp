@@ -24,8 +24,6 @@ namespace turtle_kv {
  */
 inline usize packed_key_value_slot_size(const KeyView& key, const ValueView& value)
 {
-  // TODO: [Gabe Bornstein 3/25/26] Why not use PackedSizeOfEdit here?
-  //
   return sizeof(little_u16)  // key size
          + key.size()        //
          + sizeof(u8)        // op code

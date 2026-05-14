@@ -42,10 +42,7 @@ class ExecutionStrategy
 
   /** \brief Called right before this ExecutionStrategy is pushed on the stack.
    */
-  virtual StatusOr<usize> activate(ExecutionStrategy* parent [[maybe_unused]])
-  {
-    return {0};
-  }
+  virtual StatusOr<usize> activate(ExecutionStrategy* parent) = 0;
 
   /** \brief Adds a series of operations to be executed.
    *
@@ -77,6 +74,8 @@ class ExecuteImmediately : public ExecutionStrategy
 {
  public:
   explicit ExecuteImmediately(ScriptContext& context) noexcept;
+
+  StatusOr<usize> activate(ExecutionStrategy* parent) override;
 
   StatusOr<usize> schedule(std::vector<Operation>&& ops) override;
 
@@ -125,6 +124,8 @@ class ExecuteAtStep : public ExecutionStrategy
 {
  public:
   explicit ExecuteAtStep(ExecutionStrategy& base) noexcept;
+
+  StatusOr<usize> activate(ExecutionStrategy* parent) override;
 
   StatusOr<usize> schedule(std::vector<Operation>&& ops) override;
 

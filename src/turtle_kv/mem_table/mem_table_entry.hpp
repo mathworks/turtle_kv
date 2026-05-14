@@ -33,16 +33,9 @@
 
 namespace turtle_kv {
 
-inline u64 get_key_hash_val(const std::string_view& key)
-{
-  // TODO [tastolfi 2026-04-03] why do we mask on the lsb? ─────────────────────┐
-  //                                                                            ▼
-  return absl::container_internal::hash_default_hash<std::string_view>{}(key) | 1;
-}
-
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 //
-/** \brief Reduced-size Value type without key view; for ART-based indexing.
+/** \brief Stores a single key update record for ART-based indexing.
  */
 class MemTableValueEntry
 {
@@ -109,6 +102,15 @@ class MemTableValueEntry
 };
 
 static_assert(sizeof(MemTableValueEntry) == 32);
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+/** \brief Returns the key for a MemTableValueEntry.
+ */
+BATT_ALWAYS_INLINE inline KeyView get_key(const MemTableValueEntry& entry)
+{
+  return entry.key_view();
+}
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 //
@@ -183,6 +185,9 @@ struct MemTableValueEntryInserter {
   static_assert(MemTableEntryInserter<MemTableValueEntryInserter>);
 };
 
+/** \brief Used during recovery; inserts a MemTableValueEntry without appending a slot to the change
+ * log.
+ */
 struct MemTableRecoveryInserter {
   explicit MemTableRecoveryInserter(EditOffset edit_offset,
                                     const KeyView& key,

@@ -153,11 +153,11 @@ StatusOr<RecoveredChangeLogState> ChangeLogReader::visit_slots(
       }
     });
 
-    // By skipping all *blocks* below the trim bound (above), we should avoid the situation where we
-    // need to filter out *slots* below the trim, since we should never be setting the trim such
-    // that it bisects a block (i.e., every block is owned uniquely by a MemTable).
+    // Skip slots below the trim bound.
     //
-    BATT_CHECK_GE(edit_offset, target_trim_edit_offset);
+    if (edit_offset < target_trim_edit_offset) {
+      continue;
+    }
 
     // If there's a gap in our slots, we're missing data and can't continue.
     //

@@ -215,47 +215,6 @@ class ValueView
     return this->tag_ & kInlineMask;
   }
 
-#if 0
-  HasPageRefs has_page_refs() const
-  {
-    if (this->op() == OP_PAGE_SLICE) {
-      return HasPageRefs{true};
-    }
-    return HasPageRefs{false};
-  }
-
-  batt::BoxedSeq<llfs::PageId> trace_refs() const
-  {
-    if (this->op() == OP_PAGE_SLICE) {
-      StatusOr<const PackedPageSlice&> page_slice = this->as_page_slice();
-      if (page_slice.ok()) {
-        return {batt::seq::single_item(page_slice->page_id)       //
-                | batt::seq::map(BATT_OVERLOADS_OF(get_page_id))  //
-                | batt::seq::boxed()};
-      }
-      LOG(ERROR) << "Invalid PackedPageSlice detected! (returning empty page ref set)"
-                 << BATT_INSPECT(page_slice.status());
-      //
-      // fall-through
-    }
-
-    return {batt::seq::Empty<llfs::PageId>{} | batt::seq::boxed()};
-  }
-
-  StatusOr<const PackedPageSlice&> as_page_slice() const
-  {
-    return llfs::unpack_cast<PackedPageSlice>(this->as_buffer());
-  }
-
-  StatusOr<llfs::PageId> as_page_id() const
-  {
-    StatusOr<const PackedPageSlice&> packed = this->as_page_slice();
-    BATT_REQUIRE_OK(packed);
-
-    return packed->page_id.unpack();
-  }
-#endif
-
   bool empty() const
   {
     return this->size() == 0;
