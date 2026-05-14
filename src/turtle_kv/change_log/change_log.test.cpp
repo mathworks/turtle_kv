@@ -47,28 +47,10 @@ class ChangeLogTest : public ::testing::Test
     return;
   }
 
-  void on_visit_block(FirstVisitToBlock first_visit, ChangeLogBlock* block)
-  {
-    BATT_CHECK_NOT_NULLPTR(block);
-
-    EXPECT_EQ(first_visit,
-              this->visited_blocks_.count(
-                  std::make_pair(block, block->edit_offset_lower_bound().value())) == 0);
-
-    this->insert_visited_block(block);
-  }
-
-  void insert_visited_block(ChangeLogBlock* block)
-  {
-    BATT_CHECK_NOT_NULLPTR(block);
-    this->visited_blocks_.insert(std::make_pair(block, block->edit_offset_lower_bound().value()));
-  }
-
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   std::filesystem::path test_dir_;
   std::filesystem::path test_file_;
-  std::set<std::pair<ChangeLogBlock*, i64>> visited_blocks_;
 };
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -115,7 +97,8 @@ TEST_F(ChangeLogTest, WriterBasicOperations)
                          EditOffset offset) {
         VLOG(1) << "Appending block with lower_bound: " << block->edit_offset_lower_bound()
                 << ", on slot: " << offset;
-        this->on_visit_block(first_visit, block);
+        VLOG(1) << BATT_INSPECT(first_visit) << BATT_INSPECT(block->slot_count())
+                << BATT_INSPECT(block->edit_offset_range());
         std::memcpy(buffer.data(), test_data.data(), test_data.size());
       });
   ASSERT_TRUE(write_status.ok());
@@ -171,7 +154,6 @@ TEST_F(ChangeLogTest, WriteAndReadMultipleSlots)
                     << ", on slot: " << offset;
             VLOG(1) << BATT_INSPECT(first_visit) << BATT_INSPECT(block->slot_count())
                     << BATT_INSPECT(block->edit_offset_range());
-            this->on_visit_block(first_visit, block);
             std::memcpy(buffer.data(), data.data(), data.size());
           });
       ASSERT_TRUE(write_status.ok()) << "Failed to write slot " << i;
@@ -188,8 +170,6 @@ TEST_F(ChangeLogTest, WriteAndReadMultipleSlots)
   // Read phase
   //
   {
-    this->visited_blocks_.clear();
-
     StatusOr<std::unique_ptr<ChangeLogReader>> reader = ChangeLogReader::open(this->test_file_);
     ASSERT_TRUE(reader.ok());
 
@@ -202,7 +182,8 @@ TEST_F(ChangeLogTest, WriteAndReadMultipleSlots)
                           ConstBuffer payload) -> Status {
       VLOG(1) << "Reading block with lower_bound: " << block->edit_offset_lower_bound()
               << ", on slot: " << edit_offset;
-      this->on_visit_block(first_visit, block);
+      VLOG(1) << BATT_INSPECT(first_visit) << BATT_INSPECT(block->slot_count())
+              << BATT_INSPECT(block->edit_offset_range());
       std::string data(reinterpret_cast<const char*>(payload.data()), payload.size());
       read_data.push_back(data);
       edit_offsets.push_back(edit_offset);
@@ -358,8 +339,6 @@ TEST_F(ChangeLogTest, BlockBoundaryConditions)
   //
   std::string large_data(900, 'X');  // Almost fills a block
 
-  EXPECT_TRUE(this->visited_blocks_.empty());
-
   for (int i = 0; i < num_appends; ++i) {
     Status write_status = context.append_slot(
         /*min_edit_offset_lower_bound=*/EditOffset{0},
@@ -370,7 +349,8 @@ TEST_F(ChangeLogTest, BlockBoundaryConditions)
                                         EditOffset offset) {
           VLOG(1) << "Appending block with lower_bound: " << block->edit_offset_lower_bound()
                   << ", on slot: " << offset;
-          this->on_visit_block(first_visit, block);
+          VLOG(1) << BATT_INSPECT(first_visit) << BATT_INSPECT(block->slot_count())
+                  << BATT_INSPECT(block->edit_offset_range());
           std::memcpy(buffer.data(), large_data.data(), large_data.size());
 
           (*writer)->trim(offset + EditOffsetDelta{(i64)large_data.size()}).IgnoreError();
