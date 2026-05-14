@@ -59,6 +59,24 @@ struct BlockIteratorCompare {
   }
 };
 
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+/** \brief Changes the passed `recovered_state` against `read_meta_state`; if it is different,
+ * updates the passed `meta_block` and writes it out to the passed `change_log` file.
+ */
+Status update_meta_state(ChangeLogFile* change_log,
+                         ChangeLogFile::PackedMetaBlock* meta_block,
+                         const ChangeLogMetaState& read_meta_state,
+                         const RecoveredChangeLogState& recovered_state) noexcept
+{
+  const auto& recovered_meta_state = static_cast<const ChangeLogMetaState&>(recovered_state);
+  if (read_meta_state != recovered_meta_state) {
+    recovered_meta_state.pack_to(&meta_block->meta_state);
+    BATT_REQUIRE_OK(change_log->write_meta_block(*meta_block));
+  }
+  return OkStatus();
+}
+
 }  // namespace
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -116,12 +134,13 @@ StatusOr<RecoveredChangeLogState> ChangeLogReader::visit_slots(
   // If there's no slots to process, return early.
   //
   if (block_iterators.empty()) {
-    // TODO [tastolfi 2026-05-12] refresh the meta block if this changes things?
     RecoveredChangeLogState recovered_state;
     recovered_state.block_range = Interval<BlockIndex>{BlockIndex{0}, BlockIndex{0}};
     recovered_state.trim_edit_offset = target_trim_edit_offset;
     recovered_state.next_edit_offset = target_trim_edit_offset;
     recovered_state.active_blocks_upper_bounds.clear();
+
+    BATT_REQUIRE_OK(update_meta_state(&change_log, &meta_block, read_meta_state, recovered_state));
 
     VLOG(1) << "No slots to be processed in change log.";
     return {recovered_state};
@@ -246,11 +265,7 @@ StatusOr<RecoveredChangeLogState> ChangeLogReader::visit_slots(
   // At this point the recovered active range is correct.  If it disagrees with the meta state we
   // read earlier, then refresh the meta-block.
   //
-  const auto& recovered_meta_state = static_cast<const ChangeLogMetaState&>(recovered_state);
-  if (read_meta_state != recovered_meta_state) {
-    recovered_meta_state.pack_to(&meta_block.meta_state);
-    BATT_REQUIRE_OK(change_log.write_meta_block(meta_block));
-  }
+  BATT_REQUIRE_OK(update_meta_state(&change_log, &meta_block, read_meta_state, recovered_state));
 
   // Now we just need to populate recovered_state.active_blocks_upper_bounds.
   //
