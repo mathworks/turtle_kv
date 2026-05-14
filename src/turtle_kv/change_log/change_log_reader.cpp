@@ -21,6 +21,24 @@ namespace {
 struct BlockIterator {
   boost::intrusive_ptr<ChangeLogBlock> block;
   usize next_slot_i = 0;
+  bool visited = false;
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  explicit BlockIterator(boost::intrusive_ptr<ChangeLogBlock>&& block_arg) noexcept
+      : block{std::move(block_arg)}
+  {
+  }
+
+  BlockIterator(BlockIterator&& other) noexcept
+      : block{std::exchange(other.block, nullptr)}
+      , next_slot_i{std::exchange(other.next_slot_i, 0)}
+      , visited{std::exchange(other.visited, false)}
+  {
+  }
+
+  BlockIterator(const BlockIterator&) = delete;
+  BlockIterator& operator=(const BlockIterator&) = delete;
 
   // Get the EditOffset of the current slot.
   //
@@ -58,6 +76,24 @@ struct BlockIteratorCompare {
     return *left < *right;
   }
 };
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+/** \brief Changes the passed `recovered_state` against `read_meta_state`; if it is different,
+ * updates the passed `meta_block` and writes it out to the passed `change_log` file.
+ */
+Status update_meta_state(ChangeLogFile* change_log,
+                         ChangeLogFile::PackedMetaBlock* meta_block,
+                         const ChangeLogMetaState& read_meta_state,
+                         const RecoveredChangeLogState& recovered_state) noexcept
+{
+  const auto& recovered_meta_state = static_cast<const ChangeLogMetaState&>(recovered_state);
+  if (read_meta_state != recovered_meta_state) {
+    recovered_meta_state.pack_to(&meta_block->meta_state);
+    BATT_REQUIRE_OK(change_log->write_meta_block(*meta_block));
+  }
+  return OkStatus();
+}
 
 }  // namespace
 
@@ -106,22 +142,20 @@ StatusOr<RecoveredChangeLogState> ChangeLogReader::visit_slots(
       continue;
     }
     if (block->slot_count() > 0) {
-      block_iterators.emplace_back(BlockIterator{
-          .block = batt::make_copy(block),
-          .next_slot_i = 0,
-      });
+      block_iterators.emplace_back(batt::make_copy(block));
     }
   }
 
   // If there's no slots to process, return early.
   //
   if (block_iterators.empty()) {
-    // TODO [tastolfi 2026-05-12] refresh the meta block if this changes things?
     RecoveredChangeLogState recovered_state;
     recovered_state.block_range = Interval<BlockIndex>{BlockIndex{0}, BlockIndex{0}};
     recovered_state.trim_edit_offset = target_trim_edit_offset;
     recovered_state.next_edit_offset = target_trim_edit_offset;
     recovered_state.active_blocks_upper_bounds.clear();
+
+    BATT_REQUIRE_OK(update_meta_state(&change_log, &meta_block, read_meta_state, recovered_state));
 
     VLOG(1) << "No slots to be processed in change log.";
     return {recovered_state};
@@ -171,7 +205,7 @@ StatusOr<RecoveredChangeLogState> ChangeLogReader::visit_slots(
         edit_offset +
         EditOffsetDelta{static_cast<i64>(slot_buffer.size() - sizeof(PackedEditOffsetDelta))};
 
-    auto first_visit_to_block = FirstVisitToBlock{current->next_slot_i == 0};
+    auto first_visit_to_block = FirstVisitToBlock{!current->visited};
     ChangeLogBlock* block = current->block.get();
 
     // If recovering state, add each block which contains recovered slots to the
@@ -179,6 +213,10 @@ StatusOr<RecoveredChangeLogState> ChangeLogReader::visit_slots(
     //
     if (first_visit_to_block) {
       visited_block_set.insert(block->get_block_index().value_or_panic());
+      BATT_CHECK_EQ(false, current->visited);
+      current->visited = true;
+    } else {
+      BATT_CHECK(current->visited);
     }
 
     // Move the payload past the EditOffset.
@@ -246,11 +284,7 @@ StatusOr<RecoveredChangeLogState> ChangeLogReader::visit_slots(
   // At this point the recovered active range is correct.  If it disagrees with the meta state we
   // read earlier, then refresh the meta-block.
   //
-  const auto& recovered_meta_state = static_cast<const ChangeLogMetaState&>(recovered_state);
-  if (read_meta_state != recovered_meta_state) {
-    recovered_meta_state.pack_to(&meta_block.meta_state);
-    BATT_REQUIRE_OK(change_log.write_meta_block(meta_block));
-  }
+  BATT_REQUIRE_OK(update_meta_state(&change_log, &meta_block, read_meta_state, recovered_state));
 
   // Now we just need to populate recovered_state.active_blocks_upper_bounds.
   //
