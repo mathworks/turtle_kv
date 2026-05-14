@@ -598,6 +598,18 @@ TEST_P(KVStoreRecoveryTest, KVStoreRecovery)
 
 }  // namespace
 
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+std::string format_checkpoint_recovery_test_name(
+    const ::testing::TestParamInfo<CheckpointTestParams>& info)
+{
+  return batt::to_string("NumCheckpoints",
+                         info.param.num_checkpoints_to_create,
+                         "NumPuts",
+                         info.param.num_puts);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 // CheckpointTestParams == {num_puts, num_checkpoints_to_create}
 //
 INSTANTIATE_TEST_SUITE_P(
@@ -622,8 +634,20 @@ INSTANTIATE_TEST_SUITE_P(
         CheckpointTestParams{.num_checkpoints_to_create = 10, .num_puts = 100000}
         //  TODO: [Gabe Bornstein 11/6/25] Sporadic Failing. Likely cause by keys not
         //  being flushed before that last checkpoint is taken. Need fsync to resolve.
-        /*CheckpointTestParams(101, 100000)*/));
+        /*CheckpointTestParams(101, 100000)*/
+        ),
+    format_checkpoint_recovery_test_name);
 
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+std::string format_kv_store_recovery_test_name(const ::testing::TestParamInfo<u64>& info)
+{
+  return batt::to_string("NumPuts", info.param);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 INSTANTIATE_TEST_SUITE_P(RecoveringKVStore,
                          KVStoreRecoveryTest,
-                         testing::Values(u64{0}, u64{1}, u64{100}, u64{1000}, u64{100000}));
+                         testing::Values(u64{0}, u64{1}, u64{100}, u64{1000}, u64{100000}),
+                         format_kv_store_recovery_test_name);
