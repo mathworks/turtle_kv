@@ -351,17 +351,6 @@ u64 query_page_loader_reset_every_n()
 #endif  // TURTLE_KV_ENABLE_TCMALLOC_HEAP_PROFILING
 #endif  // TURTLE_KV_ENABLE_TCMALLOC
 
-#if 0
-    if (getenv_param<turtlekv_use_bloom_filters>() &&
-        getenv_param<turtle_kv_use_vector_quotient_filters>()) {
-      BATT_PANIC() << "Select either bloom filters or quotient filters, not both!";
-    }
-    if (!getenv_param<turtlekv_use_bloom_filters>() &&
-        !getenv_param<turtle_kv_use_vector_quotient_filters>()) {
-      BATT_PANIC() << "Select either bloom filters or quotient filters!";
-    }
-#endif
-
     return OkStatus();
   }();
 
@@ -1994,56 +1983,6 @@ void KVStore::collect_stats(
     emit_stats("quotient_filter.bits_per_key_stats", quotient_filter.bits_per_key_stats);
     emit_latency("quotient_filter.build_page_latency", quotient_filter.build_page_latency);
   }
-
-#if 0
-  << "\n"                                                                        //
-  << BATT_INSPECT(node.level_depth_stats) << "\n"                                //
-  << "\n"                                                                        //
-  << BATT_INSPECT(kv_store.scan_init_latency) << "\n"                            //
-  << "\n"                                                                        //
-  << BATT_INSPECT(checkpoint_log.root_log_space()) << "\n"                       //
-  << BATT_INSPECT(checkpoint_log.root_log_size()) << "\n"                        //
-  << BATT_INSPECT(checkpoint_log.root_log_capacity()) << "\n"                    //
-  << "\n"                                                                        //
-  << BATT_INSPECT(change_log_file.active_blocks()) << "\n"                       //
-  << BATT_INSPECT(change_log_file.active_block_count()) << "\n"                  //
-  << BATT_INSPECT(change_log_file.config().block_count) << "\n"                  //
-  << BATT_INSPECT(change_log_file.capacity()) << "\n"                            //
-  << BATT_INSPECT(change_log_file.size()) << "\n"                                //
-  << BATT_INSPECT(change_log_file.space()) << "\n"                               //
-  << BATT_INSPECT(change_log_file.available_block_tokens()) << "\n"              //
-  << BATT_INSPECT(change_log_file.in_use_block_tokens()) << "\n"                 //
-  << BATT_INSPECT(change_log_file.reserved_block_tokens()) << "\n"               //
-  << BATT_INSPECT(change_log_file.metrics().freed_blocks_count) << "\n"          //
-  << BATT_INSPECT(change_log_file.metrics().reserved_blocks_count) << "\n"       //
-  << "\n"                                                                        //
-  << BATT_INSPECT(change_log_writer.received_user_byte_count) << "\n"            //
-  << BATT_INSPECT(change_log_writer.received_block_byte_count) << "\n"           //
-  << BATT_INSPECT(change_log_writer.written_user_byte_count) << "\n"             //
-  << BATT_INSPECT(change_log_writer.written_block_byte_count) << "\n"            //
-  << BATT_INSPECT(change_log_writer.sleep_count) << "\n"                         //
-  << BATT_INSPECT(change_log_writer.write_count) << "\n"                         //
-  << BATT_INSPECT(change_log_writer.block_utilization_rate()) << "\n"            //
-  << "\n"                                                                        //
-  << BATT_INSPECT(cache_slot_pool.construct_count) << "\n"                       //
-  << BATT_INSPECT(cache_slot_pool.free_queue_insert_count) << "\n"               //
-  << BATT_INSPECT(cache_slot_pool.free_queue_remove_count) << "\n"               //
-  << BATT_INSPECT(cache_slot_pool.evict_count) << "\n"                           //
-  << BATT_INSPECT(cache_slot_pool.evict_prior_generation_count) << "\n"          //
-  << "\n"                                                                        //
-  << BATT_INSPECT_RANGE_PRETTY(page_cache.page_read_latency)                     //
-  << "\n"                                                                        //
-  << print_page_alloc_info                                                       //
-  << "\n"                                                                        //
-  << BATT_INSPECT(kv_store.mem_table_alloc) << "\n"                              //
-  << BATT_INSPECT(kv_store.mem_table_free) << "\n"                               //
-  << BATT_INSPECT(kv_store.mem_table_count_stats) << "\n"                        //
-  << "\n"                                                                        //
-  << "\n"                                                                        //
-  << BATT_INSPECT(on_disk_footprint) << "\n"                                     //
-  << BATT_INSPECT(space_amp) << "\n"                                             //
-      ;
-#endif
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

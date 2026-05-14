@@ -55,7 +55,7 @@ class KeySet
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  /** \brief The number of keys that have been created in this set.x
+  /** \brief The number of keys that have been created in this set.
    */
   usize size() const noexcept;
 
@@ -66,10 +66,6 @@ class KeySet
   /** \brief Sets the inserted status of the given key. Panics if the key has not been created.
    */
   void set_key_inserted(usize index, bool b = true) noexcept;
-
-  /** \brief Updates the cached value for inserted upper bound.
-   */
-  void update_inserted_upper_bound() noexcept;
 
   /** \brief Gets the key with the given index; if this key has not yet been created, returns None.
    */
@@ -83,13 +79,31 @@ class KeySet
    */
   KeyView wait_for_key_inserted(usize index) noexcept;
 
+  /** \brief Returns the highest index for which a key has been inserted into this set.
+   */
   usize inserted_upper_bound() noexcept;
+
+  /** \brief Updates the cached value for inserted upper bound.
+   */
+  void update_inserted_upper_bound() noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
+  /** \brief A single key in the set.
+   */
   struct KeyEntry {
+    /** \brief Set to non-null to indicate the key has been created; pointer to non-null-terminated
+     * key data.
+     */
     std::atomic<const char*> data_;
+
+    /** \brief Set to the size of the key, in bytes; *must* be set before `this->data_` (code
+     * assumes once data is set, size is valid).
+     */
     usize size_;
+
+    /** \brief Set to true when the key is known to be inserted.
+     */
     std::atomic<bool> inserted_;
 
     //----- --- -- -  -  -   -

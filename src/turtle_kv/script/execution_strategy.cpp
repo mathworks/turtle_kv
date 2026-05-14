@@ -31,6 +31,13 @@ namespace script {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+StatusOr<usize> ExecuteImmediately::activate(ExecutionStrategy*) /*override*/
+{
+  return {0};
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 StatusOr<usize> ExecuteImmediately::schedule(std::vector<Operation>&& ops) /*override*/
 {
   using namespace script;
@@ -134,6 +141,13 @@ StatusOr<usize> ExecutionTimer::retire(ExecutionStrategy* parent) /*override*/
 //
 /*explicit*/ ExecuteAtStep::ExecuteAtStep(ExecutionStrategy& base) noexcept : base_{base}
 {
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+StatusOr<usize> ExecuteAtStep::activate(ExecutionStrategy*) /*override*/
+{
+  return {0};
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
