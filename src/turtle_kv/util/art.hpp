@@ -14,7 +14,6 @@
 
 #include <batteries/case_of.hpp>
 #include <batteries/checked_cast.hpp>
-#include <batteries/protected_memory.hpp>  // TODO [tastolfi 2026-05-04] remove
 #include <batteries/seq/loop_control.hpp>
 
 #include <absl/synchronization/mutex.h>
@@ -929,23 +928,12 @@ class ARTBase
   static_assert(sizeof(Node256) % 8 == 0);
   static_assert(alignof(Node256) >= 8);
 
-  // TODO [tastolfi 2026-05-04] remove
-  static batt::ProtectedMemory& pkey() noexcept
-  {
-    static batt::ProtectedMemory p_ = BATT_OK_RESULT_OR_PANIC(
-        batt::ProtectedMemory::initialize(batt::ProtectedMemory::DisableWrite{true}));
-
-    return p_;
-  }
-
   static constexpr usize kExtentSize = 64 * kKiB;
   static constexpr usize kExtentAlign = 4096;
 
-  // TODO [tastolfi 2026-05-04] revert 8192
-  using ExtentStorageT = std::aligned_storage_t<kExtentSize + 8192, kExtentAlign>;
+  using ExtentStorageT = std::aligned_storage_t<kExtentSize, kExtentAlign>;
 
-  // TODO [tastolfi 2026-05-04] revert 8192
-  static_assert(sizeof(ExtentStorageT) == kExtentSize + 8192);
+  static_assert(sizeof(ExtentStorageT) == kExtentSize);
 
   //----- --- -- -  -  -   -
 
@@ -972,24 +960,16 @@ class ARTBase
       this->art_ = art;
 
       const usize in_use_prior = this->in_use_;
-      if (in_use_prior + n <= kExtentSize) {  // sizeof(ExtentStorageT)) {
+      if (in_use_prior + n <= kExtentSize) {
         this->in_use_ += n;
         return this->data_ + in_use_prior;
       }
 
-      // TODO [tastolfi 2026-05-04] revert 8192
-      this->art_->metrics_.byte_alloc_count.add(sizeof(ExtentStorageT) - 8192);
+      this->art_->metrics_.byte_alloc_count.add(sizeof(ExtentStorageT));
 
       this->thread_extents_.emplace_back(std::make_unique<ExtentStorageT>());
       u8* start = reinterpret_cast<u8*>(this->thread_extents_.back().get());
-
-      // TODO [tastolfi 2026-05-04] remove
-      // BATT_CHECK_OK(pkey().add_region(batt::MutableBuffer{start, 4096}));
-      // TODO [tastolfi 2026-05-04] remove
-      // BATT_CHECK_OK(pkey().add_region(batt::MutableBuffer{start + (4096 + kExtentSize), 4096}));
-
-      // TODO [tastolfi 2026-05-04] revert 4096
-      this->data_ = start + 4096;
+      this->data_ = start;
       this->in_use_ = 0;
 
       return this->alloc(n, art);
