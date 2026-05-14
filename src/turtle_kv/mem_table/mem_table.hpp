@@ -160,6 +160,10 @@ class BasicMemTable : public MemTableBase
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  /** \brief Called during recovery to reconstruct a MemTable from the change log.
+   *
+   * Behaves the same as `put`, except that nothing is written to storage.
+   */
   Status put_recovered_slot(FirstVisitToBlock first_visit,
                             StorageBlockBuffer* block,
                             EditOffset edit_offset,
