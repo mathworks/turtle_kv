@@ -222,7 +222,7 @@ Status Subtree::apply_batch_update(const TreeOptions& tree_options,
   // If this is the root level and tree needs to grow/shrink in height, do so now.
   //
   SubtreeViability new_subtree_viability = new_subtree->get_viability();
-  if (is_root && !is_root_viable(new_subtree_viability)) { 
+  if (is_root && !is_root_viable(new_subtree_viability)) {
     BATT_REQUIRE_OK(
         Subtree::make_root_viable(*new_subtree, tree_options, update.context, key_upper_bound));
   }
@@ -794,7 +794,7 @@ Status Subtree::unpack_if_necessary(llfs::PageLoader& page_loader,
     llfs::PinnedPage& pinned_page = *status_or_pinned_page;
 
     if (height == 1) {
-      const PackedLeafPage& packed_leaf = PackedLeafPage::view_of(pinned_page);
+      const PackedLeafPage& packed_leaf = *PackedLeafPage::view_of(pinned_page);
 
       std::unique_ptr<InMemoryLeaf> new_leaf = InMemoryLeaf::unpack(batt::make_copy(pinned_page),
                                                                     tree_options,

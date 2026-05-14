@@ -186,11 +186,7 @@ struct SegmentedLevelAlgorithms {
                                                    llfs::PinPageToJob::kDefault,
                                                    this->overcommit_));
 
-      BATT_SUPPRESS_IF_GCC("-Wdangling-reference")
-      //----- --- -- -  -  -   -
-      const PackedLeafPage& leaf = PackedLeafPage::view_of(pinned_page.get_page_buffer());
-      //----- --- -- -  -  -   -
-      BATT_UNSUPPRESS_IF_GCC()
+      const PackedLeafPage& leaf = *PackedLeafPage::view_of(pinned_page.get_page_buffer());
 
       CInterval<KeyView> flush_key_crange{pivot_lower_bound_key, max_key};
       Interval<u32> dropped_interval = segment.drop_key_range(flush_key_crange, leaf.items_slice());
@@ -257,7 +253,7 @@ struct SegmentedLevelAlgorithms {
                                                    llfs::PinPageToJob::kFalse,
                                                    this->overcommit_));
 
-      const PackedLeafPage& leaf_page = PackedLeafPage::view_of(segment_pinned_leaf);
+      const PackedLeafPage& leaf_page = *PackedLeafPage::view_of(segment_pinned_leaf);
 
       const auto first_item_in_leaf = leaf_page.items_begin();
 
@@ -295,9 +291,9 @@ struct SegmentedLevelAlgorithms {
 
     for (usize segment_i = 0; segment_i < segment_count;) {
       SegmentT& segment = this->level_.get_segment(segment_i);
-      
+
       in_segment(segment).merge_pivots(left_pivot, right_pivot, this->level_);
-      
+
       if (segment.is_inactive()) {
         this->level_.drop_segment(segment_i);
       } else {

@@ -357,7 +357,7 @@ Status KVStoreScanner::enter_subtree(i32 subtree_height,
 template <typename InsertHeapBool>
 Status KVStoreScanner::enter_leaf(llfs::PinnedPage&& pinned_page, InsertHeapBool insert_heap)
 {
-  const PackedLeafPage& leaf = PackedLeafPage::view_of(pinned_page);
+  const PackedLeafPage& leaf = *PackedLeafPage::view_of(pinned_page);
   this->tree_scan_path_.emplace_back(*this, std::move(pinned_page), leaf, insert_heap);
   return OkStatus();
 }

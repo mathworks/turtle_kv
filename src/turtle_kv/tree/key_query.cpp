@@ -1,3 +1,11 @@
+//=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
+//
+// Part of the TurtleKV Project, under Apache License v2.0.
+// See https://www.apache.org/licenses/LICENSE-2.0 for license information.
+// SPDX short identifier: Apache-2.0
+//
+//+++++++++++-+-+--+----- --- -- -  -  -   -
+
 #include <turtle_kv/tree/key_query.hpp>
 //
 
@@ -180,7 +188,7 @@ namespace {
 StatusOr<u32> find_key_lower_bound_index_in_pinned_leaf(llfs::PinnedPage& pinned_page,
                                                         KeyQuery& query)
 {
-  auto& packed_leaf = PackedLeafPage::view_of(*pinned_page);
+  auto& packed_leaf = *PackedLeafPage::view_of(*pinned_page);
 
   return {BATT_CHECKED_CAST(u32,
                             std::distance(packed_leaf.items_begin(),  //
@@ -354,7 +362,7 @@ StatusOr<ValueView> find_key_in_pinned_leaf(llfs::PinnedPage& pinned_leaf,
                                             KeyQuery& query,
                                             usize& item_index_out)
 {
-  auto& packed_leaf = PackedLeafPage::view_of(pinned_leaf);
+  auto& packed_leaf = *PackedLeafPage::view_of(pinned_leaf);
 
   const PackedKeyValue* found = packed_leaf.find_key(query.key());
   if (!found) {

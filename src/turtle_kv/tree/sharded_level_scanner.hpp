@@ -1,3 +1,11 @@
+//=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
+//
+// Part of the TurtleKV Project, under Apache License v2.0.
+// See https://www.apache.org/licenses/LICENSE-2.0 for license information.
+// SPDX short identifier: Apache-2.0
+//
+//+++++++++++-+-+--+----- --- -- -  -  -   -
+
 #pragma once
 
 #include <turtle_kv/tree/active_pivots_set.hpp>
@@ -281,12 +289,8 @@ inline auto ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::peek_next_impl(bool
         this->load_full_leaf_ = batt::BoolStatus::kTrue;
         BATT_CHECK(!this->needs_load_segment_);
 
-        BATT_SUPPRESS_IF_GCC("-Wdangling-reference")
-        //----- --- -- -  -  -   -
         const PackedLeafPage& leaf =
-            PackedLeafPage::view_of(this->full_leaf_data_->leaf_page.get_page_buffer());
-        //----- --- -- -  -  -   -
-        BATT_UNSUPPRESS_IF_GCC()
+            *PackedLeafPage::view_of(this->full_leaf_data_->leaf_page.get_page_buffer());
 
         this->advance_to_pivot_full_leaf(target_pivot_i, *segment, leaf);
 
@@ -429,12 +433,8 @@ inline auto ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::continue_full_leaf_
     ActivePivotsSetT active_pivots,
     const Segment* segment) noexcept -> Optional<Item>
 {
-  BATT_SUPPRESS_IF_GCC("-Wdangling-reference")
-  //----- --- -- -  -  -   -
   const PackedLeafPage& leaf_page =
-      PackedLeafPage::view_of(this->full_leaf_data_->leaf_page.get_page_buffer());
-  //----- --- -- -  -  -   -
-  BATT_UNSUPPRESS_IF_GCC()
+      *PackedLeafPage::view_of(this->full_leaf_data_->leaf_page.get_page_buffer());
 
   const usize begin_i = this->item_i_;
   u32 end_i = begin_i;
@@ -448,7 +448,7 @@ inline auto ShardedLevelScanner<NodeT, LevelT, PageLoaderT>::continue_full_leaf_
   Interval<u32> live_range = segment->get_live_item_range(
       *this->level_,
       Interval<u32>{BATT_CHECKED_CAST(u32, begin_i), BATT_CHECKED_CAST(u32, leaf_page.key_count)});
-  
+
   BATT_CHECK(!live_range.empty());
   end_i = live_range.upper_bound;
 

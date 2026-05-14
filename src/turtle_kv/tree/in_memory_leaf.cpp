@@ -15,6 +15,7 @@
 #include <turtle_kv/tree/the_key.hpp>
 
 #include <batteries/algo/parallel_transform.hpp>
+#include <batteries/suppress.hpp>
 #include <batteries/utility.hpp>
 
 namespace turtle_kv {
@@ -59,7 +60,9 @@ namespace turtle_kv {
 
   new_leaf->set_edit_size_totals(compute_running_total(worker_pool, *(new_leaf->result_set)));
 
+  BATT_SUPPRESS_IF_GCC("-Wpessimizing-move")
   return {std::move(new_leaf)};
+  BATT_UNSUPPRESS_IF_GCC()
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -254,7 +257,7 @@ Status InMemoryLeaf::apply_batch_update(BatchUpdate& update) noexcept
     // In this case, we have initialized a new InMemoryLeaf from a PackedLeaf. Use the
     // items from the PackedLeaf to merge with the incoming update.
     //
-    const PackedLeafPage& packed_leaf = PackedLeafPage::view_of(this->pinned_leaf_page_);
+    const PackedLeafPage& packed_leaf = *PackedLeafPage::view_of(this->pinned_leaf_page_);
     current_edits = packed_leaf.as_edit_slice_seq();
 
   } else if (this->result_set) {
