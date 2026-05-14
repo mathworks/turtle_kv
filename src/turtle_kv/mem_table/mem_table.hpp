@@ -203,6 +203,9 @@ class BasicMemTable : public MemTableBase
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  /** \brief Same as `get`, but with synchronization; only safe to call after this->finalize() has
+   * returned.
+   */
   Optional<ValueView> finalized_get(const KeyView& key) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -250,8 +253,6 @@ class BasicMemTable : public MemTableBase
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-
   /** \brief Returns the maximum size (in bytes) to which this MemTable is allowed to grow,
    * considering its configured batch size, max batch count, and the maximum size of an edit seen so
    * far (which bound the amount of wasted space at the end of each batch, since edits may not be
@@ -300,8 +301,12 @@ class BasicMemTable : public MemTableBase
 
   std::atomic<u64> magic_num_{Self::kAliveMagicNum};
 
+  // Used to limit the total memory footprint of the MemTable (storage blocks plus ART).
+  //
   AllocationTracker& allocation_tracker_;
 
+  // Diagnostic metrics for this object.
+  //
   MemTableMetrics& metrics_;
 
   // Passed in at construction time.
@@ -312,16 +317,31 @@ class BasicMemTable : public MemTableBase
   //
   std::atomic<i64> edit_offset_upper_bound_{this->edit_offset_lower_bound_.value() - 1};
 
+  // The maximum size of a batch (produced post-finalization by MemTable::BatchCompactor).  Passed
+  // in at construction time; used to calculate when the MemTable is full.
+  //
   const i64 max_bytes_per_batch_;
 
+  // The maximum number of batches (to be produced post-finalization by MemTable::BatchCompactor).
+  // Passed in at construction time; used to calculate when the MemTable is full.
+  //
   const i64 max_batch_count_;
 
+  // Diagnostic metrics for `this->art_index_`.
+  //
   ARTBase::Metrics art_metrics_;
 
+  // In-memory index used for scans and point queries.
+  //
   ART<MemTableValueEntry> art_index_;
 
+  // Tracks the maximum observed key-value pair size (in bytes); this is used to estimate the
+  // worst-case space wasted in a future batch.
+  //
   batt::CpuCacheLineIsolated<std::atomic<i64>> max_item_size_{Self::kDefaultItemSize};
 
+  // Updated whenever `this->max_item_size_` changes.
+  //
   std::atomic<i64> max_byte_size_;
 
   // Set to true if an external alloc ever tiggers overcommit; the MemTable stops accepting new
@@ -552,12 +572,20 @@ class BasicMemTable<StorageT, AllocationTrackerT>::BatchCompactor
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
+  // A finalized MemTable from which to generate batches.
+  //
   BasicMemTable& mem_table_;
 
+  // Batches are cut off when including the next edit (in key order) would exceed this limit.
+  //
   const usize byte_size_limit_;
 
+  // The number of batches generated so far.
+  //
   u64 batch_count_;
 
+  // Used to scan over edits in key order.
+  //
   ARTScanner scanner_;
 };
 

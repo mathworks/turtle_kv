@@ -17,10 +17,26 @@
 namespace turtle_kv {
 
 struct MemTableMetrics {
+  /** \brief The total number of MemTable objects that have been allocated in this process.
+   */
   CountMetric<i64> alloc_count{0};
+
+  /** \brief The total number of MemTable objects that have been deleted in this process.
+   */
   CountMetric<i64> free_count{0};
+
+  /** \brief Collects basic stats on the number of concurrent MemTables at a given time.
+   */
   StatsMetric<i64> count_stats;
-  CountMetric<i64> log_bytes_allocated{0};
+
+  /** \brief The total size (bytes) of all StorageBlockBuffer (i.e., ChangeLogBlock) objects
+   * attached to a MemTable.
+   */
+  FastCountMetric<i64> log_bytes_allocated{0};
+
+  /** \brief The total size (bytes) of all StorageBlockBuffer (i.e., ChangeLogBlock) objects
+   * released by a MemTable.
+   */
   CountMetric<i64> log_bytes_freed{0};
 
   /** \brief The number of times a MemTable did a blocking ChangeLog append_slot operation after
