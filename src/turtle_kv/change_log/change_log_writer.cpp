@@ -183,8 +183,21 @@ struct ChangeLogWriter::ActiveBlocksState : ChangeLogFile::MetaState {
         BATT_OK_RESULT_OR_PANIC(block_grant_pool.issue_grant(recovered_state.block_range.size(),
                                                              batt::WaitForResource::kFalse)));
 
-    Optional<batt::Grant> released_grant;
-    this->apply_trim(recovered_state.trim_edit_offset, config, released_grant);
+    {
+      BATT_DEBUG_INFO(
+          "RecoveredChangeLogState::trim_edit_offset should be consistent with the active block "
+          "range when passed to ActiveBlocksState::ActiveBlocksState");
+
+      const auto trim_before = this->trim_edit_offset;
+      const auto block_range_before = this->block_range;
+
+      Optional<batt::Grant> released_grant =
+          this->apply_trim(recovered_state.trim_edit_offset, config);
+
+      BATT_CHECK_EQ(released_grant, None);
+      BATT_CHECK_EQ(this->trim_edit_offset, trim_before);
+      BATT_CHECK_EQ(this->block_range, block_range_before);
+    }
   }
 
   /** \brief Panics if the current state of `this` violates any invariants with respect to the
@@ -197,11 +210,12 @@ struct ChangeLogWriter::ActiveBlocksState : ChangeLogFile::MetaState {
         << "in_use_block_grant must exactly cover the active block interval";
   }
 
-  /** \brief Updates this->trim_edit_offset, this->block_range, and
+  /** \brief Updates this->trim_edit_offset, this->block_range, and the in_use_block_grant.
+   *
+   * \return Grant for any newly trimmable blocks
    */
-  void apply_trim(EditOffset new_trim_edit_offset,
-                  const ChangeLogFile::Config& config,
-                  Optional<batt::Grant>& released_grant) noexcept;
+  Optional<batt::Grant> apply_trim(EditOffset new_trim_edit_offset,
+                                   const ChangeLogFile::Config& config) noexcept;
 };
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -854,7 +868,7 @@ Status ChangeLogWriter::trim(EditOffset new_trim_edit_offset)
     batt::ScopedLock<State> locked_state{this->state_};
     ActiveBlocksState& active_blocks = *locked_state->active_blocks_state_;
 
-    active_blocks.apply_trim(new_trim_edit_offset, cfg, released_grant);
+    released_grant = active_blocks.apply_trim(new_trim_edit_offset, cfg);
 
     // Refresh the meta-block.
     //
@@ -864,13 +878,15 @@ Status ChangeLogWriter::trim(EditOffset new_trim_edit_offset)
     // grant, allowing writers to overwrite trimmed blocks.
   }
   return OkStatus();
+  //
+  // release_grant is destructed, releasing block tokens for re-use.
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-void ChangeLogWriter::ActiveBlocksState::apply_trim(EditOffset new_trim_edit_offset,
-                                                    const ChangeLogFile::Config& cfg,
-                                                    Optional<batt::Grant>& released_grant) noexcept
+Optional<batt::Grant> ChangeLogWriter::ActiveBlocksState::apply_trim(
+    EditOffset new_trim_edit_offset,
+    const ChangeLogFile::Config& cfg) noexcept
 {
   VLOG(1) << "trim(" << new_trim_edit_offset << ")";
 
@@ -914,11 +930,14 @@ void ChangeLogWriter::ActiveBlocksState::apply_trim(EditOffset new_trim_edit_off
   // one block at a time, so that any clients blocked waiting for space won't immediately run out
   // of space.
   //
+  Optional<batt::Grant> released_grant;
   if (n_trimmed != 0) {
     released_grant.emplace(BATT_OK_RESULT_OR_PANIC(this->in_use_block_grant.spend(n_trimmed)));
   }
 
   VLOG(1) << BATT_INSPECT(this->in_use_block_grant.size());
+
+  return released_grant;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
