@@ -38,6 +38,8 @@ std::vector<std::filesystem::path> find_test_scripts()
     }
   }
 
+  std::sort(script_files.begin(), script_files.end());
+
   return script_files;
 }
 
