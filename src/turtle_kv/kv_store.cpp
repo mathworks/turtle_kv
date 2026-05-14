@@ -528,6 +528,7 @@ void KVStore::halt()
   // Let it be known: WE ARE HALTING!
   //
   this->halt_.set_value(true);
+
   {
     // Refresh the state so that any reader threads waiting on State change notification will see
     // the new value of `this->halt_`.
@@ -538,12 +539,26 @@ void KVStore::halt()
 
   // Stop the ChangeLogWriter.
   //
-  this->change_log_writer_->halt();
+  if (this->change_log_writer_) {
+    this->change_log_writer_->halt();
+  }
+
+  // Stop the Checkpoint Volume.
+  //
+  if (this->checkpoint_log_) {
+    this->checkpoint_log_->halt();
+  }
 
   // Close the checkpoint token pool.
   //
   BATT_CHECK_NOT_NULLPTR(this->checkpoint_token_pool_);
   this->checkpoint_token_pool_->close();
+
+  // Halt the CheckpointGenerator.
+  //
+  if (this->checkpoint_generator_) {
+    this->checkpoint_generator_->halt();
+  }
 
   // Close all Watches.
   //
@@ -558,6 +573,7 @@ void KVStore::halt()
 
   // Prevent new asynchronous filter page writes from being initiated.
   //
+  BATT_CHECK_NOT_NULLPTR(this->filter_page_write_state_);
   this->filter_page_write_state_->halt();
 }
 
@@ -565,20 +581,36 @@ void KVStore::halt()
 //
 void KVStore::join()
 {
+  BATT_CHECK_NOT_NULLPTR(this->filter_page_write_state_);
   this->filter_page_write_state_->join();
-  this->change_log_writer_->join();
+
+  if (this->change_log_writer_) {
+    this->change_log_writer_->join();
+  }
+
+  if (this->checkpoint_log_) {
+    this->checkpoint_log_->join();
+  }
+
   if (this->mem_table_batch_scanner_thread_) {
     this->mem_table_batch_scanner_thread_->join();
     this->mem_table_batch_scanner_thread_ = None;
   }
+
   if (this->checkpoint_update_thread_) {
     this->checkpoint_update_thread_->join();
     this->checkpoint_update_thread_ = None;
   }
+
+  if (this->checkpoint_generator_) {
+    this->checkpoint_generator_->join();
+  }
+
   if (this->checkpoint_flush_thread_) {
     this->checkpoint_flush_thread_->join();
     this->checkpoint_flush_thread_ = None;
   }
+
   if (this->info_task_) {
     this->info_task_->join();
     this->info_task_ = None;
