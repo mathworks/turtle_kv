@@ -21,6 +21,24 @@ namespace {
 struct BlockIterator {
   boost::intrusive_ptr<ChangeLogBlock> block;
   usize next_slot_i = 0;
+  bool visited = false;
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  explicit BlockIterator(boost::intrusive_ptr<ChangeLogBlock>&& block_arg) noexcept
+      : block{std::move(block_arg)}
+  {
+  }
+
+  BlockIterator(BlockIterator&& other) noexcept
+      : block{std::exchange(other.block, nullptr)}
+      , next_slot_i{std::exchange(other.next_slot_i, 0)}
+      , visited{std::exchange(other.visited, false)}
+  {
+  }
+
+  BlockIterator(const BlockIterator&) = delete;
+  BlockIterator& operator=(const BlockIterator&) = delete;
 
   // Get the EditOffset of the current slot.
   //
@@ -124,10 +142,7 @@ StatusOr<RecoveredChangeLogState> ChangeLogReader::visit_slots(
       continue;
     }
     if (block->slot_count() > 0) {
-      block_iterators.emplace_back(BlockIterator{
-          .block = batt::make_copy(block),
-          .next_slot_i = 0,
-      });
+      block_iterators.emplace_back(batt::make_copy(block));
     }
   }
 
@@ -190,7 +205,7 @@ StatusOr<RecoveredChangeLogState> ChangeLogReader::visit_slots(
         edit_offset +
         EditOffsetDelta{static_cast<i64>(slot_buffer.size() - sizeof(PackedEditOffsetDelta))};
 
-    auto first_visit_to_block = FirstVisitToBlock{current->next_slot_i == 0};
+    auto first_visit_to_block = FirstVisitToBlock{!current->visited};
     ChangeLogBlock* block = current->block.get();
 
     // If recovering state, add each block which contains recovered slots to the
@@ -198,6 +213,10 @@ StatusOr<RecoveredChangeLogState> ChangeLogReader::visit_slots(
     //
     if (first_visit_to_block) {
       visited_block_set.insert(block->get_block_index().value_or_panic());
+      BATT_CHECK_EQ(false, current->visited);
+      current->visited = true;
+    } else {
+      BATT_CHECK(current->visited);
     }
 
     // Move the payload past the EditOffset.
