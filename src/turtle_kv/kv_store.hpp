@@ -135,6 +135,11 @@ class KVStore : public Table
    */
   static constexpr usize kMaxCheckpointJobs = 2;
 
+  /** \brief The maximum number of times to retry a put before returning
+   * batt::StatusCode::kUnavailable.
+   */
+  static constexpr usize kMaxUpdateRetries = 5;
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   /** \brief Performs various process-wide initialization.
@@ -174,7 +179,7 @@ class KVStore : public Table
 
   /** \brief Returns the latest checkpoint recovered from the passed volume.
    */
-  static StatusOr<Checkpoint> recover_latest_checkpoint(llfs::Volume& checkpoint_log_volume);
+  static StatusOr<Checkpoint> recover_latest_checkpoint(llfs::Volume& checkpoint_volume);
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -220,6 +225,11 @@ class KVStore : public Table
     return this->metrics_;
   }
 
+  llfs::PageCache& page_cache() noexcept
+  {
+    return this->page_cache_;
+  }
+
   void set_checkpoint_distance(usize chi) noexcept;
 
   usize get_checkpoint_distance() const noexcept
@@ -241,11 +251,6 @@ class KVStore : public Table
   void collect_stats(
       std::function<void(std::string_view /*name*/, double /*value*/)> fn) const noexcept;
 
-  llfs::PageCache& page_cache() noexcept
-  {
-    return this->page_cache_;
-  }
-
   /** \brief Clears any caches for this KVStore scoped to the current thread.
    */
   void reset_thread_context() noexcept;
@@ -257,10 +262,12 @@ class KVStore : public Table
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
-  static constexpr i32 kRecoveryNotStarted = 0;
-  static constexpr i32 kRecoveryStarted = 1;
-  static constexpr i32 kRecoveryComplete = 2;
-  static constexpr i32 kRecoveryFailed = 3;
+  enum struct RecoveryStatus : i32 {
+    kNotStarted = 0,
+    kStarted = 1,
+    kComplete = 2,
+    kFailed = 3,
+  };
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -291,7 +298,7 @@ class KVStore : public Table
                    boost::intrusive_ptr<llfs::StorageContext>&& storage_context,
                    const TreeOptions& tree_options,
                    const RuntimeOptions& runtime_options,
-                   std::unique_ptr<llfs::Volume>&& checkpoint_log,
+                   std::unique_ptr<llfs::Volume>&& checkpoint_volume,
                    Checkpoint&& latest_recovered_checkpoint) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -305,6 +312,13 @@ class KVStore : public Table
    */
   Status run_recovery(const std::filesystem::path& change_log_file_path) noexcept;
 
+  /** \brief Called during recovery to recover MemTables one edit at a time.
+   */
+  Status recover_put(FirstVisitToBlock first_visit,
+                     ChangeLogBlock* block,
+                     EditOffset edit_offset,
+                     ConstBuffer payload);
+
   /** \brief Creates and returns a new MemTable, with current checkpoint distance settings and the
    * specified EditOffset lower bound.
    */
@@ -313,8 +327,19 @@ class KVStore : public Table
   /** \brief Finalizes the MemTable in `observed_state`, creating a new MemTable to replace it (or
    * waiting for another thread to do so), and finally handing off the old MemTable to the
    * checkpoint update pipeline.
+   *
+   * Calls `this->hand_off_finalized_mem_table`.
    */
   Status finalize_mem_table(boost::intrusive_ptr<MemTable>&& mem_table);
+
+  /** \brief Passes the given MemTable to the checkpoint update pipeline.
+   *
+   * This should be called only after `reset_active_mem_table` has installed a new MemTable.
+   *
+   * This function will call `push_mem_table_to_channel` or `scan_mem_table_to_build_batches`
+   * depending on whether the threaded checkpoint pipeline is enabled.
+   */
+  Status hand_off_finalized_mem_table(boost::intrusive_ptr<MemTable>&& old_mem_table);
 
   /** \brief Waits for the passed MemTable to be the next one that should be pushed to
    * `this->finalized_mem_table_channel_`, and then pushes it to the channel.
@@ -325,12 +350,6 @@ class KVStore : public Table
    * to the active state.
    */
   Status reset_active_mem_table(EditOffset current_edit_offset);
-
-  /** \brief Passes the given MemTable to the checkpoint update pipeline.
-   *
-   * This should be called only after `reset_active_mem_table` has installed a new MemTable.
-   */
-  Status hand_off_finalized_mem_table(boost::intrusive_ptr<MemTable>&& old_mem_table);
 
   /** \brief Blocks the caller until either the KVStore is `halt()`-ed or a new MemTable with
    * `edit_offset_lower_bound() >= target_edit_offset` is activated.
@@ -343,39 +362,46 @@ class KVStore : public Table
    */
   void info_task_main() noexcept;
 
+  /** \brief Creates a MemTable::BatchCompactor for the passed MemTable and uses it to create
+   * batches, which are either pushed to the checkpoint update channel or applied directly to the
+   * checkpoint generator (depending on whether the threaded checkpoint pipeline is enabled).
+   */
   template <typename Fn>
     requires std::invocable<Fn, std::unique_ptr<DeltaBatch>>
   Status scan_mem_table_to_build_batches(boost::intrusive_ptr<MemTable>&& mem_table,
                                          Fn&& consume_fn);
 
+  /** \brief Entry point for the MemTable::BatchCompactor thread.
+   */
   void mem_table_batch_scanner_thread_main();
 
+  /** \brief Applies the passed batch to the checkpoint generator.
+   */
   StatusOr<std::unique_ptr<CheckpointJob>> apply_batch_to_checkpoint(
       std::unique_ptr<DeltaBatch>&& delta_batch);
 
+  /** \brief Entry point for the checkpoint update thread; repeatedly calls
+   * apply_batch_to_checkpoint until the checkpoint is done, then hands off to the next pipeline
+   * stage.
+   */
   void checkpoint_update_thread_main();
 
-  bool should_create_checkpoint() const
-  {
-    // If the batch count is greater than or equal to the checkpoint distance, we need to create a
-    // checkpoint.
-    //
-    return this->checkpoint_batch_count_ >= this->checkpoint_distance_.load();
-  }
-
+  /** \brief Commits the passed job to the checkpoint volume.
+   */
   Status commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_job);
 
+  /** \brief Entry point for the checkpoint flush (commit) thread; repeatedly calls
+   * commit_checkpoint.
+   */
   void checkpoint_flush_thread_main();
 
-  /** \brief Called during recovery to recover MemTables one edit at a time.
+  /** \brief Updates the current recovery status; this may unblock threads which have called
+   * `this->wait_for_recovery()`.
    */
-  Status recover_put(FirstVisitToBlock first_visit,
-                     ChangeLogBlock* block,
-                     EditOffset edit_offset,
-                     ConstBuffer payload);
+  void set_recovery_status(RecoveryStatus) noexcept;
 
-  void set_recovery_status(i32) noexcept;
-
+  /** \brief Blocks the caller until recovery has either finished or failed.
+   */
   Status wait_for_recovery() const noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -400,16 +426,17 @@ class KVStore : public Table
 
   std::unique_ptr<ChangeLogWriter> change_log_writer_;
 
-  std::atomic<i32> recovery_status_;
+  std::atomic<RecoveryStatus> recovery_status_;
 
   Optional<EditOffset> next_edit_offset_to_recover_;
 
-  // How frequently we take checkpoints, where the units of distance are number of MemTables.
-  // (i.e. if checkpoint_distance_ == 3, we take a checkpoint every time 3 MemTables are filled up)
+  // How frequently we take checkpoints, where the units of distance are number of (leaf-sized)
+  // batches. (i.e. if checkpoint_distance_ == 3, we take a checkpoint every time the MemTables
+  // grows to leaf_size * 3)
   //
   std::atomic<usize> checkpoint_distance_;
 
-  std::unique_ptr<llfs::Volume> checkpoint_log_;
+  std::unique_ptr<llfs::Volume> checkpoint_volume_;
 
   boost::intrusive_ptr<FilterPageWriteState> filter_page_write_state_;
 

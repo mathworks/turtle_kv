@@ -285,14 +285,14 @@ u64 query_page_loader_reset_every_n()
   // Open the checkpoint volume, which contains all checkpoints.
   //  Note: must be after registering the page layouts.
   //
-  BATT_ASSIGN_OK_RESULT(std::unique_ptr<llfs::Volume> checkpoint_log_volume,
+  BATT_ASSIGN_OK_RESULT(std::unique_ptr<llfs::Volume> checkpoint_volume,
                         open_checkpoint_log(storage_context,  //
                                             dir_path / checkpoint_log_file_name()));
 
   // Recover the lastest checkpoint.
   //
   BATT_ASSIGN_OK_RESULT(Checkpoint latest_checkpoint,
-                        KVStore::recover_latest_checkpoint(*checkpoint_log_volume));
+                        KVStore::recover_latest_checkpoint(*checkpoint_volume));
 
   std::unique_ptr<KVStore> kv_store{new KVStore{
       task_scheduler,
@@ -301,7 +301,7 @@ u64 query_page_loader_reset_every_n()
       storage_context.shared_from_this(),
       tree_options,
       *runtime_options,
-      std::move(checkpoint_log_volume),
+      std::move(checkpoint_volume),
       std::move(latest_checkpoint),
   }};
 
@@ -383,7 +383,7 @@ u64 query_page_loader_reset_every_n()
                               boost::intrusive_ptr<llfs::StorageContext>&& storage_context,
                               const TreeOptions& tree_options,
                               const RuntimeOptions& runtime_options,
-                              std::unique_ptr<llfs::Volume>&& checkpoint_log,
+                              std::unique_ptr<llfs::Volume>&& checkpoint_volume,
                               Checkpoint&& latest_recovered_checkpoint) noexcept
     : metrics_{}
     , task_scheduler_{task_scheduler}
@@ -395,10 +395,10 @@ u64 query_page_loader_reset_every_n()
     , runtime_options_{runtime_options}
     , mem_table_allocation_tracker_{this->page_cache(), this->metrics_.overcommit}
     , change_log_writer_{nullptr}
-    , recovery_status_{Self::kRecoveryNotStarted}
+    , recovery_status_{Self::RecoveryStatus::kNotStarted}
     , next_edit_offset_to_recover_{None}
     , checkpoint_distance_{this->runtime_options_.initial_checkpoint_distance}
-    , checkpoint_log_{std::move(checkpoint_log)}
+    , checkpoint_volume_{std::move(checkpoint_volume)}
     , filter_page_write_state_{FilterPageWriteState::make_new()}
     , per_thread_{}
     , state_{}
@@ -424,7 +424,7 @@ u64 query_page_loader_reset_every_n()
       this->page_cache(),
       batt::make_copy(this->filter_page_write_state_),
       batt::Toggle<State>::Reader{this->state_}->base_checkpoint_->clone(),
-      *this->checkpoint_log_);
+      *this->checkpoint_volume_);
 
   this->tree_options_.set_trie_index_reserve_size(this->tree_options_.trie_index_reserve_size());
 
@@ -506,15 +506,19 @@ KVStore::~KVStore() noexcept
 //
 void KVStore::initialize_state(Checkpoint&& latest_recovered_checkpoint)
 {
+  const EditOffset first_mem_table_edit_offset_lower_bound =
+      latest_recovered_checkpoint.edit_offset_upper_bound();
+
   batt::Toggle<State>::Writer writer{this->state_};
 
   State& init_state = writer.new_value();
+  {
+    init_state.mem_table_ = this->create_mem_table(first_mem_table_edit_offset_lower_bound);
 
-  init_state.base_checkpoint_.emplace(std::move(latest_recovered_checkpoint));
+    BATT_CHECK(init_state.deltas_.empty());
 
-  init_state.mem_table_ =
-      this->create_mem_table(init_state.base_checkpoint_->edit_offset_upper_bound());
-
+    init_state.base_checkpoint_.emplace(std::move(latest_recovered_checkpoint));
+  }
   this->next_mem_table_edit_offset_.set_value(
       init_state.mem_table_->edit_offset_lower_bound().value());
 
@@ -529,13 +533,15 @@ void KVStore::halt()
   //
   this->halt_.set_value(true);
 
-  {
-    // Refresh the state so that any reader threads waiting on State change notification will see
-    // the new value of `this->halt_`.
-    //
-    batt::Toggle<State>::Writer writer{this->state_};
-    writer.new_value() = writer.old_value();
-  }
+  // Close all Watches.
+  //
+  this->deltas_size_->close();
+  this->next_mem_table_edit_offset_.close();
+
+  // Close the checkpoint token pool.
+  //
+  BATT_CHECK_NOT_NULLPTR(this->checkpoint_token_pool_);
+  this->checkpoint_token_pool_->close();
 
   // Stop the ChangeLogWriter.
   //
@@ -545,25 +551,15 @@ void KVStore::halt()
 
   // Stop the Checkpoint Volume.
   //
-  if (this->checkpoint_log_) {
-    this->checkpoint_log_->halt();
+  if (this->checkpoint_volume_) {
+    this->checkpoint_volume_->halt();
   }
-
-  // Close the checkpoint token pool.
-  //
-  BATT_CHECK_NOT_NULLPTR(this->checkpoint_token_pool_);
-  this->checkpoint_token_pool_->close();
 
   // Halt the CheckpointGenerator.
   //
   if (this->checkpoint_generator_) {
     this->checkpoint_generator_->halt();
   }
-
-  // Close all Watches.
-  //
-  this->deltas_size_->close();
-  this->next_mem_table_edit_offset_.close();
 
   // Close all Channels.
   //
@@ -575,21 +571,27 @@ void KVStore::halt()
   //
   BATT_CHECK_NOT_NULLPTR(this->filter_page_write_state_);
   this->filter_page_write_state_->halt();
+
+  // Refresh the state so that any reader threads waiting on State change notification will see
+  // the new value of `this->halt_`.
+  //
+  this->state_.sync();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 void KVStore::join()
 {
-  BATT_CHECK_NOT_NULLPTR(this->filter_page_write_state_);
-  this->filter_page_write_state_->join();
-
   if (this->change_log_writer_) {
     this->change_log_writer_->join();
   }
 
-  if (this->checkpoint_log_) {
-    this->checkpoint_log_->join();
+  if (this->checkpoint_volume_) {
+    this->checkpoint_volume_->join();
+  }
+
+  if (this->checkpoint_generator_) {
+    this->checkpoint_generator_->join();
   }
 
   if (this->mem_table_batch_scanner_thread_) {
@@ -602,14 +604,13 @@ void KVStore::join()
     this->checkpoint_update_thread_ = None;
   }
 
-  if (this->checkpoint_generator_) {
-    this->checkpoint_generator_->join();
-  }
-
   if (this->checkpoint_flush_thread_) {
     this->checkpoint_flush_thread_->join();
     this->checkpoint_flush_thread_ = None;
   }
+
+  BATT_CHECK_NOT_NULLPTR(this->filter_page_write_state_);
+  this->filter_page_write_state_->join();
 
   if (this->info_task_) {
     this->info_task_->join();
@@ -640,7 +641,7 @@ boost::intrusive_ptr<MemTable> KVStore::create_mem_table(EditOffset edit_offset_
 //
 Status KVStore::put(const KeyView& key, const ValueView& value) noexcept /*override*/
 {
-  for (;;) {
+  for (usize retry_i = 0; retry_i != KVStore::kMaxUpdateRetries; ++retry_i) {
 #if TURTLE_KV_PROFILE_UPDATES
     this->metrics_.put_count.add(1);
     LatencyTimer put_timer{Every2ToTheConst<8>{}, this->metrics_.put_latency};
@@ -701,10 +702,8 @@ Status KVStore::put(const KeyView& key, const ValueView& value) noexcept /*overr
 
     // Limit the number of deltas that can build up.
     //
-    const usize max_deltas_size = 2;
-
-    BATT_REQUIRE_OK(this->deltas_size_->await_true([this, max_deltas_size](usize n) {
-      return n <= max_deltas_size;
+    BATT_REQUIRE_OK(this->deltas_size_->await_true([](usize n) {
+      return n <= KVStore::kMaxDeltasSize;
     }));
 
 #if TURTLE_KV_PROFILE_UPDATES
@@ -714,6 +713,10 @@ Status KVStore::put(const KeyView& key, const ValueView& value) noexcept /*overr
 
     // Now that we have a new MemTable with plenty of space, try again...
   }
+  //
+  // Out of retries.
+
+  return batt::StatusCode::kUnavailable;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -723,7 +726,7 @@ Status KVStore::recover_put(FirstVisitToBlock first_visit,
                             EditOffset edit_offset,
                             ConstBuffer payload)
 {
-  for (;;) {
+  for (usize retry_i = 0; retry_i != KVStore::kMaxUpdateRetries; ++retry_i) {
     boost::intrusive_ptr<MemTable> full_mem_table;
 
     {
@@ -762,6 +765,10 @@ Status KVStore::recover_put(FirstVisitToBlock first_visit,
     // TODO [tastolfi 2026-04-07] maybe also the back-pressure stuff (i.e., waiting for the deltas
     // to shrink?) --- to keep memory footprint under control during recovery
   }
+  //
+  // Out of retries.
+
+  return batt::StatusCode::kUnavailable;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -802,6 +809,8 @@ StatusOr<EditOffset> KVStore::force_checkpoint() noexcept
 //
 Status KVStore::wait_for_checkpoint(EditOffset target) noexcept
 {
+  bool warned = false;
+
   for (;;) {
     // Observe the current state; if there are no deltas below the target bound, then we are done;
     // otherwise, save the state's seq number so we can wait for change notification.
@@ -816,21 +825,23 @@ Status KVStore::wait_for_checkpoint(EditOffset target) noexcept
         return batt::StatusCode::kClosed;
       }
 
-      bool found_pending_deltas = false;
-      for (const boost::intrusive_ptr<MemTable>& p_delta : state_reader->deltas_) {
-        VLOG(1) << "found delta; " << BATT_INSPECT(p_delta->edit_offset_upper_bound())
-                << BATT_INSPECT(target);
-        if (p_delta->edit_offset_upper_bound() <= target) {
-          found_pending_deltas = true;
-          break;
-        }
-      }
-      if (!found_pending_deltas) {
+      // If the latest checkpoint's edit offset bound is at least `target`, we don't have to wait.
+      //
+      const Optional<Checkpoint>& latest_checkpoint = state_reader->base_checkpoint_;
+      if (latest_checkpoint && latest_checkpoint->edit_offset_upper_bound() >= target) {
         break;
       }
+
+      // Observe the reader's sequence number so we can use change notification.
+      //
       observed_seq = state_reader.seq();
-      VLOG(1) << BATT_INSPECT(observed_seq);
     }
+
+    LOG_IF(WARNING, !this->runtime_options_.use_threaded_checkpoint_pipeline && !warned)
+        << "Waiting for checkpoint, but threaded checkpoint pipeline is not running (did you mean "
+           "to do this?)";
+
+    warned = true;
 
     // Wait for the state to update.
     //
@@ -1162,12 +1173,12 @@ Status KVStore::push_mem_table_to_channel(boost::intrusive_ptr<MemTable>&& mem_t
 //
 Status KVStore::run_recovery(const std::filesystem::path& change_log_file_path) noexcept
 {
-  this->recovery_status_.store(Self::kRecoveryStarted);
+  this->recovery_status_.store(Self::RecoveryStatus::kStarted);
 
   // By default, signal failure; we will cancel this when we succeed below.
   //
   auto on_failure = batt::finally([&] {
-    this->set_recovery_status(Self::kRecoveryFailed);
+    this->set_recovery_status(Self::RecoveryStatus::kFailed);
   });
 
   EditOffset checkpoint_upper_bound = [this]() -> EditOffset {
@@ -1225,14 +1236,14 @@ Status KVStore::run_recovery(const std::filesystem::path& change_log_file_path) 
   // Recovery is complete!
   //
   on_failure.cancel();
-  this->set_recovery_status(Self::kRecoveryComplete);
+  this->set_recovery_status(Self::RecoveryStatus::kComplete);
 
   return OkStatus();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-void KVStore::set_recovery_status(i32 s) noexcept
+void KVStore::set_recovery_status(RecoveryStatus s) noexcept
 {
   this->recovery_status_.store(s);
   this->recovery_status_.notify_all();
@@ -1243,15 +1254,21 @@ void KVStore::set_recovery_status(i32 s) noexcept
 Status KVStore::wait_for_recovery() const noexcept
 {
   for (;;) {
-    i32 s = this->recovery_status_.load();
-    if (s == Self::kRecoveryFailed) {
+    RecoveryStatus observed_recovery_status = this->recovery_status_.load();
+
+    if (observed_recovery_status == Self::RecoveryStatus::kFailed) {
       return batt::StatusCode::kInternal;
     }
-    if (s == Self::kRecoveryComplete) {
+
+    if (observed_recovery_status == Self::RecoveryStatus::kComplete) {
       return OkStatus();
     }
-    BATT_CHECK(s == Self::kRecoveryNotStarted || s == Self::kRecoveryStarted) << BATT_INSPECT(s);
-    this->recovery_status_.wait(s);
+
+    BATT_CHECK(observed_recovery_status == Self::RecoveryStatus::kNotStarted ||
+               observed_recovery_status == Self::RecoveryStatus::kStarted)
+        << BATT_INSPECT((i32)observed_recovery_status);
+
+    this->recovery_status_.wait(observed_recovery_status);
   }
 }
 
@@ -1260,10 +1277,10 @@ using CheckpointEvent = llfs::PackedVariant<turtle_kv::PackedCheckpoint>;
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 /*static*/ batt::StatusOr<turtle_kv::Checkpoint> KVStore::recover_latest_checkpoint(
-    llfs::Volume& checkpoint_log_volume)
+    llfs::Volume& checkpoint_volume)
 {
   llfs::StatusOr<llfs::TypedVolumeReader<CheckpointEvent>> reader =
-      checkpoint_log_volume.typed_reader<CheckpointEvent>(
+      checkpoint_volume.typed_reader<CheckpointEvent>(
           llfs::SlotRangeSpec{
               .lower_bound = llfs::None,
               .upper_bound = llfs::None,
@@ -1302,7 +1319,7 @@ using CheckpointEvent = llfs::PackedVariant<turtle_kv::PackedCheckpoint>;
     return Checkpoint::make_empty();
   }
 
-  return turtle_kv::Checkpoint::recover(checkpoint_log_volume,
+  return turtle_kv::Checkpoint::recover(checkpoint_volume,
                                         prev_checkpoint.first,
                                         prev_checkpoint.second);
 }
@@ -1556,7 +1573,7 @@ Status KVStore::commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_jo
   //
   StatusOr<llfs::SlotRange> checkpoint_slot_range =
       TURTLE_KV_COLLECT_LATENCY(this->metrics_.append_job_latency,                     //
-                                this->checkpoint_log_->append(                         //
+                                this->checkpoint_volume_->append(                      //
                                     std::move(*checkpoint_job->appendable_job),        //
                                     *checkpoint_job->append_job_grant,                 //
                                     std::move(checkpoint_job->prepare_slot_sequencer)  //
@@ -1566,16 +1583,16 @@ Status KVStore::commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_jo
 
   // Lock the new slot range.
   //
-  StatusOr<llfs::SlotReadLock> slot_read_lock = this->checkpoint_log_->lock_slots(
+  StatusOr<llfs::SlotReadLock> slot_read_lock = this->checkpoint_volume_->lock_slots(
       llfs::SlotRangeSpec::from(*checkpoint_slot_range),
       llfs::LogReadMode::kSpeculative,
       /*lock_holder=*/"TabletCheckpointTask::handle_checkpoint_commit");
 
   BATT_REQUIRE_OK(slot_read_lock);
-  BATT_REQUIRE_OK(this->checkpoint_log_->sync(llfs::LogReadMode::kDurable,
-                                              llfs::SlotUpperBoundAt{
-                                                  .offset = checkpoint_slot_range->upper_bound,
-                                              }));
+  BATT_REQUIRE_OK(this->checkpoint_volume_->sync(llfs::LogReadMode::kDurable,
+                                                 llfs::SlotUpperBoundAt{
+                                                     .offset = checkpoint_slot_range->upper_bound,
+                                                 }));
 
   // Trim the change log.  IMPORTANT: this must come before we enter the Writer critical section
   // below; otherwise we could deadlock! (this thread waits for reader to exit which is waiting for
@@ -1632,7 +1649,7 @@ Status KVStore::commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_jo
   // Trim the checkpoint volume to free old pages.
   //
   if (prev_checkpoint_slot) {
-    BATT_REQUIRE_OK(this->checkpoint_log_->trim(*prev_checkpoint_slot));
+    BATT_REQUIRE_OK(this->checkpoint_volume_->trim(*prev_checkpoint_slot));
   }
 
   return OkStatus();
@@ -1658,7 +1675,7 @@ void KVStore::collect_stats(
   //----- --- -- -  -  -   -
 
   auto& kv_store = this->metrics_;
-  auto& checkpoint_log = *this->checkpoint_log_;
+  auto& checkpoint_log = *this->checkpoint_volume_;
   auto& cache = checkpoint_log.cache();
 
   this->wait_for_recovery().IgnoreError();
