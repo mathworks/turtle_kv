@@ -52,7 +52,7 @@
             "boost/1.88.0"
         ],
         "batteries/[>=0.60.2 <2]": [
-            "batteries/0.66.0"
+            "batteries/0.70.2"
         ]
     },
     "config_requires": []
