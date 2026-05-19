@@ -623,27 +623,16 @@ std::string format_checkpoint_recovery_test_name(
 INSTANTIATE_TEST_SUITE_P(
     RecoveringCheckpoints,
     CheckpointTest,
-    testing::Values(
-        // TODO: [Gabe Bornstein 11/5/25] Investigate: We aren't getting any
-        // checkpoint data for this case, but we are forcing a checkpoint.
-        // CheckpointTestParams(1, 1),
-        // TODO: [Gabe Bornstein 11/5/25] Investigate: We aren't
-        // getting any checkpoint data for this case, but we are
-        // forcing a checkpoint. Maybe keys aren't being flushed?
-        // CheckpointTestParams(1, 100),
-        // TODO: [Gabe Bornstein 11/5/25] Investigate: We ARE
-        // getting checkpoint data for this case. Does taking additional checkpoints flush keys?
-        CheckpointTestParams{.num_checkpoints_to_create = 2, .num_puts = 100},
-        CheckpointTestParams{.num_checkpoints_to_create = 100, .num_puts = 100},
-        CheckpointTestParams{.num_checkpoints_to_create = 1, .num_puts = 100000},
-        CheckpointTestParams{.num_checkpoints_to_create = 1, .num_puts = 0},
-        CheckpointTestParams{.num_checkpoints_to_create = 0, .num_puts = 100},
-        CheckpointTestParams{.num_checkpoints_to_create = 5, .num_puts = 100000},
-        CheckpointTestParams{.num_checkpoints_to_create = 10, .num_puts = 100000}
-        //  TODO: [Gabe Bornstein 11/6/25] Sporadic Failing. Likely cause by keys not
-        //  being flushed before that last checkpoint is taken. Need fsync to resolve.
-        /*CheckpointTestParams(101, 100000)*/
-        ),
+    testing::Values(CheckpointTestParams{.num_checkpoints_to_create = 1, .num_puts = 1},
+                    CheckpointTestParams{.num_checkpoints_to_create = 1, .num_puts = 100},
+                    CheckpointTestParams{.num_checkpoints_to_create = 2, .num_puts = 100},
+                    CheckpointTestParams{.num_checkpoints_to_create = 100, .num_puts = 100},
+                    CheckpointTestParams{.num_checkpoints_to_create = 1, .num_puts = 100000},
+                    CheckpointTestParams{.num_checkpoints_to_create = 1, .num_puts = 0},
+                    CheckpointTestParams{.num_checkpoints_to_create = 0, .num_puts = 100},
+                    CheckpointTestParams{.num_checkpoints_to_create = 5, .num_puts = 100000},
+                    CheckpointTestParams{.num_checkpoints_to_create = 10, .num_puts = 100000},
+                    CheckpointTestParams{.num_checkpoints_to_create = 101, .num_puts = 100000}),
     format_checkpoint_recovery_test_name);
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
