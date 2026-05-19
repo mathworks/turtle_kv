@@ -7,9 +7,9 @@ namespace turtle_kv {
 //
 std::ostream& operator<<(std::ostream& out, const PackedCheckpoint& t)
 {
-  return out << "PackedCheckpoint{"                             //
-             << ", .batch_upper_bound=" << t.batch_upper_bound  //
-             << ", .tree_root=" << t.new_tree_root              //
+  return out << "PackedCheckpoint{"                                         //
+             << ", .edit_offset_upper_bound=" << t.edit_offset_upper_bound  //
+             << ", .tree_root=" << t.new_tree_root                          //
              << ",}";
 }
 

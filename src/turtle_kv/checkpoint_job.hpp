@@ -59,16 +59,16 @@ struct CheckpointJob {
 
   batt::Promise<llfs::SlotRange> promise;
 
-  DeltaBatchId batch_id_upper_bound = DeltaBatchId::min_value();
+  EditOffset edit_offset_upper_bound{0};
 
   usize batch_count = 0;
 };
 
-/** \brief Returns the least-ordered DeltaBatchId *not* included in the passed checkpoint.
+/** \brief Returns the least-ordered EditOffset *not* included in the checkpoint.
  */
-inline DeltaBatchId get_batch_upper_bound(const CheckpointJob& job)
+inline EditOffset get_edit_offset_upper_bound(const CheckpointJob& job)
 {
-  return job.batch_id_upper_bound;
+  return job.edit_offset_upper_bound;
 }
 
 }  // namespace turtle_kv

@@ -38,6 +38,7 @@ target_link_libraries(
   batteries::batteries
   boost::boost
   llfs::llfs
+  yaml-cpp::yaml-cpp
   ${TURTLE_KV_KEYVCR_DEPS}
   ${TURTLE_KV_VQF_DEPS}
   )

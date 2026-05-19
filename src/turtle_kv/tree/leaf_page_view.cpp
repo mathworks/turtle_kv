@@ -1,3 +1,11 @@
+//=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
+//
+// Part of the TurtleKV Project, under Apache License v2.0.
+// See https://www.apache.org/licenses/LICENSE-2.0 for license information.
+// SPDX short identifier: Apache-2.0
+//
+//+++++++++++-+-+--+----- --- -- -  -  -   -
+
 #include <turtle_kv/tree/leaf_page_view.hpp>
 //
 
@@ -48,7 +56,7 @@ namespace turtle_kv {
 /*explicit*/ LeafPageView::LeafPageView(
     std::shared_ptr<const llfs::PageBuffer>&& page_buffer) noexcept
     : PageView{std::move(page_buffer)}
-    , packed_leaf_page_{std::addressof(PackedLeafPage::view_of(*this))}
+    , packed_leaf_page_{PackedLeafPage::view_of(*this)}
 {
 }
 

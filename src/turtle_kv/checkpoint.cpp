@@ -1,3 +1,11 @@
+//=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
+//
+// Part of the TurtleKV Project, under Apache License v2.0.
+// See https://www.apache.org/licenses/LICENSE-2.0 for license information.
+// SPDX short identifier: Apache-2.0
+//
+//+++++++++++-+-+--+----- --- -- -  -  -   -
+
 #include <turtle_kv/checkpoint.hpp>
 //
 
@@ -11,6 +19,7 @@
 #include <llfs/status_code.hpp>
 
 #include <batteries/async/cancel_token.hpp>
+#include <batteries/case_of.hpp>
 #include <batteries/utility.hpp>
 
 namespace turtle_kv {
@@ -24,7 +33,7 @@ namespace turtle_kv {
 {
   VLOG(1) << "Entering Checkpoint::recover";
 
-  BATT_CHECK_GT(packed_checkpoint.batch_upper_bound, 0)
+  BATT_CHECK_GT(packed_checkpoint.edit_offset_upper_bound, 0)
       << "Invalid PackedCheckpoint: batch_upper_bound==0 indicates no checkpoint.";
 
   const llfs::PageId tree_root_id = packed_checkpoint.new_tree_root.as_page_id();
@@ -46,20 +55,16 @@ namespace turtle_kv {
       tree_root_id,
       std::make_shared<Subtree>(std::move(tree)),
       *height,
-      DeltaBatchId::from_u64(packed_checkpoint.batch_upper_bound),
+      EditOffset{packed_checkpoint.edit_offset_upper_bound.value()},
       CheckpointLock::make_durable(std::move(slot_read_lock)),
   };
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-/*static*/ Checkpoint Checkpoint::empty_at_batch(DeltaBatchId batch_id) noexcept
+/*static*/ Checkpoint Checkpoint::make_empty() noexcept
 {
-  return Checkpoint{llfs::PageId{llfs::kInvalidPageId},
-                    std::make_shared<Subtree>(Subtree::make_empty()),
-                    /*tree_height=*/0,
-                    batch_id,
-                    CheckpointLock::make_durable_detached()};
+  return Checkpoint{};
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -68,7 +73,7 @@ Checkpoint::Checkpoint() noexcept
     : root_id_{llfs::PageId{llfs::kInvalidPageId}}
     , tree_{std::make_shared<Subtree>(Subtree::make_empty())}
     , tree_height_{0}
-    , batch_upper_bound_{0}
+    , checkpoint_upper_bound_{EditOffset{0}}
     , checkpoint_lock_{CheckpointLock::make_durable_detached()}
 {
 }
@@ -78,12 +83,12 @@ Checkpoint::Checkpoint() noexcept
 Checkpoint::Checkpoint(Optional<llfs::PageId> root_id,
                        std::shared_ptr<Subtree>&& tree,
                        i32 tree_height,
-                       DeltaBatchId batch_upper_bound,
+                       std::variant<EditOffset, DeltaBatchId> checkpoint_upper_bound,
                        CheckpointLock&& checkpoint_lock) noexcept
     : root_id_{root_id}
     , tree_{std::move(tree)}
     , tree_height_{tree_height}
-    , batch_upper_bound_{batch_upper_bound}
+    , checkpoint_upper_bound_{checkpoint_upper_bound}
     , checkpoint_lock_{std::move(checkpoint_lock)}
 {
 }
@@ -94,6 +99,27 @@ llfs::PageId Checkpoint::root_id() const
 {
   BATT_CHECK(this->root_id_) << "Forget to call Checkpoint::serialize()?";
   return *this->root_id_;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Status Checkpoint::validate_ready_to_serialize() const noexcept
+{
+  BATT_REQUIRE_OK(batt::case_of(
+      this->checkpoint_upper_bound_,
+      [](const EditOffset&) -> Status {
+        // If tree is not serialized, we should have a DeltaBatchId here, not an EditOffset!
+        //
+        return batt::StatusCode::kInternal;
+      },
+      [](const DeltaBatchId& batch_id) -> Status {
+        if (!batch_id.is_last_in_group()) {
+          return batt::StatusCode::kFailedPrecondition;
+        }
+        return OkStatus();
+      }));
+
+  return OkStatus();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -109,6 +135,8 @@ StatusOr<Checkpoint> Checkpoint::serialize(
     BATT_CHECK(this->root_id_);
     return {batt::make_copy(*this)};
   }
+
+  BATT_REQUIRE_OK(this->validate_ready_to_serialize());
 
   TreeSerializeContext serialize_context{
       tree_options,
@@ -130,7 +158,7 @@ StatusOr<Checkpoint> Checkpoint::serialize(
       new_tree_root_id,
       batt::make_copy(this->tree_),
       this->tree_height_,
-      this->batch_upper_bound_,
+      this->edit_offset_upper_bound(),
       batt::make_copy(this->checkpoint_lock_),
   };
 }
@@ -165,7 +193,72 @@ bool Checkpoint::is_durable() const noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<Checkpoint> Checkpoint::flush_batch(batt::WorkerPool& worker_pool,
+Status Checkpoint::validate_next_batch_id(const DeltaBatchId& new_batch_id) const noexcept
+{
+  {
+    // New batch groups must start with index 0!  (Batch groups are uniquely identified by their
+    // edit offset upper bound.)
+    //
+    const EditOffset current_edit_offset = this->edit_offset_upper_bound();
+    if (new_batch_id.edit_offset_upper_bound() > current_edit_offset &&
+        new_batch_id.index_in_group() != 0) {
+      return {batt::StatusCode::kInvalidArgument};
+    }
+  }
+
+  BATT_REQUIRE_OK(  //
+      batt::case_of(
+          this->checkpoint_upper_bound_,
+          [&new_batch_id](const EditOffset& old_edit_offset) -> Status {
+            // If we are applying a batch over a (serialized) edit offset, make sure we are going
+            // strictly forwards.
+            //
+            if (new_batch_id.edit_offset_upper_bound() <= old_edit_offset) {
+              return {batt::StatusCode::kInvalidArgument};
+            }
+            return OkStatus();
+          },
+          [&new_batch_id](const DeltaBatchId& old_batch_id) -> Status {
+            if (new_batch_id.edit_offset_upper_bound() == old_batch_id.edit_offset_upper_bound()) {
+              // We can't apply a batch in the same group *after* the last one!
+              //
+              if (old_batch_id.is_last_in_group()) {
+                return {batt::StatusCode::kFailedPrecondition};
+              }
+
+              // Within the same group, batches must be applied in-order and gapless.
+              //
+              if (new_batch_id.index_in_group() != old_batch_id.index_in_group() + 1) {
+                return {batt::StatusCode::kInvalidArgument};
+              }
+
+              return OkStatus();
+            }
+
+            // It is not allowed to apply batches for an older group.
+            //
+            if (new_batch_id.edit_offset_upper_bound() < old_batch_id.edit_offset_upper_bound()) {
+              return {batt::StatusCode::kInvalidArgument};
+            }
+
+            BATT_CHECK_GT(new_batch_id.edit_offset_upper_bound(),
+                          old_batch_id.edit_offset_upper_bound());
+
+            // If starting a new group, the batch in the old group must be marked as last.
+            //
+            if (!old_batch_id.is_last_in_group()) {
+              return {batt::StatusCode::kFailedPrecondition};
+            }
+
+            return OkStatus();
+          }));
+
+  return OkStatus();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+StatusOr<Checkpoint> Checkpoint::apply_batch(batt::WorkerPool& worker_pool,
                                              llfs::PageCacheJob& job,
                                              const TreeOptions& tree_options,
                                              BatchUpdateMetrics& metrics,
@@ -173,6 +266,8 @@ StatusOr<Checkpoint> Checkpoint::flush_batch(batt::WorkerPool& worker_pool,
                                              std::unique_ptr<DeltaBatch>&& delta_batch,
                                              const batt::CancelToken& cancel_token) noexcept
 {
+  BATT_REQUIRE_OK(this->validate_next_batch_id(delta_batch->batch_id()));
+
   BatchUpdate update{
       .context =
           BatchUpdateContext{
@@ -185,6 +280,8 @@ StatusOr<Checkpoint> Checkpoint::flush_batch(batt::WorkerPool& worker_pool,
       .result_set = delta_batch->consume_result_set(),
       .edit_size_totals = None,
   };
+
+  BATT_CHECK_NE(update.result_set.size(), 0);
 
   BATT_REQUIRE_OK(this->tree_->apply_batch_update(tree_options,
                                                   ParentNodeHeight{this->tree_height_ + 1},
@@ -211,7 +308,7 @@ Checkpoint Checkpoint::clone() const noexcept
   return Checkpoint{this->root_id_,
                     std::make_shared<Subtree>(this->tree_->clone_serialized_or_panic()),
                     this->tree_height_,
-                    this->batch_upper_bound_,
+                    this->checkpoint_upper_bound_,
                     this->clone_checkpoint_lock()};
 }
 

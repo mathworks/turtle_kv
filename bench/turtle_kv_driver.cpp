@@ -66,7 +66,6 @@ KVStoreDriver::SharedState::SharedState() noexcept
   this->runtime_options.initial_checkpoint_distance = 16;
   this->runtime_options.use_threaded_checkpoint_pipeline = true;
   this->runtime_options.cache_size_bytes = 64 * kGiB;
-  this->runtime_options.memtable_compact_threads = TURTLE_KV_BIG_MEM_TABLES ? 1 : 4;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -289,7 +288,8 @@ void KVStoreDriver::emit_report_impl(keyvcr::ReportEmitter& dst)
     emit_param(kProfileHeapConfigParamName, TURTLE_KV_ENABLE_TCMALLOC_HEAP_PROFILING);
     emit_param(kProfileUpdatesConfigParamName, TURTLE_KV_PROFILE_UPDATES);
     emit_param(kProfileQueriesConfigParamName, TURTLE_KV_PROFILE_QUERIES);
-    emit_param(kBigMemTablesConfigParamName, TURTLE_KV_BIG_MEM_TABLES);
+    emit_param(kBigMemTablesConfigParamName,
+               1);  // TODO [tastolfi 2026-03-19] remove this eventually
 
     for (const auto& [name, value] : this->shared_->saved_params) {
       emit_param(name, value);

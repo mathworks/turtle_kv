@@ -84,6 +84,9 @@ inline Status ART<ValueT>::insert(std::string_view key, InserterT&& inserter)
       const usize common_len =
           detail::find_common_prefix_len(node_prefix, node_prefix_len, key_data, key_len);
 
+      // If the key matches the prefix of the current node only partially, then we must split the
+      // prefix and insert a new parent node.
+      //
       if (common_len != node_prefix_len) {
         //----- --- -- -  -  -   -
         SeqMutex<u32>::WriteLock parent_write_lock{parent->mutex_};
@@ -510,8 +513,10 @@ inline auto ART<ValueT>::grow_node(LeafNode* old_node) -> Node4*
   new_node->set_prefix(old_node->prefix(), old_node->prefix_len_);
 
   if (old_node->is_terminal()) {
-    ARTBase::construct_value_copy(old_node, new_node, batt::StaticType<ValueT>{});
+    ARTBase::construct_value_copy_node(old_node, new_node, batt::StaticType<ValueT>{});
   }
+
+  BATT_CHECK_EQ(old_node->is_terminal(), new_node->is_terminal());
 
   return new_node;
 }
@@ -531,8 +536,10 @@ inline auto ART<ValueT>::grow_node(Node4* old_node) -> Node16*
   std::copy(old_node->branches_.begin(), old_node->branches_.end(), new_node->branches_.begin());
 
   if (old_node->is_terminal()) {
-    ARTBase::construct_value_copy(old_node, new_node, batt::StaticType<ValueT>{});
+    ARTBase::construct_value_copy_node(old_node, new_node, batt::StaticType<ValueT>{});
   }
+
+  BATT_CHECK_EQ(old_node->is_terminal(), new_node->is_terminal());
 
   return new_node;
 }
@@ -554,8 +561,10 @@ inline auto ART<ValueT>::grow_node(Node16* old_node) -> Node48*
   }
 
   if (old_node->is_terminal()) {
-    ARTBase::construct_value_copy(old_node, new_node, batt::StaticType<ValueT>{});
+    ARTBase::construct_value_copy_node(old_node, new_node, batt::StaticType<ValueT>{});
   }
+
+  BATT_CHECK_EQ(old_node->is_terminal(), new_node->is_terminal());
 
   return new_node;
 }
@@ -577,8 +586,10 @@ auto ART<ValueT>::grow_node(Node48* old_node) -> Node256*
   }
 
   if (old_node->is_terminal()) {
-    ARTBase::construct_value_copy(old_node, new_node, batt::StaticType<ValueT>{});
+    ARTBase::construct_value_copy_node(old_node, new_node, batt::StaticType<ValueT>{});
   }
+
+  BATT_CHECK_EQ(old_node->is_terminal(), new_node->is_terminal());
 
   return new_node;
 }
@@ -604,8 +615,10 @@ inline auto ART<ValueT>::clone_node(LeafNode* orig_node, usize prefix_offset) ->
   new_node->assign_from(*orig_node, prefix_offset);
 
   if (orig_node->is_terminal()) {
-    ARTBase::construct_value_copy(orig_node, new_node, batt::StaticType<ValueT>{});
+    ARTBase::construct_value_copy_node(orig_node, new_node, batt::StaticType<ValueT>{});
   }
+
+  BATT_CHECK_EQ(orig_node->is_terminal(), new_node->is_terminal());
 
   return new_node;
 }
@@ -622,8 +635,10 @@ inline auto ART<ValueT>::clone_node(Node4* orig_node, usize prefix_offset) -> No
   new_node->assign_from(*orig_node, prefix_offset);
 
   if (orig_node->is_terminal()) {
-    ARTBase::construct_value_copy(orig_node, new_node, batt::StaticType<ValueT>{});
+    ARTBase::construct_value_copy_node(orig_node, new_node, batt::StaticType<ValueT>{});
   }
+
+  BATT_CHECK_EQ(orig_node->is_terminal(), new_node->is_terminal());
 
   return new_node;
 }
@@ -640,8 +655,10 @@ inline auto ART<ValueT>::clone_node(Node16* orig_node, usize prefix_offset) -> N
   new_node->assign_from(*orig_node, prefix_offset);
 
   if (orig_node->is_terminal()) {
-    ARTBase::construct_value_copy(orig_node, new_node, batt::StaticType<ValueT>{});
+    ARTBase::construct_value_copy_node(orig_node, new_node, batt::StaticType<ValueT>{});
   }
+
+  BATT_CHECK_EQ(orig_node->is_terminal(), new_node->is_terminal());
 
   return new_node;
 }
@@ -658,8 +675,10 @@ inline auto ART<ValueT>::clone_node(Node48* orig_node, usize prefix_offset) -> N
   new_node->assign_from(*orig_node, prefix_offset);
 
   if (orig_node->is_terminal()) {
-    ARTBase::construct_value_copy(orig_node, new_node, batt::StaticType<ValueT>{});
+    ARTBase::construct_value_copy_node(orig_node, new_node, batt::StaticType<ValueT>{});
   }
+
+  BATT_CHECK_EQ(orig_node->is_terminal(), new_node->is_terminal());
 
   return new_node;
 }
@@ -676,8 +695,10 @@ inline auto ART<ValueT>::clone_node(Node256* orig_node, usize prefix_offset) -> 
   new_node->assign_from(*orig_node, prefix_offset);
 
   if (orig_node->is_terminal()) {
-    ARTBase::construct_value_copy(orig_node, new_node, batt::StaticType<ValueT>{});
+    ARTBase::construct_value_copy_node(orig_node, new_node, batt::StaticType<ValueT>{});
   }
+
+  BATT_CHECK_EQ(orig_node->is_terminal(), new_node->is_terminal());
 
   return new_node;
 }

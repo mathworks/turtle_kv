@@ -1,6 +1,14 @@
+//=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
+//
+// Part of the TurtleKV Project, under Apache License v2.0.
+// See https://www.apache.org/licenses/LICENSE-2.0 for license information.
+// SPDX short identifier: Apache-2.0
+//
+//+++++++++++-+-+--+----- --- -- -  -  -   -
+
 #pragma once
 
-#include <turtle_kv/mem_table_entry.hpp>
+#include <turtle_kv/mem_table/mem_table_entry.hpp>
 
 #include <turtle_kv/import/int_types.hpp>
 #include <turtle_kv/import/slice.hpp>
@@ -13,6 +21,17 @@
 #include <vector>
 
 namespace turtle_kv {
+
+namespace deprecated {
+
+#if 0
+
+inline u64 get_key_hash_val(const std::string_view& key)
+{
+  // Always set the lsb to 1, so that we can reserve 0 as a sentinel value ─────┐
+  //                                                                            ▼
+  return absl::container_internal::hash_default_hash<std::string_view>{}(key) | 1;
+}
 
 class ConcurrentHashIndex
 {
@@ -307,5 +326,7 @@ class ConcurrentHashIndex
     }
   }
 };
+#endif
+}  // namespace deprecated
 
 }  // namespace turtle_kv

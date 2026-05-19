@@ -171,9 +171,14 @@ class CheckpointGenerator
   //
   usize current_batch_count_ = 0;
 
-  // The least delta batch id that is greater than the largest batch id applied.
+  // The id of the previous batch applied to the checkpoint.
   //
-  DeltaBatchId batch_id_upper_bound_ = DeltaBatchId::min_value();
+  Optional<DeltaBatchId> prev_batch_id_;
+
+  // Once a group of batches has been fully applied, this member holds the edit offset upper bound
+  // of that group.
+  //
+  Optional<EditOffset> prev_group_edit_offset_upper_bound_;
 
   // The previous PageCache job, which may contain pages referenced by `base_checkpoint_tree`, but
   // which are not yet written to storage.

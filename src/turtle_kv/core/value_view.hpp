@@ -1,3 +1,11 @@
+//=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
+//
+// Part of the TurtleKV Project, under Apache License v2.0.
+// See https://www.apache.org/licenses/LICENSE-2.0 for license information.
+// SPDX short identifier: Apache-2.0
+//
+//+++++++++++-+-+--+----- --- -- -  -  -   -
+
 #pragma once
 
 #include <turtle_kv/core/packed_page_slice.hpp>
@@ -24,14 +32,20 @@ class ValueView
   struct I32Data {
   };
 
-  enum OpCode : u16 {
+  union DataUnion {
+    const char* ptr_;
+    char chars_[sizeof(const char*)];
+    little_i32 i32_;
+  };
+
+  enum OpCode : u8 {
     OP_DELETE = 0,
     OP_NOOP = 1,
     OP_WRITE = 2,
     OP_ADD_I32 = 3,
     OP_PAGE_SLICE = 4,
     BEGIN_OP_UNDEFINED,
-    END_OP_UNDEFINED = 0x7fff,
+    END_OP_UNDEFINED = 0x7f,
   };
 
   friend inline std::ostream& operator<<(std::ostream& out, OpCode code)
@@ -59,39 +73,56 @@ class ValueView
     return out << "???";
   }
 
-  using OpCodePair = u32;
+  using TagInt32 = u32;
+
+  static constexpr usize kTagSizeBytes = sizeof(TagInt32);
+  static_assert(kTagSizeBytes == 4);
+
+  static constexpr usize kTagSizeBits = kTagSizeBytes * 8;
+  static_assert(kTagSizeBits == 32);
+
+  static constexpr usize kOpSizeBytes = sizeof(OpCode);
+  static_assert(kOpSizeBytes == 1);
+
+  static constexpr usize kOpSizeBits = kOpSizeBytes * 8;
+  static_assert(kOpSizeBits == 8);
+
+  using OpCodePair = u16;
+  static_assert(sizeof(OpCodePair) == 2 * sizeof(OpCode));
 
   static constexpr OpCodePair op_pair(OpCode first, OpCode second)
   {
-    return (u32{first} << 16) | u32{second};
+    return (OpCodePair{first} << kOpSizeBits) | OpCodePair{second};
   }
 
   static constexpr usize kMaxSmallStrSize = 8;
-  static constexpr i32 kOpShift = (64 - 16);
-  static constexpr u64 kMaxSize = (u64{1} << kOpShift) - 1;
-  static constexpr u64 kSizeMask = kMaxSize;
-  static constexpr i32 kInlineShift = 63;
-  static constexpr u64 kInlineMask = u64{1} << kInlineShift;
-  static constexpr u64 kOpMask = ~(kSizeMask | kInlineMask);
+  static_assert(kMaxSmallStrSize == sizeof(const char*));
 
-  static u64 tag_from_op_and_size(bool is_inline, u64 op, u64 size)
+  static constexpr i32 kOpShift = (kTagSizeBits - kOpSizeBits);
+  static constexpr TagInt32 kOpMask = TagInt32{0x7f} << kOpShift;
+  static constexpr usize kMaxSize = (TagInt32{1} << kOpShift) - 1;
+  static constexpr TagInt32 kSizeMask = kMaxSize;
+
+  static constexpr i32 kInlineShift = kTagSizeBits - 1;
+  static constexpr TagInt32 kInlineMask = TagInt32{1} << kInlineShift;
+
+  static TagInt32 tag_from_op_and_size(TagInt32 is_inline, TagInt32 op, TagInt32 size)
   {
-    // TODO [tastolfi 2022-06-14] Add a one-time post read validation function to do all these
-    // checks, in case of corrupted/malicious data.
-    //
     BATT_ASSERT_LE(size, kMaxSize);
     BATT_ASSERT_LT(op, BEGIN_OP_UNDEFINED);
     BATT_ASSERT((int)is_inline == 0 || (int)is_inline == 1);
 
-    return (u64{is_inline} << kInlineShift) | ((op << kOpShift) & kOpMask) | (size & kSizeMask);
+    return ((is_inline << kInlineShift) & kInlineMask)  //
+           | ((op << kOpShift) & kOpMask)               //
+           | (size & kSizeMask);
   }
 
-  static constexpr OpCode op_from_tag(u64 tag)
+  static constexpr OpCode op_from_tag(TagInt32 tag)
   {
     return static_cast<OpCode>((tag & kOpMask) >> kOpShift);
   }
 
-  static constexpr u64 size_from_tag(u64 tag)
+  static constexpr usize size_from_tag(TagInt32 tag)
   {
     return tag & kSizeMask;
   }
@@ -100,6 +131,11 @@ class ValueView
   {
     static const char* empty_str_ = "";
     return ValueView{OP_DELETE, PtrData{}, empty_str_, 0};
+  }
+
+  static ValueView from_tag_and_data_union(TagInt32 tag, DataUnion data_union)
+  {
+    return ValueView{tag, data_union};
   }
 
   static ValueView from_packed(OpCode op, const std::string_view& str)
@@ -155,58 +191,36 @@ class ValueView
   }
 
  private:
+  explicit ValueView(TagInt32 tag, DataUnion data_union) noexcept : tag_{tag}, data_{data_union}
+  {
+  }
+
   explicit ValueView(OpCode op, PtrData, const char* ptr, usize size) noexcept
-      : size_tag_{tag_from_op_and_size(false, op, size)}
+      : tag_{tag_from_op_and_size(/*is_inline=*/0, op, size)}
   {
     this->data_.ptr_ = ptr;
   }
 
   explicit ValueView(OpCode op, InlineData, const char* ptr, usize size) noexcept
-      : size_tag_{tag_from_op_and_size(true, op, size)}
+      : tag_{tag_from_op_and_size(/*is_inline=*/1, op, size)}
   {
     std::memcpy(this->data_.chars_, ptr, size);
   }
 
   explicit ValueView(OpCode op, I32Data, i32 i) noexcept
-      : size_tag_{tag_from_op_and_size(true, op, sizeof(i32))}
+      : tag_{tag_from_op_and_size(/*is_inline=*/1, op, sizeof(i32))}
   {
     this->data_.i32_ = i;
   }
 
  public:
-  ValueView() noexcept : size_tag_{tag_from_op_and_size(true, OP_NOOP, 0)}
+  ValueView() noexcept : tag_{tag_from_op_and_size(/*is_inline=*/1, OP_NOOP, 0)}
   {
   }
 
   bool is_self_contained() const
   {
-    return this->size_tag_ & kInlineMask;
-  }
-
-  HasPageRefs has_page_refs() const
-  {
-    if (this->op() == OP_PAGE_SLICE) {
-      return HasPageRefs{true};
-    }
-    return HasPageRefs{false};
-  }
-
-  batt::BoxedSeq<llfs::PageId> trace_refs() const
-  {
-    if (this->op() == OP_PAGE_SLICE) {
-      StatusOr<const PackedPageSlice&> page_slice = this->as_page_slice();
-      if (page_slice.ok()) {
-        return {batt::seq::single_item(page_slice->page_id)       //
-                | batt::seq::map(BATT_OVERLOADS_OF(get_page_id))  //
-                | batt::seq::boxed()};
-      }
-      LOG(ERROR) << "Invalid PackedPageSlice detected! (returning empty page ref set)"
-                 << BATT_INSPECT(page_slice.status());
-      //
-      // fall-through
-    }
-
-    return {batt::seq::Empty<llfs::PageId>{} | batt::seq::boxed()};
+    return this->tag_ & kInlineMask;
   }
 
   bool empty() const
@@ -232,19 +246,6 @@ class ValueView
     return batt::ConstBuffer{this->data(), this->size()};
   }
 
-  StatusOr<const PackedPageSlice&> as_page_slice() const
-  {
-    return llfs::unpack_cast<PackedPageSlice>(this->as_buffer());
-  }
-
-  StatusOr<llfs::PageId> as_page_id() const
-  {
-    StatusOr<const PackedPageSlice&> packed = this->as_page_slice();
-    BATT_REQUIRE_OK(packed);
-
-    return packed->page_id.unpack();
-  }
-
   i32 as_i32() const
   {
     switch (this->size()) {
@@ -261,14 +262,24 @@ class ValueView
     }
   }
 
+  DataUnion get_data_union() const
+  {
+    return this->data_;
+  }
+
   usize size() const
   {
-    return size_from_tag(this->size_tag_);
+    return size_from_tag(this->tag_);
   }
 
   OpCode op() const
   {
-    return static_cast<OpCode>(op_from_tag(this->size_tag_));
+    return static_cast<OpCode>(op_from_tag(this->tag_));
+  }
+
+  TagInt32 tag() const
+  {
+    return this->tag_;
   }
 
   bool is_delete() const
@@ -299,17 +310,13 @@ class ValueView
   }
 
  private:
-  usize size_tag_;
-  union data_type {
-    const char* ptr_;
-    char chars_[sizeof(const char*)];
-    little_i32 i32_;
-  } data_;
+  TagInt32 tag_;
+  u8 pad_[4];
+  DataUnion data_;
 };
 
-namespace {
-BATT_STATIC_ASSERT_EQ(sizeof(ValueView), sizeof(std::string_view));
-}
+static_assert(sizeof(ValueView) == 16);
+static_assert(sizeof(ValueView) == sizeof(std::string_view));
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //

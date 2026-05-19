@@ -38,7 +38,8 @@ using turtle_kv::testing::RandomStringGenerator;
 using turtle_kv::drop_item_range;
 
 using llfs::KeyRangeOrder;
-using llfs::StableStringStore;
+
+using batt::StableStringStore;
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
@@ -172,7 +173,7 @@ TEST(PiecewiseFilterTest, KeyQueryTest)
     //
     std::default_random_engine rng{i};
     RandomStringGenerator generate_key;
-    llfs::StableStringStore store;
+    StableStringStore store;
     std::unordered_set<std::string_view> keys_set;
     for (u32 j = 0; j < num_keys; ++j) {
       std::string_view key = generate_key(rng, store);

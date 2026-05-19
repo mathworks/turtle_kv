@@ -1,3 +1,11 @@
+//=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
+//
+// Part of the TurtleKV Project, under Apache License v2.0.
+// See https://www.apache.org/licenses/LICENSE-2.0 for license information.
+// SPDX short identifier: Apache-2.0
+//
+//+++++++++++-+-+--+----- --- -- -  -  -   -
+
 #include <turtle_kv/kv_store.hpp>
 //
 #include <turtle_kv/kv_store.hpp>
@@ -121,10 +129,6 @@ class KVStoreTest : public ::testing::Test
                          this->kv_store_config.tree_options,
                          this->runtime_options);
   }
-
-  // TODO: [Gabe Bornstein 2/4/26] Consider adding a lambda parameter that could take variable #
-  // params, and implement test specific logic for each iteration of the loop.
-  //
   void PopulateKVStore(KVStore& kv_store,
                        u64 num_puts,
                        std::map<std::string, std::string>* out_data = nullptr)
@@ -139,7 +143,6 @@ class KVStoreTest : public ::testing::Test
       if (out_data) {
         (*out_data)[key] = value;
       }
-
       VLOG(3) << "Put key==" << key << ", value==" << value;
     }
   }
@@ -168,6 +171,8 @@ class KVStoreTest : public ::testing::Test
 //
 TEST_F(KVStoreTest, CreateAndOpen)
 {
+  constexpr bool kQuiet = true;
+
   batt::StatusOr<std::filesystem::path> root = turtle_kv::data_root();
   ASSERT_TRUE(root.ok());
 
@@ -193,8 +198,10 @@ TEST_F(KVStoreTest, CreateAndOpen)
       }
       tree_options.set_size_tiered(size_tiered);
 
-      LOG(INFO) << BATT_INSPECT(tree_options.filter_bits_per_key())
-                << BATT_INSPECT(tree_options.filter_page_size());
+      if constexpr (!kQuiet) {
+        LOG(INFO) << BATT_INSPECT(tree_options.filter_bits_per_key())
+                  << BATT_INSPECT(tree_options.filter_page_size());
+      }
 
       auto runtime_options = KVStore::RuntimeOptions::with_default_values();
       runtime_options.use_threaded_checkpoint_pipeline = true;
@@ -207,7 +214,9 @@ TEST_F(KVStoreTest, CreateAndOpen)
                  "data/workloads/workload-e.txt",
              }) {
           if (size_tiered && std::strstr(workload_file, "workload-e")) {
-            LOG(INFO) << "Skipping workload-e (scans) for size-tiered config";
+            if constexpr (!kQuiet) {
+              LOG(INFO) << "Skipping workload-e (scans) for size-tiered config";
+            }
             continue;
           }
 
@@ -227,7 +236,8 @@ TEST_F(KVStoreTest, CreateAndOpen)
                                                    kv_store_config,     //
                                                    RemoveExisting{true});
 
-            ASSERT_TRUE(create_status.ok()) << BATT_INSPECT(create_status);
+            ASSERT_TRUE(create_status.ok())
+                << BATT_INSPECT(create_status) << BATT_INSPECT(test_kv_store_dir);
           }
 
           auto p_storage_context =
@@ -257,25 +267,28 @@ TEST_F(KVStoreTest, CreateAndOpen)
 
           EXPECT_GT(op_count, 100000);
 
-          LOG(INFO) << "--";
-          LOG(INFO) << workload_file;
-          LOG(INFO) << BATT_INSPECT(op_count) << BATT_INSPECT(kv_store.metrics().checkpoint_count);
-          {
-            auto& m = kv_store.metrics();
-            LOG(INFO) << BATT_INSPECT(m.avg_edits_per_batch());
-            LOG(INFO) << BATT_INSPECT(m.compact_batch_latency);
-            LOG(INFO) << BATT_INSPECT(m.apply_batch_latency);
-            LOG(INFO) << BATT_INSPECT(m.finalize_checkpoint_latency);
-            LOG(INFO) << BATT_INSPECT(m.append_job_latency);
-          }
+          if constexpr (!kQuiet) {
+            LOG(INFO) << "--";
+            LOG(INFO) << workload_file;
+            LOG(INFO) << BATT_INSPECT(op_count)
+                      << BATT_INSPECT(kv_store.metrics().checkpoint_count);
+            {
+              auto& m = kv_store.metrics();
+              LOG(INFO) << BATT_INSPECT(m.avg_edits_per_batch());
+              LOG(INFO) << BATT_INSPECT(m.compact_batch_latency);
+              LOG(INFO) << BATT_INSPECT(m.apply_batch_latency);
+              LOG(INFO) << BATT_INSPECT(m.finalize_checkpoint_latency);
+              LOG(INFO) << BATT_INSPECT(m.append_job_latency);
+            }
 
-          for (usize i = 1; i < time_points.size(); ++i) {
-            double elapsed = (time_points[i].seconds - time_points[i - 1].seconds);
-            double rate =
-                (time_points[i].op_count - time_points[i - 1].op_count) / std::max(1e-10, elapsed);
+            for (usize i = 1; i < time_points.size(); ++i) {
+              double elapsed = (time_points[i].seconds - time_points[i - 1].seconds);
+              double rate = (time_points[i].op_count - time_points[i - 1].op_count) /
+                            std::max(1e-10, elapsed);
 
-            LOG(INFO) << BATT_INSPECT(chi) << " | " << time_points[i].label << ": " << rate
-                      << " ops/sec";
+              LOG(INFO) << BATT_INSPECT(chi) << " | " << time_points[i].label << ": " << rate
+                        << " ops/sec";
+            }
           }
         }
       }
@@ -500,7 +513,7 @@ TEST_P(CheckpointTest, CheckpointRecovery)
 
   // There is no checkpoint
   //
-  if (checkpoint->batch_upper_bound() == turtle_kv::DeltaBatchId::from_u64(0)) {
+  if (checkpoint->is_empty()) {
     LOG(INFO) << "No checkpoint data found. Exiting the test before checking keys.";
     EXPECT_TRUE(this->num_checkpoints_to_create == 0 || this->num_puts == 0)
         << "Expected checkpoint data but found none.";
@@ -521,74 +534,117 @@ TEST_P(CheckpointTest, CheckpointRecovery)
     batt::StatusOr<turtle_kv::ValueView> checkpoint_value = checkpoint->find_key(key_query);
 
     EXPECT_TRUE(checkpoint_value.ok()) << "Didn't find key: " << key;
+    EXPECT_EQ(checkpoint_value->as_str(), actual_value);
   }
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-TEST_F(KVStoreTest, ChangeLogRecovery)
+class KVStoreRecoveryTest
+    : public KVStoreTest
+    , public testing::WithParamInterface<u64>
 {
-  const u64 num_puts = 100000;
+ public:
+  void SetUp() override
+  {
+    KVStoreTest::SetUp();
+    this->num_puts = GetParam();
+  }
 
-  std::filesystem::path test_kv_store_dir =
-      this->data_root / "turtle_kv_Test" / "change_log_recovery";
+  u64 num_puts;
+};
 
-  StatusOr<std::unique_ptr<KVStore>> open_result = this->CreateAndOpenKVStore(test_kv_store_dir);
-  ASSERT_TRUE(open_result.ok()) << BATT_INSPECT(open_result.status());
-
-  std::unique_ptr<KVStore>& kv_store = *open_result;
-
-  kv_store->set_checkpoint_distance(5);
-
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+TEST_P(KVStoreRecoveryTest, KVStoreRecovery)
+{
+  std::filesystem::path test_kv_store_dir = this->data_root / "turtle_kv_Test" / "kvstore_recovery";
   std::map<std::string, std::string> expected_keys_values;
-  this->PopulateKVStore(*kv_store, num_puts, &expected_keys_values);
 
-  this->ShutdownKVStore(kv_store);
+  {
+    StatusOr<std::unique_ptr<KVStore>> open_result = this->CreateAndOpenKVStore(test_kv_store_dir);
+    ASSERT_TRUE(open_result.ok()) << BATT_INSPECT(open_result.status());
 
-  batt::StatusOr<std::unique_ptr<turtle_kv::ChangeLogFile>> change_log_file =
-      turtle_kv::ChangeLogFile::open(test_kv_store_dir / "change_log.turtle_kv");
+    std::unique_ptr<KVStore>& kv_store = *open_result;
 
-  ASSERT_TRUE(change_log_file.ok());
-  batt::StatusOr<std::vector<boost::intrusive_ptr<turtle_kv::ChangeLogBlock>>> blocks =
-      (*change_log_file)->read_blocks_into_vector();
+    kv_store->set_checkpoint_distance(1);
 
-  ASSERT_TRUE(blocks.ok()) << BATT_INSPECT(blocks.status());
+    this->PopulateKVStore(*kv_store, this->num_puts, &expected_keys_values);
 
-  int i = 0;
-  for (auto block : *blocks) {
-    ASSERT_TRUE(block->verify().ok());
-    VLOG(1) << "Reading block " << i << " with owner_id() == " << block->owner_id()
-            << ", and block_size() == " << block->block_size();
-    ASSERT_NE(block->owner_id(), 0);
-    ASSERT_NE(block->block_size(), 0);
-    ++i;
+    // TODO: [Gabe Bornstein 3/17/26] Replace with fsync once it's implemented.
+    //
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    this->ShutdownKVStore(kv_store);
+  }
+
+  {
+    StatusOr<std::unique_ptr<KVStore>> recovered_kv_store =
+        turtle_kv::KVStore::open(test_kv_store_dir,
+                                 this->kv_store_config.tree_options,
+                                 this->runtime_options);
+
+    ASSERT_TRUE(recovered_kv_store.ok()) << BATT_INSPECT(recovered_kv_store.status());
+
+    // TODO: [Gabe Bornstein 4/14/26] Replace with fsync once it's implemented.
+    //
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+
+    for (const auto& [key, expected_value] : expected_keys_values) {
+      turtle_kv::KeyView key_view{key};
+      batt::StatusOr<turtle_kv::ValueView> actual_value = (*recovered_kv_store)->get(key_view);
+
+      EXPECT_TRUE(actual_value.ok()) << "Didn't find key: " << key;
+      EXPECT_EQ(actual_value->as_str(), expected_value)
+          << "Didn't find the correct value for key: " << key;
+    }
   }
 }
 
+// TODO: [Gabe Bornstein 3/18/26] Add some test points where we test recovery with updates and
+// deletes, not just inserts.
+//
+
 }  // namespace
 
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+std::string format_checkpoint_recovery_test_name(
+    const ::testing::TestParamInfo<CheckpointTestParams>& info)
+{
+  return batt::to_string("NumCheckpoints",
+                         info.param.num_checkpoints_to_create,
+                         "NumPuts",
+                         info.param.num_puts);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 // CheckpointTestParams == {num_puts, num_checkpoints_to_create}
 //
 INSTANTIATE_TEST_SUITE_P(
     RecoveringCheckpoints,
     CheckpointTest,
-    testing::Values(
-        // TODO: [Gabe Bornstein 11/5/25] Investigate: We aren't getting any
-        // checkpoint data for this case, but we are forcing a checkpoint.
-        // CheckpointTestParams(1, 1),
-        // TODO: [Gabe Bornstein 11/5/25] Investigate: We aren't
-        // getting any checkpoint data for this case, but we are
-        // forcing a checkpoint. Maybe keys aren't being flushed?
-        // CheckpointTestParams(1, 100),
-        // TODO: [Gabe Bornstein 11/5/25] Investigate: We ARE
-        // getting checkpoint data for this case. Does taking additional checkpoints flush keys?
-        CheckpointTestParams{.num_checkpoints_to_create = 2, .num_puts = 100},
-        CheckpointTestParams{.num_checkpoints_to_create = 100, .num_puts = 100},
-        CheckpointTestParams{.num_checkpoints_to_create = 1, .num_puts = 100000},
-        CheckpointTestParams{.num_checkpoints_to_create = 1, .num_puts = 0},
-        CheckpointTestParams{.num_checkpoints_to_create = 0, .num_puts = 100},
-        CheckpointTestParams{.num_checkpoints_to_create = 5, .num_puts = 100000},
-        CheckpointTestParams{.num_checkpoints_to_create = 10, .num_puts = 100000}
-        //  TODO: [Gabe Bornstein 11/6/25] Sporadic Failing. Likely cause by keys not
-        //  being flushed before that last checkpoint is taken. Need fsync to resolve.
-        /*CheckpointTestParams(101, 100000)*/));
+    testing::Values(CheckpointTestParams{.num_checkpoints_to_create = 1, .num_puts = 1},
+                    CheckpointTestParams{.num_checkpoints_to_create = 1, .num_puts = 100},
+                    CheckpointTestParams{.num_checkpoints_to_create = 2, .num_puts = 100},
+                    CheckpointTestParams{.num_checkpoints_to_create = 100, .num_puts = 100},
+                    CheckpointTestParams{.num_checkpoints_to_create = 1, .num_puts = 100000},
+                    CheckpointTestParams{.num_checkpoints_to_create = 1, .num_puts = 0},
+                    CheckpointTestParams{.num_checkpoints_to_create = 0, .num_puts = 100},
+                    CheckpointTestParams{.num_checkpoints_to_create = 5, .num_puts = 100000},
+                    CheckpointTestParams{.num_checkpoints_to_create = 10, .num_puts = 100000},
+                    CheckpointTestParams{.num_checkpoints_to_create = 101, .num_puts = 100000}),
+    format_checkpoint_recovery_test_name);
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+std::string format_kv_store_recovery_test_name(const ::testing::TestParamInfo<u64>& info)
+{
+  return batt::to_string("NumPuts", info.param);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+INSTANTIATE_TEST_SUITE_P(RecoveringKVStore,
+                         KVStoreRecoveryTest,
+                         testing::Values(u64{0}, u64{1}, u64{100}, u64{1000}, u64{100000}),
+                         format_kv_store_recovery_test_name);

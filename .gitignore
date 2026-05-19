@@ -3,3 +3,4 @@ build/
 CMakeUserPresets.json
 .cache/
 compile_commands.json
+/tests/*.generated.yml

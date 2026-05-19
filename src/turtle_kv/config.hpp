@@ -90,10 +90,6 @@
 #define TURTLE_KV_PROFILE_QUERIES 1
 #endif
 
-/** \brief Enable/disable creating multiple batches from a single bigger memtable.
- */
-#define TURTLE_KV_BIG_MEM_TABLES 1
-
 namespace turtle_kv {
 
 constexpr i64 kNodeLruPriority = 4;

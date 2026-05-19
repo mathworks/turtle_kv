@@ -58,8 +58,8 @@ class MetricEventCollectorThread : public keyvcr::PeriodicEventCollectorThread
     };
     //----- --- -- -  -  -   -
 
-    collect_event(kMemTableLogAllocBytes, this->metrics_.mem_table_log_bytes_allocated.get());
-    collect_event(kMemTableLogFreeBytes, this->metrics_.mem_table_log_bytes_freed.get());
+    collect_event(kMemTableLogAllocBytes, this->metrics_.mem_table.log_bytes_allocated.get());
+    collect_event(kMemTableLogFreeBytes, this->metrics_.mem_table.log_bytes_freed.get());
     collect_event(kCacheEraseBytes, cache.erase_byte_count.get());
     collect_event(kCacheEvictBytes, cache.evict_byte_count.get());
     collect_event(kCacheUnpinBytes, cache.unpinned_byte_count.get());

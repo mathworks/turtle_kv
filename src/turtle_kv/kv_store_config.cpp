@@ -27,12 +27,6 @@ namespace turtle_kv {
       .initial_checkpoint_distance = 1,
       .use_threaded_checkpoint_pipeline = true,
       .cache_size_bytes = 4 * kGiB,
-#if TURTLE_KV_BIG_MEM_TABLES
-      .memtable_compact_threads = 1,
-#else
-      .memtable_compact_threads = 4,
-#endif
-      .use_big_mem_tables = (TURTLE_KV_BIG_MEM_TABLES != 0),
   };
 }
 
@@ -128,20 +122,6 @@ std::vector<ConfigParam> initialize_config_params()
       wal_size_mb_get_set,
       wal_size_mb_get_set,
       DefaultParser<u64>::instance(),
-      DefaultFormatter::instance(),
-  });
-
-  //----- --- -- -  -  -   -
-  // big_mem_tables
-  //
-  static TypeFieldParam<KVStoreRuntimeOptions, bool> use_big_mem_tables_field{
-      &KVStoreRuntimeOptions::use_big_mem_tables};
-
-  params.push_back(ConfigParam{
-      "big_mem_tables",
-      use_big_mem_tables_field,
-      use_big_mem_tables_field,
-      DefaultParser<bool>::instance(),
       DefaultFormatter::instance(),
   });
 

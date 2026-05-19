@@ -31,17 +31,16 @@ KeyView art_scanner_get_key(ART<MemTableValueEntry>::Scanner<kSynchronized,
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 /*explicit*/ KVStoreScanner::KVStoreScanner(KVStore& kv_store, const KeyView& min_key) noexcept
-    : pinned_state_{kv_store.state_.load()}
+    : state_reader_{kv_store.state_}
     , page_loader_{kv_store.per_thread_.get(&kv_store).get_page_loader()}
     , slice_storage_{std::addressof(*(kv_store.per_thread_.get(&kv_store).scan_result_storage))}
-    , root_{this->pinned_state_->base_checkpoint_.tree()->page_id_slot_or_panic()}
+    , root_{this->state_reader_->base_checkpoint_->tree()->page_id_slot_or_panic()}
     , trie_index_sharded_view_size_{kv_store.tree_options().trie_index_sharded_view_size()}
-    , tree_height_{this->pinned_state_->base_checkpoint_.tree_height()}
+    , tree_height_{this->state_reader_->base_checkpoint_->tree_height()}
     , min_key_{min_key}
     , needs_resume_{false}
     , next_item_{None}
     , status_{OkStatus()}
-    , mem_table_scanner_{}
     , mem_table_value_scanner_{}
     , delta_storage_{this->static_delta_storage_.data()}
     , tree_scan_path_{}
@@ -50,16 +49,12 @@ KeyView art_scanner_get_key(ART<MemTableValueEntry>::Scanner<kSynchronized,
 {
   auto& m = KVStoreScanner::metrics();
   m.ctor_count.add(1);
+
 #if TURTLE_KV_PROFILE_QUERIES
   LatencyTimer timer{batt::Every2ToTheConst<10>{}, m.ctor_latency};
 #endif
 
-  if (this->pinned_state_->mem_table_->has_ordered_index()) {
-    this->mem_table_scanner_.emplace(this->pinned_state_->mem_table_->ordered_index(), min_key);
-  }
-  if (this->pinned_state_->mem_table_->has_art_index()) {
-    this->mem_table_value_scanner_.emplace(this->pinned_state_->mem_table_->art_index(), min_key);
-  }
+  this->mem_table_value_scanner_.emplace(this->state_reader_->mem_table_->art_index(), min_key);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -70,7 +65,7 @@ KeyView art_scanner_get_key(ART<MemTableValueEntry>::Scanner<kSynchronized,
                                             const KeyView& min_key,
                                             llfs::PageSize trie_index_sharded_view_size,
                                             PageSliceStorage* slice_storage) noexcept
-    : pinned_state_{nullptr}
+    : state_reader_{}
     , page_loader_{page_loader}
     , slice_storage_{slice_storage}
     , root_{root}
@@ -80,7 +75,6 @@ KeyView art_scanner_get_key(ART<MemTableValueEntry>::Scanner<kSynchronized,
     , needs_resume_{false}
     , next_item_{None}
     , status_{OkStatus()}
-    , mem_table_scanner_{None}
     , delta_storage_{this->static_delta_storage_.data()}
     , tree_scan_path_{}
     , scan_levels_{}
@@ -107,12 +101,12 @@ Status KVStoreScanner::start()
   LatencyTimer timer{batt::Every2ToTheConst<10>{}, m.start_latency};
 #endif
 
-  if (this->pinned_state_) {
+  if (this->state_reader_) {
 #if TURTLE_KV_PROFILE_QUERIES
     LatencyTimer timer{batt::Every2ToTheConst<10>{}, m.start_deltas_latency};
 #endif
 
-    const usize n_deltas = this->pinned_state_->deltas_.size();
+    const usize n_deltas = this->state_reader_->deltas_.size();
 
     // Reserve space for MemTable (active + deltas) in ScanLevels.
     //
@@ -120,14 +114,8 @@ Status KVStoreScanner::start()
 
     // Create the active MemTable scanner.
     //
-    BATT_CHECK(this->mem_table_scanner_ || this->mem_table_value_scanner_);
-    if (this->mem_table_scanner_) {
-      if (!this->mem_table_scanner_->is_done()) {
-        this->scan_levels_.emplace_back(ActiveMemTableTag{},
-                                        *this->pinned_state_->mem_table_,
-                                        *this->mem_table_scanner_);
-      }
-    } else {
+    BATT_CHECK(this->mem_table_value_scanner_);
+    {
       if (!this->mem_table_value_scanner_->is_done()) {
         this->scan_levels_.emplace_back(ActiveMemTableValueTag{}, *this->mem_table_value_scanner_);
       }
@@ -146,58 +134,22 @@ Status KVStoreScanner::start()
       for (usize delta_i = n_deltas; delta_i > 0;) {
         --delta_i;
 
-        MemTable& delta_mem_table = *this->pinned_state_->deltas_[delta_i];
+        MemTable& delta_mem_table = *this->state_reader_->deltas_[delta_i];
 
-#if !TURTLE_KV_BIG_MEM_TABLES
-
-        // Delta case 1: compacted edits vector
+        // Delta case : single ART index for keys and values
         //
-        Optional<Slice<const EditView>> compacted = delta_mem_table.poll_compacted_edits();
-        if (compacted) {
-          const EditView* last = compacted->end();
-          const EditView* first =
-              std::lower_bound(compacted->begin(), last, this->min_key_, KeyOrder{});
-          if (first != last) {
-            this->scan_levels_.emplace_back(Slice<const EditView>{first, last});
-          }
-          continue;
+        auto& art_scanner =
+            *(new (p_mem) ART<MemTableValueEntry>::Scanner<ARTBase::Synchronized::kFalse,  //
+                                                           /*kValuesOnly=*/true>{
+                delta_mem_table.art_index(),
+                this->min_key_,
+            });
+        ++p_mem;
+
+        if (!art_scanner.is_done()) {
+          this->scan_levels_.emplace_back(DeltaMemTableValueTag{}, art_scanner);
         }
-
-        // Delta case 2: hybrid hash/ordered index
-        //
-        if (delta_mem_table.has_ordered_index()) {
-          auto& art_scanner = *(new (p_mem) ART<void>::Scanner<ARTBase::Synchronized::kFalse>{
-              delta_mem_table.ordered_index(),
-              this->min_key_,
-          });
-          ++p_mem;
-
-          if (!art_scanner.is_done()) {
-            this->scan_levels_.emplace_back(DeltaMemTableTag{}, delta_mem_table, art_scanner);
-          }
-          continue;
-        }
-
-#endif  // !TURTLE_KV_BIG_MEM_TABLES
-
-        // Delta case 3: single ART index for keys and values
-        //
-        if (delta_mem_table.has_art_index()) {
-          auto& art_scanner =
-              *(new (p_mem) ART<MemTableValueEntry>::Scanner<ARTBase::Synchronized::kFalse,  //
-                                                             /*kValuesOnly=*/true>{
-                  delta_mem_table.art_index(),
-                  this->min_key_,
-              });
-          ++p_mem;
-
-          if (!art_scanner.is_done()) {
-            this->scan_levels_.emplace_back(DeltaMemTableValueTag{}, art_scanner);
-          }
-          continue;
-        }
-
-        BATT_PANIC() << "No index available for MemTable scanning!";
+        continue;
       }
     }
   }
@@ -405,7 +357,7 @@ Status KVStoreScanner::enter_subtree(i32 subtree_height,
 template <typename InsertHeapBool>
 Status KVStoreScanner::enter_leaf(llfs::PinnedPage&& pinned_page, InsertHeapBool insert_heap)
 {
-  const PackedLeafPage& leaf = PackedLeafPage::view_of(pinned_page);
+  const PackedLeafPage& leaf = *PackedLeafPage::view_of(pinned_page);
   this->tree_scan_path_.emplace_back(*this, std::move(pinned_page), leaf, insert_heap);
   return OkStatus();
 }
@@ -572,34 +524,6 @@ Status KVStoreScanner::set_next_item()
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 /*explicit*/ KVStoreScanner::ScanLevel::ScanLevel(
-    ActiveMemTableTag,
-    MemTable& mem_table,
-    ART<void>::Scanner<ARTBase::Synchronized::kTrue>& art_scanner) noexcept
-    : key{art_scanner.get_key()}
-    , state_impl{MemTableScanState<ARTBase::Synchronized::kTrue>{
-          .mem_table_ = &mem_table,
-          .art_scanner_ = &art_scanner,
-      }}
-{
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-/*explicit*/ KVStoreScanner::ScanLevel::ScanLevel(
-    DeltaMemTableTag,
-    MemTable& mem_table,
-    ART<void>::Scanner<ARTBase::Synchronized::kFalse>& art_scanner) noexcept
-    : key{art_scanner.get_key()}
-    , state_impl{MemTableScanState<ARTBase::Synchronized::kFalse>{
-          .mem_table_ = &mem_table,
-          .art_scanner_ = &art_scanner,
-      }}
-{
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-/*explicit*/ KVStoreScanner::ScanLevel::ScanLevel(
     ActiveMemTableValueTag,
     ART<MemTableValueEntry>::Scanner<ARTBase::Synchronized::kTrue, /*kValuesOnly=*/true>&
         art_scanner) noexcept
@@ -642,19 +566,6 @@ EditView KVStoreScanner::ScanLevel::item() const
         BATT_PANIC() << "illegal state";
         BATT_UNREACHABLE();
       },
-      [this](const MemTableScanState<ARTBase::Synchronized::kTrue>& state) -> EditView {
-        MemTableEntry entry;
-        const bool found = state.mem_table_->hash_index().find_key(this->key, entry);
-        BATT_CHECK(found);
-
-        return EditView{entry.key_, entry.value_};
-      },
-      [this](const MemTableScanState<ARTBase::Synchronized::kFalse>& state) -> EditView {
-        const MemTableEntry* entry = state.mem_table_->hash_index().unsynchronized_find_key(key);
-        BATT_CHECK_NOT_NULLPTR(entry);
-
-        return EditView{entry->key_, entry->value_};
-      },
       [](const MemTableValueScanState<ARTBase::Synchronized::kTrue>& state) -> EditView {
         const MemTableValueEntry& entry = state.art_scanner_->get_value();
         return EditView{entry.key_view(), entry.value_view()};
@@ -686,12 +597,6 @@ ValueView KVStoreScanner::ScanLevel::value() const
       [](NoneType) -> ValueView {
         BATT_PANIC() << "illegal state";
         BATT_UNREACHABLE();
-      },
-      [this](const MemTableScanState<ARTBase::Synchronized::kTrue>& state) -> ValueView {
-        return state.mem_table_->get(this->key).value_or_panic();
-      },
-      [this](const MemTableScanState<ARTBase::Synchronized::kFalse>& state) -> ValueView {
-        return state.mem_table_->finalized_get(this->key).value_or_panic();
       },
       [](const MemTableValueScanState<ARTBase::Synchronized::kTrue>& state) -> ValueView {
         return state.art_scanner_->get_value().value_view();
@@ -754,12 +659,6 @@ bool KVStoreScanner::ScanLevel::advance()
       [](NoneType) -> bool {
         BATT_PANIC() << "illegal state";
         BATT_UNREACHABLE();
-      },
-      [this](MemTableScanState<ARTBase::Synchronized::kTrue>& state) -> bool {
-        return scan_level_mem_table_advance_impl(this, state);
-      },
-      [this](MemTableScanState<ARTBase::Synchronized::kFalse>& state) -> bool {
-        return scan_level_mem_table_advance_impl(this, state);
       },
       [this](MemTableValueScanState<ARTBase::Synchronized::kTrue>& state) -> bool {
         return scan_level_mem_table_advance_impl(this, state);

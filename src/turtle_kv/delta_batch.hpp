@@ -1,9 +1,17 @@
+//=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
+//
+// Part of the TurtleKV Project, under Apache License v2.0.
+// See https://www.apache.org/licenses/LICENSE-2.0 for license information.
+// SPDX short identifier: Apache-2.0
+//
+//+++++++++++-+-+--+----- --- -- -  -  -   -
+
 #pragma once
+#define TURTLE_KV_DELTA_BATCH_HPP
 
 #include <turtle_kv/api_types.hpp>
-#include <turtle_kv/change_log_read_lock.hpp>
-#include <turtle_kv/delta_batch_id.hpp>
-#include <turtle_kv/mem_table.hpp>
+
+#include <turtle_kv/mem_table/mem_table.hpp>
 
 #include <turtle_kv/core/edit_view.hpp>
 #include <turtle_kv/core/merge_compactor.hpp>
@@ -22,7 +30,7 @@
 
 namespace turtle_kv {
 
-class MemTable;
+class MemTableBase;
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 
@@ -36,21 +44,11 @@ class DeltaBatch
  public:
   using ResultSet = MergeCompactor::ResultSet</*decay_to_items=*/false>;
 
-#if TURTLE_KV_BIG_MEM_TABLES
-
   /** \brief Constructs a new DeltaBatch.
    */
   explicit DeltaBatch(DeltaBatchId batch_id,
                       boost::intrusive_ptr<MemTable>&& mem_table,
                       ResultSet&& result_set) noexcept;
-
-#else  // TURTLE_KV_BIG_MEM_TABLES
-
-  /** \brief Constructs a new DeltaBatch.
-   */
-  explicit DeltaBatch(boost::intrusive_ptr<MemTable>&& mem_table) noexcept;
-
-#endif  // TURTLE_KV_BIG_MEM_TABLES
 
   /** \brief DeltaBatch objects are not copy-/move-constructible.
    */
@@ -59,35 +57,6 @@ class DeltaBatch
   /** \brief DeltaBatch objects are not copy-/move-assignable.
    */
   DeltaBatch& operator=(const DeltaBatch&) = delete;
-
-#if !TURTLE_KV_BIG_MEM_TABLES
-
-  /** \brief Merge and compact edits from the MemTable.
-   */
-  void merge_compact_edits();
-
-#endif  // !TURTLE_KV_BIG_MEM_TABLES
-
-  /** \brief Sets whether a checkpoint should be taken after this batch is applied.
-   */
-  void set_checkpoint_after(BoolStatus b)
-  {
-    this->checkpoint_after_ = b;
-  }
-
-  /** \brief Convenience.
-   */
-  void set_checkpoint_after(bool b)
-  {
-    this->checkpoint_after_ = bool_status_from(b);
-  }
-
-  /** \brief Returns whethera checkpoint should be taken after this batch is applied.
-   */
-  BoolStatus checkpoint_after() const
-  {
-    return this->checkpoint_after_;
-  }
 
   /** \brief Returns the number of compacted edits in the result set.  this->merge_compact_edits()
    * must be called before this function, or we panic.
@@ -109,13 +78,17 @@ class DeltaBatch
     return std::move(*this->result_set_);
   }
 
-  /** \brief
+  /** \brief Identifies the order of this batch relative to others in its group and other groups
+   * (with different edit offset upper bounds).
    */
-  DeltaBatchId batch_id() const noexcept;
+  const DeltaBatchId& batch_id() const noexcept
+  {
+    return this->batch_id_;
+  }
 
   /** \brief
    */
-  const MemTable& mem_table() const noexcept
+  const MemTableBase& mem_table() const noexcept
   {
     return *this->mem_table_;
   }
@@ -136,19 +109,13 @@ class DeltaBatch
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
-#if TURTLE_KV_BIG_MEM_TABLES
-
   const DeltaBatchId batch_id_;
-
-#endif  // TURTLE_KV_BIG_MEM_TABLES
 
   boost::intrusive_ptr<MemTable> mem_table_;
 
   /** \brief The merged/compacted edits from the log.
    */
   Optional<ResultSet> result_set_;
-
-  BoolStatus checkpoint_after_ = BoolStatus::kUnknown;
 };
 
 }  // namespace turtle_kv

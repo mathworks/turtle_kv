@@ -271,4 +271,6 @@ StatusOr<ValueView> find_key_in_leaf(const llfs::PageIdSlot& leaf_page_id,
 
 StatusOr<u32> find_key_lower_bound_index(llfs::PageId leaf_page_id, KeyQuery& query);
 
+StatusOr<u32> find_key_lower_bound_index(const llfs::PageIdSlot& leaf_page_id, KeyQuery& query);
+
 }  // namespace turtle_kv

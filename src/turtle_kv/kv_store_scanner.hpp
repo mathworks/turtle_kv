@@ -1,8 +1,17 @@
+//=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
+//
+// Part of the TurtleKV Project, under Apache License v2.0.
+// See https://www.apache.org/licenses/LICENSE-2.0 for license information.
+// SPDX short identifier: Apache-2.0
+//
+//+++++++++++-+-+--+----- --- -- -  -  -   -
+
 #pragma once
 
 #include <turtle_kv/kv_store.hpp>
-#include <turtle_kv/mem_table.hpp>
 #include <turtle_kv/scan_metrics.hpp>
+
+#include <turtle_kv/mem_table/mem_table.hpp>
 
 #include <turtle_kv/import/env.hpp>
 #include <turtle_kv/import/int_types.hpp>
@@ -154,8 +163,6 @@ class KVStoreScanner
     KeyView key;
 
     std::variant<NoneType,
-                 MemTableScanState<ARTBase::Synchronized::kTrue>,
-                 MemTableScanState<ARTBase::Synchronized::kFalse>,
                  MemTableValueScanState<ARTBase::Synchronized::kTrue>,
                  MemTableValueScanState<ARTBase::Synchronized::kFalse>,
                  Slice<const EditView>,
@@ -171,14 +178,6 @@ class KVStoreScanner
     explicit ScanLevel(const ShardedKeyValueSlice& kv_slice,
                        NodeScanState* frame,
                        i32 buffer_level_i) noexcept;
-
-    explicit ScanLevel(ActiveMemTableTag,
-                       MemTable& mem_table,
-                       ART<void>::Scanner<ARTBase::Synchronized::kTrue>& art_scanner) noexcept;
-
-    explicit ScanLevel(DeltaMemTableTag,
-                       MemTable& mem_table,
-                       ART<void>::Scanner<ARTBase::Synchronized::kFalse>& art_scanner) noexcept;
 
     explicit ScanLevel(
         ActiveMemTableValueTag,
@@ -335,7 +334,7 @@ class KVStoreScanner
                          alignof(ART<MemTableValueEntry>::Scanner<ARTBase::Synchronized::kFalse,
                                                                   /*kValuesOnly=*/true>))>;
 
-  boost::intrusive_ptr<const KVStore::State> pinned_state_;
+  batt::Toggle<KVStore::State>::Reader state_reader_;
   llfs::PageLoader& page_loader_;
   PageSliceStorage* slice_storage_;
   llfs::PageIdSlot root_;

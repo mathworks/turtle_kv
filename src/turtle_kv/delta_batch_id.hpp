@@ -1,4 +1,17 @@
+//=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
+//
+// Part of the TurtleKV Project, under Apache License v2.0.
+// See https://www.apache.org/licenses/LICENSE-2.0 for license information.
+// SPDX short identifier: Apache-2.0
+//
+//+++++++++++-+-+--+----- --- -- -  -  -   -
+
 #pragma once
+#define TURTLE_KV_DELTA_BATCH_ID_HPP
+
+#include <turtle_kv/api_types.hpp>
+
+#include <turtle_kv/change_log/edit_offset.hpp>
 
 #include <turtle_kv/import/int_types.hpp>
 
@@ -11,117 +24,88 @@
 
 namespace turtle_kv {
 
-struct DeltaBatchId {
+class DeltaBatchId
+{
+ public:
   using Self = DeltaBatchId;
-
-  //----- --- -- -  -  -   -
-
-  static constexpr i32 kBatchIndexBits = 16;
-  static constexpr i32 kMemTableIdBits = 64 - kBatchIndexBits;
-  static constexpr u64 kMaxDifference = (u64{1} << 63) - 1;
-  static constexpr u64 kBatchIndexMask = (u64{1} << 16) - 1;
-  static constexpr u64 kMemTableIdMask = ~kBatchIndexMask;
-
-  //----- --- -- -  -  -   -
-
-  static Self from_u64(u64 i)
-  {
-    return Self{
-        .value_ = i,
-    };
-  }
-
-  static Self min_value()
-  {
-    return Self::from_u64(0);
-  }
-
-  static Self from_mem_table_id(u64 mem_table_id, u64 batch_index = 0) noexcept
-  {
-    return Self{
-        .value_ = (mem_table_id & kMemTableIdMask) | (batch_index & kBatchIndexMask),
-    };
-  }
 
   //+++++++++++-+-+--+----- --- -- -  -  -   --
 
-  u64 value_;
+  DeltaBatchId(EditOffset edit_offset_upper_bound,
+               IndexInGroup index_in_group,
+               IsLastInGroup is_last_in_group) noexcept
+      : edit_offset_upper_bound_{edit_offset_upper_bound}
+      , index_in_group_{index_in_group}
+      , is_last_in_group_{is_last_in_group}
+  {
+  }
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  u64 int_value() const noexcept
+  EditOffset edit_offset_upper_bound() const noexcept
   {
-    return this->value_;
+    return this->edit_offset_upper_bound_;
   }
 
-  u64 to_mem_table_id() const noexcept
+  IndexInGroup index_in_group() const noexcept
   {
-    return this->value_ & kMemTableIdMask;
+    return this->index_in_group_;
   }
 
-  u64 to_mem_table_ordinal() const noexcept
+  IsLastInGroup is_last_in_group() const noexcept
   {
-    return this->value_ >> kBatchIndexBits;
+    return this->is_last_in_group_;
   }
 
-  DeltaBatchId next() const noexcept
-  {
-    return Self{this->value_ + 1};
-  }
+  //+++++++++++-+-+--+----- --- -- -  -  -   --
+ private:
+  EditOffset edit_offset_upper_bound_;
+  IndexInGroup index_in_group_;
+  IsLastInGroup is_last_in_group_;
 };
 
-inline std::ostream& operator<<(std::ostream& out, const DeltaBatchId& t) noexcept
-{
-  return out << t.value_;
-}
+BATT_OBJECT_PRINT_IMPL((inline),
+                       DeltaBatchId,
+                       (edit_offset_upper_bound(),  //
+                        index_in_group(),
+                        is_last_in_group()))
 
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 inline bool operator<(const DeltaBatchId& l, const DeltaBatchId& r) noexcept
 {
-  return (r.value_ - (l.value_ + 1)) < DeltaBatchId::kMaxDifference;
+  if (l.edit_offset_upper_bound() < r.edit_offset_upper_bound()) {
+    return true;
+  }
+  if (l.edit_offset_upper_bound() != r.edit_offset_upper_bound()) {
+    return false;
+  }
+
+  BATT_CHECK_IMPLIES(l.is_last_in_group(), l.index_in_group() >= r.index_in_group());
+  BATT_CHECK_IMPLIES(r.is_last_in_group(), r.index_in_group() >= l.index_in_group());
+
+  return l.index_in_group() < r.index_in_group();
 }
 
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 inline bool operator==(const DeltaBatchId& l, const DeltaBatchId& r) noexcept
 {
-  return l.value_ == r.value_;
+  BATT_CHECK_EQ(l.index_in_group() == r.index_in_group(),
+                l.is_last_in_group() == r.is_last_in_group());
+
+  return l.edit_offset_upper_bound() == r.edit_offset_upper_bound() &&
+         l.index_in_group() == r.index_in_group();
 }
 
 BATT_TOTALLY_ORDERED((inline), DeltaBatchId, DeltaBatchId)
 BATT_EQUALITY_COMPARABLE((inline), DeltaBatchId, DeltaBatchId)
 
-//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
-
-/** \brief Returns the passed `id`; allows different types to be compared via their "batch upper
- * bounds" (see OrderByBatchUpperBound).
- */
-inline DeltaBatchId get_batch_upper_bound(const DeltaBatchId& id)
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+inline EditOffset get_edit_offset_upper_bound(const DeltaBatchId& id)
 {
-  return id;
+  return id.edit_offset_upper_bound();
 }
-
-/** \brief Returns the batch upper bound of the object pointed to by ptr.
- */
-template <typename T>
-inline DeltaBatchId get_batch_upper_bound(const std::unique_ptr<T>& ptr)
-{
-  return get_batch_upper_bound(*ptr);
-}
-
-/** \brief Returns the batch upper bound of the object pointed to by ptr.
- */
-template <typename T>
-inline DeltaBatchId get_batch_upper_bound(const boost::intrusive_ptr<T>& ptr)
-{
-  return get_batch_upper_bound(*ptr);
-}
-
-/** \brief Comparison function (i.e. "less-than") that compares objects by their batch upper bound.
- */
-struct OrderByBatchUpperBound {
-  template <typename L, typename R>
-  bool operator()(const L& l, const R& r) const
-  {
-    return get_batch_upper_bound(l) < get_batch_upper_bound(r);
-  }
-};
 
 }  // namespace turtle_kv

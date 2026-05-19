@@ -1,3 +1,11 @@
+//=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
+//
+// Part of the TurtleKV Project, under Apache License v2.0.
+// See https://www.apache.org/licenses/LICENSE-2.0 for license information.
+// SPDX short identifier: Apache-2.0
+//
+//+++++++++++-+-+--+----- --- -- -  -  -   -
+
 #include <turtle_kv/tree/segmented_level_scanner.hpp>
 //
 #include <turtle_kv/tree/segmented_level_scanner.hpp>
@@ -20,6 +28,7 @@
 #include <llfs/testing/scenario_runner.hpp>
 
 #include <batteries/checked_cast.hpp>
+#include <batteries/suppress.hpp>
 
 #include <map>
 #include <random>
@@ -258,7 +267,7 @@ class SegmentedLevelScannerTest : public ::testing::Test
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-    Optional<llfs::StableStringStore> string_store;
+    Optional<batt::StableStringStore> string_store;
     Optional<std::default_random_engine> rng{std::random_device{}()};
     RandomLeafGenerator leaf_generator;
 
@@ -316,7 +325,7 @@ void SegmentedLevelScannerTest::Scenario::run_with_pivot_count(usize pivot_count
       result_set_keys.emplace_back(get_key(item));
     }
     for (FakePinnedPage& page : generated.leaf_pages) {
-      auto& leaf_view = PackedLeafPage::view_of(page.get_page_buffer());
+      auto& leaf_view = *PackedLeafPage::view_of(page.get_page_buffer());
       for (const auto& item : leaf_view.items_slice()) {
         leaf_page_keys.emplace_back(get_key(item));
       }
@@ -344,7 +353,7 @@ void SegmentedLevelScannerTest::Scenario::run_with_pivot_count(usize pivot_count
 
   for (usize segment_i = 0; segment_i < fake_node.level_.segment_count(); ++segment_i) {
     FakeSegment& fake_segment = fake_node.level_.get_segment(segment_i);
-    auto& leaf_view = PackedLeafPage::view_of(generated.leaf_pages[segment_i].get_page_buffer());
+    auto& leaf_view = *PackedLeafPage::view_of(generated.leaf_pages[segment_i].get_page_buffer());
 
     if (debug_output) {
       std::cout << BATT_INSPECT(segment_i) << BATT_INSPECT(leaf_view.get_key_crange()) << "\t"
@@ -422,8 +431,7 @@ void SegmentedLevelScannerTest::Scenario::run_with_pivot_count(usize pivot_count
 
       if (debug_output) {
         std::cout << std::setw(3) << segment_i
-                  << ": active=" << segment.get_active_pivots().printable()
-                  << std::endl;
+                  << ": active=" << segment.get_active_pivots().printable() << std::endl;
       }
     }
     if (debug_output) {

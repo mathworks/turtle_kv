@@ -22,9 +22,8 @@ namespace {
 using namespace batt::int_types;
 
 using batt::as_seq;
+using batt::StableStringStore;
 using batt::WorkerPool;
-
-using llfs::StableStringStore;
 
 using turtle_kv::CInterval;
 using turtle_kv::DecayToItem;
@@ -548,7 +547,7 @@ class ResultSetConcatTest : public ::testing::Test
     }
   }
 
-  llfs::StableStringStore store_;
+  batt::StableStringStore store_;
   std::vector<EditView> all_edits_;
 };
 

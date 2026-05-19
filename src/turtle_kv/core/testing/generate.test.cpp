@@ -25,7 +25,7 @@ TEST(GenerateTest, Test)
   std::default_random_engine rng{1};
 
   RandomResultSetGenerator g;
-  llfs::StableStringStore store;
+  batt::StableStringStore store;
 
   g.set_size(200);
 

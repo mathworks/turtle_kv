@@ -46,9 +46,9 @@ using turtle_kv::ValueView;
 using llfs::LruPriority;
 using llfs::PageSize;
 using llfs::PinnedPage;
-using llfs::StableStringStore;
 
 using batt::MutableBuffer;
+using batt::StableStringStore;
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 //

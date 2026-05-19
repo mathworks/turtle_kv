@@ -1,3 +1,11 @@
+//=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
+//
+// Part of the TurtleKV Project, under Apache License v2.0.
+// See https://www.apache.org/licenses/LICENSE-2.0 for license information.
+// SPDX short identifier: Apache-2.0
+//
+//+++++++++++-+-+--+----- --- -- -  -  -   -
+
 #pragma once
 
 #include <turtle_kv/tree/leaf_page_view.hpp>
@@ -45,7 +53,7 @@ StatusOr<R> visit_tree_page(llfs::PageLoader& page_loader,
       *static_cast<const llfs::PackedPageHeader*>(pinned_page_out.const_buffer().data());
 
   if (page_header.layout_id == LeafPageView::page_layout_id()) {
-    return BATT_FORWARD(visitor_fn)(PackedLeafPage::view_of(pinned_page_out));
+    return BATT_FORWARD(visitor_fn)(*PackedLeafPage::view_of(pinned_page_out));
 
   } else if (page_header.layout_id == NodePageView::page_layout_id()) {
     return BATT_FORWARD(visitor_fn)(PackedNodePage::view_of(pinned_page_out));
@@ -126,7 +134,7 @@ StatusOr<R> visit_leaf_page(llfs::PageLoader& page_loader,
                                                         overcommit,
                                                     }));
   }
-  return BATT_FORWARD(visitor_fn)(PackedLeafPage::view_of(pinned_page_out));
+  return BATT_FORWARD(visitor_fn)(*PackedLeafPage::view_of(pinned_page_out));
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

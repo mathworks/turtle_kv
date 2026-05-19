@@ -52,7 +52,7 @@ class RandomLeafGenerator
   Result<kDecayToItems> operator()(DecayToItem<kDecayToItems> decay_to_items,
                                    Rng& rng,
                                    FakePageLoader& fake_loader,
-                                   llfs::StableStringStore& store)
+                                   batt::StableStringStore& store)
   {
     Result<kDecayToItems> result;
     llfs::PageSize page_size = fake_loader.get_page_size();

@@ -1,3 +1,11 @@
+//=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
+//
+// Part of the TurtleKV Project, under Apache License v2.0.
+// See https://www.apache.org/licenses/LICENSE-2.0 for license information.
+// SPDX short identifier: Apache-2.0
+//
+//+++++++++++-+-+--+----- --- -- -  -  -   -
+
 #include <turtle_kv/tree/in_memory_node_merged_level.hpp>
 //
 
@@ -199,7 +207,7 @@ StatusOr<InMemoryNodeSegmentedLevel> InMemoryNodeMergedLevel::finish_serialize(
     segment.page_id_slot.page_id = pinned_leaf_page.page_id();
     segment.active_pivots.clear();
 
-    const PackedLeafPage& leaf_page = PackedLeafPage::view_of(pinned_leaf_page);
+    const PackedLeafPage& leaf_page = *PackedLeafPage::view_of(pinned_leaf_page);
 
     for (usize pivot_i = 0; pivot_i < pivot_count; ++pivot_i) {
       const Interval<KeyView> pivot_key_range = in_node(node).get_pivot_key_range(pivot_i);

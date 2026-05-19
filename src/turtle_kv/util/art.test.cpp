@@ -103,6 +103,51 @@ TEST(ArtTest, ByteInt)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+TEST(ArtTest, OverlappingKeyPrefix)
+{
+  const std::string key1 = "app";
+  const std::string key2 = "apple";
+  const std::string key3 = "application";
+  const std::string key4 = "applesauce";
+
+  turtle_kv::ART<i32> art;
+
+  EXPECT_FALSE(art.contains(key1));
+  EXPECT_FALSE(art.contains(key2));
+  EXPECT_FALSE(art.contains(key3));
+  EXPECT_FALSE(art.contains(key4));
+
+  BATT_CHECK_OK(art.insert(key1, turtle_kv::detail::DefaultCopyInserter<i32>{1}));
+
+  EXPECT_TRUE(art.contains(key1));
+  EXPECT_FALSE(art.contains(key2));
+  EXPECT_FALSE(art.contains(key3));
+  EXPECT_FALSE(art.contains(key4));
+
+  BATT_CHECK_OK(art.insert(key2, turtle_kv::detail::DefaultCopyInserter<i32>{2}));
+
+  EXPECT_TRUE(art.contains(key1));
+  EXPECT_TRUE(art.contains(key2));
+  EXPECT_FALSE(art.contains(key3));
+  EXPECT_FALSE(art.contains(key4));
+
+  BATT_CHECK_OK(art.insert(key3, turtle_kv::detail::DefaultCopyInserter<i32>{3}));
+
+  EXPECT_TRUE(art.contains(key1));
+  EXPECT_TRUE(art.contains(key2));
+  EXPECT_TRUE(art.contains(key3));
+  EXPECT_FALSE(art.contains(key4));
+
+  BATT_CHECK_OK(art.insert(key4, turtle_kv::detail::DefaultCopyInserter<i32>{4}));
+
+  EXPECT_TRUE(art.contains(key1));
+  EXPECT_TRUE(art.contains(key2));
+  EXPECT_TRUE(art.contains(key3));
+  EXPECT_TRUE(art.contains(key4));
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 template <typename KeyGeneratorT>
 void run_put_contains_test()
 {
@@ -555,6 +600,12 @@ void run_benchmark_test()
       100 * 1000,
   };
 
+  std::cerr << "threads";
+  for (usize n_items : data_set_sizes) {
+    std::cerr << ",puts/sec (N=" << n_items << "),get/sec (N=" << n_items << ")";
+  }
+  std::cerr << std::endl;
+
   for (usize n_threads = 1; n_threads <= std::thread::hardware_concurrency(); ++n_threads) {
     std::atomic<int> round{-1};
     std::atomic<int> pending{0};
@@ -562,6 +613,14 @@ void run_benchmark_test()
     std::atomic<const std::string*> p_keys{nullptr};
     std::atomic<usize> n_keys{0};
     std::vector<std::thread> threads;
+    std::vector<double> op_count(n_threads);
+    std::vector<batt::CpuCacheLineIsolated<std::atomic<bool>>> stop_round(n_threads);
+
+    for (auto& b : stop_round) {
+      b->store(false);
+    }
+
+    std::cerr << n_threads;
 
     for (usize i = 0; i < n_threads; ++i) {
       threads.emplace_back([&, i] {
@@ -586,14 +645,19 @@ void run_benchmark_test()
               insert_key(index, keys[j]);
             }
           } else {
+            std::atomic<bool>& stop = *stop_round[i];
             std::uniform_int_distribution<usize> pick_i{0, n - 1};
-            for (usize j = i; j < n; j += n_threads) {
+            i64 count = 0;
+            while (stop.load() == false) {
               const usize k = pick_i(rng);
-              BATT_CHECK(index.contains(keys[k]));
+              ASSERT_TRUE(index.contains(keys[k]));
+              ++count;
             }
+            op_count[i] = count;
           }
 
           pending.fetch_sub(1);
+          pending.notify_one();
           VLOG(1) << "thread " << i << " finished round " << r;
         }
       });
@@ -664,16 +728,24 @@ void run_benchmark_test()
           round.store(next_round);
           //----- --- -- -  -  -   -
 
-          while (pending.load() > 0) {
-            std::this_thread::yield();
+          for (;;) {
+            const auto observed = pending.load();
+            if (observed > 0) {
+              pending.wait(observed);
+              continue;
+            }
+            break;
           }
         }
 
         pending.store(n_threads);
+        for (auto& b : stop_round) {
+          b->store(false);
+        }
 
         // Stage 1: queries
         {
-          LatencyTimer timer{mt_query_latency, num_keys};
+          const auto start_time = std::chrono::steady_clock::now();
 
           const int next_round = (r + size_i * n_rounds) * 2 + 1;
 
@@ -681,11 +753,34 @@ void run_benchmark_test()
           // Ready, set, go!
           //
           round.store(next_round);
+          std::this_thread::sleep_for(std::chrono::milliseconds(100));
+          for (auto& b : stop_round) {
+            b->store(true);
+          }
           //----- --- -- -  -  -   -
 
-          while (pending.load() > 0) {
-            std::this_thread::yield();
+          for (;;) {
+            const auto observed = pending.load();
+            if (observed > 0) {
+              pending.wait(observed);
+              continue;
+            }
+            break;
           }
+
+          const auto end_time = std::chrono::steady_clock::now();
+
+          const double elapsed_nanos =
+              std::chrono::duration_cast<std::chrono::nanoseconds>(end_time - start_time).count();
+
+          double total_count = 0;
+          for (double c : op_count) {
+            total_count += c;
+          }
+          BATT_CHECK_GT(total_count, 0);
+          BATT_CHECK_GT(elapsed_nanos, 0);
+
+          mt_query_latency.update_nanos(elapsed_nanos, total_count);
         }
 
         //----- --- -- -  -  -   -
@@ -700,10 +795,8 @@ void run_benchmark_test()
         st_query_latency.update(start_time, found_count);
         ASSERT_EQ(found_count, keys.size());
       }
-      std::cerr << "threads: " << n_threads << " N=" << num_keys << std::endl
-                << "      put: " << insert_latency << std::endl
-                << "   st_get: " << st_query_latency << std::endl
-                << "   mt_get: " << mt_query_latency << std::endl;
+      std::cerr << "," << insert_latency.rate_per_second(false) << ","
+                << mt_query_latency.rate_per_second(false);
       ++size_i;
     }
 

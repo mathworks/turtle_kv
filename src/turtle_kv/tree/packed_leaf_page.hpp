@@ -1,3 +1,11 @@
+//=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
+//
+// Part of the TurtleKV Project, under Apache License v2.0.
+// See https://www.apache.org/licenses/LICENSE-2.0 for license information.
+// SPDX short identifier: Apache-2.0
+//
+//+++++++++++-+-+--+----- --- -- -  -  -   -
+
 #pragma once
 
 #include <turtle_kv/tree/tree_serialize_context.hpp>
@@ -90,12 +98,12 @@ struct PackedLeafPage {
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   template <typename T>
-  static const PackedLeafPage& view_of(T&& t)
+  static const PackedLeafPage* view_of(T&& t)
   {
     const ConstBuffer buffer = get_page_const_payload(BATT_FORWARD(t));
     BATT_ASSERT_GE(buffer.size(), sizeof(PackedLeafPage));
 
-    const PackedLeafPage& packed_leaf_page = *static_cast<const PackedLeafPage*>(buffer.data());
+    const PackedLeafPage* packed_leaf_page = static_cast<const PackedLeafPage*>(buffer.data());
 
     return packed_leaf_page;
   }

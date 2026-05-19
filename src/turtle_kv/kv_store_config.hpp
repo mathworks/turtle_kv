@@ -35,6 +35,13 @@ struct KVStoreConfig {
   static Self with_default_values() noexcept;
 };
 
+BATT_OBJECT_PRINT_IMPL((inline),
+                       KVStoreConfig,
+                       (tree_options,  //
+                        initial_capacity_bytes,
+                        max_capacity_bytes,
+                        change_log_size_bytes))
+
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 //
 /** \brief Runtime options for a KVStore object.  This includes only the non-durable configuration
@@ -60,19 +67,6 @@ struct KVStoreRuntimeOptions {
    */
   usize cache_size_bytes;
 
-  /** \brief If this->use_threaded_checkpoint_pipeline is true, then this parameter controls how
-   * many concurrent threads to use to sort/deduplicate the keys within a finalized MemTable.
-   */
-  usize memtable_compact_threads;
-
-  /** \brief If true, then a single MemTable will be used for all deltas between checkpoints (i.e.,
-   * MemTable size will scale with checkpoint distance); otherwise larger checkpoint distance
-   * will produce more MemTables, and MemTables will be 1:1 with update batches.
-   *
-   * Support for big MemTables must be enabled via TURTLE_KV_BIG_MEM_TABLES == 1 (config.hpp)
-   */
-  bool use_big_mem_tables;
-
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   static Self with_default_values() noexcept;
@@ -82,8 +76,7 @@ BATT_OBJECT_PRINT_IMPL((inline),
                        KVStoreRuntimeOptions,
                        (initial_checkpoint_distance,
                         use_threaded_checkpoint_pipeline,
-                        cache_size_bytes,
-                        memtable_compact_threads))
+                        cache_size_bytes))
 
 /** \brief Sets the given name/value configuration parameter pair in the passed config objects.
  *

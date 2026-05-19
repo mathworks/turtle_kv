@@ -1,3 +1,11 @@
+//=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
+//
+// Part of the TurtleKV Project, under Apache License v2.0.
+// See https://www.apache.org/licenses/LICENSE-2.0 for license information.
+// SPDX short identifier: Apache-2.0
+//
+//+++++++++++-+-+--+----- --- -- -  -  -   -
+
 #pragma once
 
 #include <turtle_kv/tree/active_pivots_set.hpp>
@@ -13,6 +21,8 @@
 
 #include <llfs/page_loader.hpp>
 #include <llfs/pinned_page.hpp>
+
+#include <batteries/suppress.hpp>
 
 namespace turtle_kv {
 
@@ -249,13 +259,13 @@ inline auto SegmentedLevelScanner<NodeT, LevelT, PageLoaderT>::peek_next_impl(bo
 
     this->advance_to_pivot(target_pivot_i,
                            *segment,
-                           PackedLeafPage::view_of(this->pinned_leaf_.get_page_buffer()));
+                           *PackedLeafPage::view_of(this->pinned_leaf_.get_page_buffer()));
   }
 
   //----- --- -- -  -  -   -
   // Return the slice containing all items up to the next gap.
-
-  const PackedLeafPage& leaf_page = PackedLeafPage::view_of(this->pinned_leaf_.get_page_buffer());
+  //
+  const PackedLeafPage& leaf_page = *PackedLeafPage::view_of(this->pinned_leaf_.get_page_buffer());
 
   const usize begin_i = this->item_i_;
   u32 end_i = begin_i;
@@ -269,7 +279,7 @@ inline auto SegmentedLevelScanner<NodeT, LevelT, PageLoaderT>::peek_next_impl(bo
   Interval<u32> live_range = segment->get_live_item_range(
       *this->level_,
       Interval<u32>{BATT_CHECKED_CAST(u32, begin_i), BATT_CHECKED_CAST(u32, leaf_page.key_count)});
-  
+
   BATT_CHECK(!live_range.empty());
   end_i = live_range.upper_bound;
 

@@ -1,7 +1,18 @@
+//=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
+//
+// Part of the TurtleKV Project, under Apache License v2.0.
+// See https://www.apache.org/licenses/LICENSE-2.0 for license information.
+// SPDX short identifier: Apache-2.0
+//
+//+++++++++++-+-+--+----- --- -- -  -  -   -
+
 #pragma once
+#define TURTLE_KV_KV_STORE_METRICS_HPP
 
 #include <turtle_kv/config.hpp>
 //
+
+#include <turtle_kv/mem_table/mem_table_metrics.hpp>
 
 #include <turtle_kv/on_page_cache_overcommit.hpp>
 
@@ -28,6 +39,18 @@ struct KVStoreMetrics {
   FastCountMetric<u64> checkpoint_get_count{0};
   LatencyMetric checkpoint_get_latency;
 
+#if defined(BATT_VERSION)
+#if BATT_VERSION >= BATT_MAKE_VERSION(0, 69, 0)
+  DerivedMetric<u64> all_mem_tables_get_count{[this]() -> u64 {
+    u64 total = this->mem_table_get_count.get();
+    for (const auto& delta_get_count : delta_log2_get_count) {
+      total += delta_get_count.get();
+    }
+    return total;
+  }};
+#endif
+#endif
+
   FastCountMetric<u64> scan_count{0};
 
   /** \brief The time it takes to compact a finalized MemTable to produce an update batch.
@@ -47,13 +70,9 @@ struct KVStoreMetrics {
 
   StatsMetric<u64> obsolete_state_count_stats;
 
-  CountMetric<i64> mem_table_alloc{0};
-  CountMetric<i64> mem_table_free{0};
-  StatsMetric<i64> mem_table_count_stats;
-  CountMetric<i64> mem_table_log_bytes_allocated{0};
-  CountMetric<i64> mem_table_log_bytes_freed{0};
-
   OvercommitMetrics overcommit;
+
+  MemTableMetrics mem_table{&this->overcommit};
 
 #if TURTLE_KV_PROFILE_UPDATES
 

@@ -24,6 +24,7 @@ struct LatencyMeasurement {
 
 struct WorkloadState {
   usize op_count = 0;
+  usize get_and_test_count = 0;
   char op_char = 0;
   std::istream& in;
   Table& table;
@@ -69,6 +70,10 @@ inline bool put_operation_handler(WorkloadState& state)
 //
 inline bool get_and_test_operation_handler(WorkloadState& state)
 {
+  auto on_scope_exit = batt::finally([&] {
+    state.get_and_test_count += 1;
+  });
+
   std::string key, expected_value;
 
   state.in >> key >> expected_value;
@@ -77,13 +82,14 @@ inline bool get_and_test_operation_handler(WorkloadState& state)
 
   if (!actual_value.ok()) {
     ADD_FAILURE() << "Get failed! " << BATT_INSPECT(actual_value.status()) << BATT_INSPECT(key)
-                  << BATT_INSPECT(expected_value);
+                  << BATT_INSPECT(expected_value) << BATT_INSPECT(state.get_and_test_count);
     return false;
   }
 
   if (actual_value->as_str() != expected_value) {
-    ADD_FAILURE() << "Get value does not match expected! " << BATT_INSPECT(actual_value)
-                  << BATT_INSPECT(expected_value);
+    ADD_FAILURE() << "Get value does not match expected! " << BATT_INSPECT(key)
+                  << BATT_INSPECT(actual_value) << BATT_INSPECT(expected_value)
+                  << BATT_INSPECT(state.get_and_test_count);
     return false;
   }
 

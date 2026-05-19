@@ -9,9 +9,9 @@
 namespace turtle_kv {
 
 struct PackedCheckpoint {
-  // MemTable id for the latest batch used to create this checkpoint
+  // EditOffset upper bound for the latest batch group used to create this checkpoint
   //
-  little_u64 batch_upper_bound;
+  little_i64 edit_offset_upper_bound;
 
   llfs::PackedPageId new_tree_root;
 };

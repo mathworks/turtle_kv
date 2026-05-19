@@ -1,3 +1,11 @@
+//=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
+//
+// Part of the TurtleKV Project, under Apache License v2.0.
+// See https://www.apache.org/licenses/LICENSE-2.0 for license information.
+// SPDX short identifier: Apache-2.0
+//
+//+++++++++++-+-+--+----- --- -- -  -  -   -
+
 #pragma once
 
 #include <turtle_kv/core/algo/decay_to_item.hpp>
@@ -6,7 +14,7 @@
 #include <turtle_kv/import/int_types.hpp>
 #include <turtle_kv/import/slice.hpp>
 
-#include <llfs/stable_string_store.hpp>
+#include <batteries/stable_string_store.hpp>
 
 #include <atomic>
 #include <random>
@@ -78,6 +86,10 @@ class RandomStringGenerator : public MinMaxSize<256>
   {
   }
 
+  RandomStringGenerator(usize min_n, usize max_n) noexcept : Super{min_n, max_n}
+  {
+  }
+
   template <typename Rng>
   std::string operator()(Rng& rng)
   {
@@ -87,7 +99,7 @@ class RandomStringGenerator : public MinMaxSize<256>
   }
 
   template <typename Rng>
-  std::string_view operator()(Rng& rng, llfs::StableStringStore& store)
+  std::string_view operator()(Rng& rng, batt::StableStringStore& store)
   {
     return this->generate_impl(rng, [&store](char* data, usize size) -> std::string_view {
       return store.store(std::string_view{data, size});
@@ -102,12 +114,14 @@ class RandomStringGenerator : public MinMaxSize<256>
     std::array<char, kMaxSize> buffer;
 
     const usize n = this->Super::pick_size(rng);
-    BATT_CHECK_GT(n, 4);
+
     BATT_CHECK_LT(n, kMaxSize);
 
-    std::memcpy(buffer.data(), "user", 4);
+    if (n > 4) {
+      std::memcpy(buffer.data(), "user", 4);
+    }
 
-    for (usize i = 4; i < n; ++i) {
+    for (usize i = (n > 4) ? 4 : 0; i < n; ++i) {
       buffer[i] = this->pick_char_(rng);
     }
 
@@ -187,7 +201,7 @@ class RandomResultSetGenerator : public MinMaxSize<usize{1} << 24>
   template <bool kDecayToItems, typename Rng>
   MergeCompactor::ResultSet<kDecayToItems> operator()(DecayToItem<kDecayToItems>,
                                                       Rng& rng,
-                                                      llfs::StableStringStore& store,
+                                                      batt::StableStringStore& store,
                                                       const std::vector<KeyView>& to_delete)
   {
     using ResultSet = MergeCompactor::ResultSet<kDecayToItems>;

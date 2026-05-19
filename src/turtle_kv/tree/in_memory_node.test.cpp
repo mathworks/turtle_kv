@@ -80,9 +80,9 @@ using turtle_kv::testing::RandomResultSetGenerator;
 using turtle_kv::testing::RandomStringGenerator;
 
 using llfs::get_key;
-using llfs::StableStringStore;
 
 using batt::getenv_as;
+using batt::StableStringStore;
 
 constexpr usize kMinScanSize = 1;
 constexpr usize kMaxScanSize = 100;
@@ -533,7 +533,7 @@ TEST(InMemoryNodeTest, SubtreeDeletions)
 
   std::default_random_engine rng{/*seed=*/3};
   RandomStringGenerator generate_key;
-  llfs::StableStringStore store;
+  StableStringStore store;
   std::unordered_set<KeyView> keys_set;
   while (keys.size() < total_batches * items_per_leaf) {
     KeyView key = generate_key(rng, store);
