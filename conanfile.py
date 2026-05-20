@@ -1,5 +1,3 @@
-#=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
-#
 # Part of the TurtleKV Project, under Apache License v2.0.
 # See https://www.apache.org/licenses/LICENSE-2.0 for license information.
 # SPDX short identifier: Apache-2.0
@@ -16,7 +14,7 @@ from conan.tools.scm import Version
 class TurtleKvRecipe(ConanFile):
     name = "turtle_kv"
 
-    python_requires = "cor_recipe_utils/0.19.1"
+    python_requires = "cor_recipe_utils/0.20.0"
     python_requires_extend = "cor_recipe_utils.ConanFileBase"
 
     settings = "os", "compiler", "build_type", "arch"
@@ -41,6 +39,7 @@ class TurtleKvRecipe(ConanFile):
     ]
 
     options = {
+        "coverage" : [ True, False ],
         "with_keyvcr": [True, False],
         "use_bloom_filter": [True, False],
         "use_quotient_filter": [True, False],
@@ -51,6 +50,7 @@ class TurtleKvRecipe(ConanFile):
     }
 
     default_options = {
+        "coverage" : False,
         "with_keyvcr": False,
         "use_bloom_filter": False,
         "use_quotient_filter": True,
@@ -101,14 +101,14 @@ class TurtleKvRecipe(ConanFile):
             if self.options.with_keyvcr:
                 self.requires("keyvcr/[>=0.2.2 <1]", **VISIBLE)
             if self.options.use_quotient_filter:
-                self.requires("vqf/[>=0.2.5 <1]", **VISIBLE)
+                self.requires("vqf/0.2.5-devel", **VISIBLE)
             self.requires("libfuse/[>=3.16.2 <4]", **VISIBLE)
             self.requires("libunwind/[>=1.8.1 <2]", **VISIBLE, **OVERRIDE)
             self.requires("liburing/[>=2.11 <3]", **VISIBLE)
 
     def build_requirements(self):
         self.tool_requires("cmake/[>=3.20.0 <4]")
-        self.tool_requires("ninja/[>=1.10.2 <2]")
+        self.tool_requires("ninja/1.13.2", override=True)
         self.test_requires("gtest/[>=1.16.0 <2]")
 
     def configure(self):
@@ -129,10 +129,27 @@ class TurtleKvRecipe(ConanFile):
         self.cpp.build.libs += ['turtle_kv']
 
     def generate(self):
+        from conan.tools.cmake import CMakeToolchain
+        toolchain = CMakeToolchain(self)
+        if (self.options.coverage):
+            toolchain.cache_variables["COVERAGE"] = True
+            toolchain.extra_cxxflags.append("--coverage")
+            toolchain.extra_cflags.append("--coverage")
+            toolchain.extra_sharedlinkflags.append("--coverage")
+            toolchain.extra_exelinkflags.append("--coverage")
+        else:
+            toolchain.cache_variables["COVERAGE"] = False
+            
         self.cor.generate_cmake_default(self)
 
     def build(self):
         self.cor.build_cmake_default(self)
+
+        if self.options.coverage:
+            self.run("gcovr --gcov-ignore-parse-errors --cobertura " + self.build_folder +
+                    "/coverage.xml --html " + self.build_folder + "/coverage.html --txt",
+                    cwd=self.recipe_folder)
+
 
     def package(self):
         self.cor.package_cmake_lib_default(self)
@@ -166,5 +183,3 @@ class TurtleKvRecipe(ConanFile):
                                                 f", expected={profile_compiler_version}")
 
     #+++++++++++-+-+--+----- --- -- -  -  -   -
-
-
