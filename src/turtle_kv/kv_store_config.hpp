@@ -72,6 +72,12 @@ struct KVStoreRuntimeOptions {
   static Self with_default_values() noexcept;
 };
 
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+//
+struct KVStoreWriteOptions {
+  bool sync = false;
+};
+
 BATT_OBJECT_PRINT_IMPL((inline),
                        KVStoreRuntimeOptions,
                        (initial_checkpoint_distance,

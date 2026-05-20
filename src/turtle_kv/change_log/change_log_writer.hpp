@@ -29,6 +29,8 @@
 #include <batteries/async/task_scheduler.hpp>
 #include <batteries/interval.hpp>
 
+#include <absl/container/flat_hash_map.h>
+
 #include <chrono>
 #include <concepts>
 #include <ranges>
@@ -347,6 +349,13 @@ class ChangeLogWriter
     return false;
   }
 
+  Status sync(EditOffset upper_bound) noexcept;
+
+  EditOffset durable_upper_bound() const noexcept
+  {
+    return EditOffset{this->sync_upper_bound_.get_value()};
+  }
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -498,6 +507,11 @@ class ChangeLogWriter
    */
   Status refresh_meta_block(ActiveBlocksState& active_blocks) noexcept;
 
+  /** \brief Advances sync_upper_bound_ by walking the pending_slot_ends_ hash map from the current
+   * upper bound. Called after activating blocks.
+   */
+  void advance_sync_upper_bound() noexcept;
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   /** \brief The state of the log file.
@@ -536,6 +550,15 @@ class ChangeLogWriter
   /** \brief The background writer task.
    */
   Optional<batt::Task> task_;
+
+  /** \brief The confirmed durable EditOffset upper bound.
+   */
+  batt::Watch<i64> sync_upper_bound_;
+
+  /** \brief Maps slot start EditOffset -> slot end EditOffset for activated slots not yet
+   * incorporated into sync_upper_bound_.
+   */
+  absl::flat_hash_map<i64, i64> pending_slot_ends_;
 };
 
 // #=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++

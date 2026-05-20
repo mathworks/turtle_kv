@@ -358,6 +358,7 @@ void ChangeLogWriter::Context::push_buffer(BlockBuffer*& buffer,
     , free_block_tokens_{BATT_CHECKED_CAST(u64, this->change_log_->config().block_count.value())}
     , metrics_{}
     , next_edit_offset_{recovered_state.next_edit_offset.value()}
+    , sync_upper_bound_{recovered_state.next_edit_offset.value()}
 {
   // Initialize the meta-block buffer to reflect the on-disk state.
   //
@@ -517,9 +518,11 @@ void ChangeLogWriter::writer_task_main() noexcept
       BATT_ASSIGN_OK_RESULT(BlockBufferStats prepare_stats,
                             this->prepare_blocks(collected, prepared));
 
-      // If there are no updates, then sleep before polling again (unless halt requested).
+      // If there are no updates, then sleep before polling again (unless halt requested or
+      // sync_upper_bound_ is behind next_edit_offset_, indicating a sync caller may be waiting).
       //
-      if ((force_sleep || prepared.empty()) && this->halt_requested_.load() == false) {
+      if ((force_sleep || prepared.empty()) && this->halt_requested_.load() == false &&
+          this->sync_upper_bound_.get_value() >= this->next_edit_offset_.load()) {
         force_sleep = false;
         inactive_count += 1;
         this->metrics_.sleep_count.add(1);
@@ -543,9 +546,11 @@ void ChangeLogWriter::writer_task_main() noexcept
 
       const BlockBufferStats block_stats = prepare_stats + write_stats;
 
-      // Force a sleep if the collected buffers weren't full enough to hit the target density.
+      // Force a sleep if the collected buffers weren't full enough to hit the target density,
+      // unless sync_upper_bound_ is behind (a sync caller may be waiting).
       //
-      force_sleep = block_stats.is_under_target();
+      force_sleep = block_stats.is_under_target() &&
+                    this->sync_upper_bound_.get_value() >= this->next_edit_offset_.load();
 
       // "Activate" the written blocks by adding them to the active blocks state; this allows
       // accurate trimming and reclamation of storage resources.
@@ -566,6 +571,8 @@ void ChangeLogWriter::writer_task_main() noexcept
       VLOG(2) << "done writing!  polling for more";
     }
   }();
+
+  this->sync_upper_bound_.close();
 
   if (VLOG_IS_ON(1) || (!status.ok() && !this->halt_requested_.load())) {
     LOG(INFO) << "ChangeLogWriter::writer_task exiting with status=" << status;
@@ -835,6 +842,15 @@ Status ChangeLogWriter::activate_blocks(WrittenBlocksState& input,
       continue;
     }
 
+    // Insert this block's slots into the hash map before we release it.
+    //
+    for (usize i = 0; i < next_block->slot_count(); ++i) {
+      const i64 slot_start = next_block->slot_edit_offset(i).value();
+      const i64 slot_end = slot_start +
+          (i64)(next_block->slot_size(i) - sizeof(PackedEditOffsetDelta));
+      this->pending_slot_ends_[slot_start] = slot_end;
+    }
+
     // Update active blocks edit offset upper bound.
     //
     output.block_upper_bounds[*input.block_index] = next_block->edit_offset_upper_bound().value();
@@ -849,6 +865,8 @@ Status ChangeLogWriter::activate_blocks(WrittenBlocksState& input,
   }
 
   BATT_REQUIRE_OK(this->refresh_meta_block(output));
+
+  this->advance_sync_upper_bound();
 
   return OkStatus();
 }
@@ -938,6 +956,50 @@ Optional<batt::Grant> ChangeLogWriter::ActiveBlocksState::apply_trim(
   VLOG(1) << BATT_INSPECT(this->in_use_block_grant.size());
 
   return released_grant;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Status ChangeLogWriter::sync(EditOffset upper_bound) noexcept
+{
+  // Return early if upper bound is already synced.
+  //
+  if (this->sync_upper_bound_.get_value() >= upper_bound.value()) {
+    return OkStatus();
+  }
+
+  if (this->task_) {
+    this->task_->wake();
+  }
+
+  // Block until the writer main task advances sync_upper_bound_ past our target.
+  //
+  BATT_ASSIGN_OK_RESULT(const i64 observed,
+                        this->sync_upper_bound_.await_true([upper_bound](i64 observed) {
+                          return observed >= upper_bound.value();
+                        }));
+
+  (void)observed;
+
+  return OkStatus();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void ChangeLogWriter::advance_sync_upper_bound() noexcept
+{
+  i64 current_upper_bound = this->sync_upper_bound_.get_value();
+
+  for (;;) {
+    auto it = this->pending_slot_ends_.find(current_upper_bound);
+    if (it == this->pending_slot_ends_.end()) {
+      break;
+    }
+    current_upper_bound = it->second;
+    this->pending_slot_ends_.erase(it);
+  }
+
+  this->sync_upper_bound_.set_value(current_upper_bound);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

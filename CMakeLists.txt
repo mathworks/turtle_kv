@@ -27,7 +27,7 @@ add_compile_options(-D_GNU_SOURCE -fno-omit-frame-pointer)
 
 # Set warning/error level for the compilation.
 #
-add_compile_options(-Wall -Wextra -Werror -Werror=switch-enum -Wswitch-enum -Wsuggest-override -Woverloaded-virtual)
+add_compile_options(-Wall -Wextra -Werror -Werror=switch-enum -Wswitch-enum -Wsuggest-override -Woverloaded-virtual -Wno-restrict)
 
 # Disable -Werror=array-bounds for upgrading to GCC 12, this can be removed
 # when the warning is fixed in llfs. See https://github.com/mathworks/llfs/issues/161

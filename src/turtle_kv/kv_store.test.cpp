@@ -26,6 +26,9 @@
 
 #include <turtle_kv/core/table.hpp>
 
+#include <unordered_map>
+#include <unordered_set>
+
 namespace {
 
 using namespace turtle_kv::int_types;
@@ -33,11 +36,15 @@ using namespace turtle_kv::constants;
 
 using llfs::PageSize;
 
+using turtle_kv::EditOffset;
 using turtle_kv::KeyView;
 using turtle_kv::KVStore;
 using turtle_kv::LatencyMetric;
 using turtle_kv::LatencyTimer;
+using turtle_kv::None;
+using turtle_kv::ObjectThreadStorage;
 using turtle_kv::OkStatus;
+using turtle_kv::Optional;
 using turtle_kv::RemoveExisting;
 using turtle_kv::Slice;
 using turtle_kv::Status;
@@ -131,19 +138,50 @@ class KVStoreTest : public ::testing::Test
   }
   void PopulateKVStore(KVStore& kv_store,
                        u64 num_puts,
-                       std::map<std::string, std::string>* out_data = nullptr)
+                       std::map<std::string, std::string>* out_data = nullptr,
+                       double delete_proportion = 0.0,
+                       std::set<std::string>* out_deleted = nullptr,
+                       Optional<KVStore::WriteOptions> write_options = None)
   {
     for (u64 i = 0; i < num_puts; ++i) {
       std::string key = this->generate_key(this->rng);
       std::string value = this->generate_value();
 
-      Status put_status = kv_store.put(KeyView{key}, ValueView::from_str(value));
-      ASSERT_TRUE(put_status.ok()) << BATT_INSPECT(put_status);
+      if (write_options) {
+        StatusOr<EditOffset> result =
+            kv_store.put(KeyView{key}, ValueView::from_str(value), *write_options);
+        ASSERT_TRUE(result.ok()) << BATT_INSPECT(result.status());
+      } else {
+        Status put_status = kv_store.put(KeyView{key}, ValueView::from_str(value));
+        ASSERT_TRUE(put_status.ok()) << BATT_INSPECT(put_status);
+      }
 
       if (out_data) {
         (*out_data)[key] = value;
       }
       VLOG(3) << "Put key==" << key << ", value==" << value;
+    }
+
+    if (delete_proportion > 0.0 && out_data) {
+      const u64 num_to_delete = static_cast<u64>(num_puts * delete_proportion);
+      u64 deleted = 0;
+
+      for (const auto& [key, value] : *out_data) {
+        if (deleted >= num_to_delete) {
+          break;
+        }
+        if (write_options) {
+          StatusOr<EditOffset> result = kv_store.remove(KeyView{key}, *write_options);
+          ASSERT_TRUE(result.ok()) << BATT_INSPECT(result.status());
+        } else {
+          Status result = kv_store.remove(KeyView{key});
+          ASSERT_TRUE(result.ok()) << BATT_INSPECT(result);
+        }
+        if (out_deleted) {
+          out_deleted->insert(key);
+        }
+        ++deleted;
+      }
     }
   }
 
@@ -445,6 +483,7 @@ TEST_P(CheckpointTest, CheckpointRecovery)
   std::map<std::string, std::string> expected_keys_values;
 
   u64 num_checkpoints_created = 0;
+  EditOffset last_checkpoint_bound{0};
   u64 keys_per_checkpoint;
 
   if (this->num_checkpoints_to_create == 0) {
@@ -473,7 +512,9 @@ TEST_P(CheckpointTest, CheckpointRecovery)
     if (keys_since_checkpoint >= keys_per_checkpoint && this->num_checkpoints_to_create != 0) {
       keys_since_checkpoint = 0;
       ++num_checkpoints_created;
-      BATT_CHECK_OK(kv_store->force_checkpoint());
+       StatusOr<EditOffset> checkpoint_bound = kv_store->force_checkpoint();
+      BATT_CHECK_OK(checkpoint_bound);
+      last_checkpoint_bound = *checkpoint_bound;
       VLOG(2) << "Created " << num_checkpoints_created << " checkpoints";
       if (num_checkpoints_created == this->num_checkpoints_to_create) {
         break;
@@ -484,7 +525,9 @@ TEST_P(CheckpointTest, CheckpointRecovery)
   // Handle off by one error where we create one less checkpoint than expected
   //
   if (num_checkpoints_created < this->num_checkpoints_to_create) {
-    BATT_CHECK_OK(kv_store->force_checkpoint());
+    StatusOr<EditOffset> checkpoint_bound = kv_store->force_checkpoint();
+    BATT_CHECK_OK(checkpoint_bound);
+    last_checkpoint_bound = *checkpoint_bound;
     ++num_checkpoints_created;
     VLOG(1) << "Created " << num_checkpoints_created << " checkpoints after rounding error";
   }
@@ -492,9 +535,7 @@ TEST_P(CheckpointTest, CheckpointRecovery)
   BATT_CHECK_EQ(num_checkpoints_created, this->num_checkpoints_to_create)
       << "Did not take the correct number of checkpoints. There is a bug in this test.";
 
-  // TODO: [Gabe Bornstein 3/17/26] Replace with fsync once it's implemented.
-  //
-  std::this_thread::sleep_for(std::chrono::seconds(1));
+  BATT_CHECK_OK(kv_store->wait_for_checkpoint(last_checkpoint_bound));
   this->ShutdownKVStore(kv_store);
 
   batt::StatusOr<std::unique_ptr<llfs::Volume>> checkpoint_log_volume =
@@ -571,9 +612,7 @@ TEST_P(KVStoreRecoveryTest, KVStoreRecovery)
 
     this->PopulateKVStore(*kv_store, this->num_puts, &expected_keys_values);
 
-    // TODO: [Gabe Bornstein 3/17/26] Replace with fsync once it's implemented.
-    //
-    std::this_thread::sleep_for(std::chrono::seconds(1));
+    BATT_CHECK_OK(kv_store->sync());
     this->ShutdownKVStore(kv_store);
   }
 
@@ -584,10 +623,6 @@ TEST_P(KVStoreRecoveryTest, KVStoreRecovery)
                                  this->runtime_options);
 
     ASSERT_TRUE(recovered_kv_store.ok()) << BATT_INSPECT(recovered_kv_store.status());
-
-    // TODO: [Gabe Bornstein 4/14/26] Replace with fsync once it's implemented.
-    //
-    std::this_thread::sleep_for(std::chrono::seconds(1));
 
     for (const auto& [key, expected_value] : expected_keys_values) {
       turtle_kv::KeyView key_view{key};
@@ -603,6 +638,240 @@ TEST_P(KVStoreRecoveryTest, KVStoreRecovery)
 // TODO: [Gabe Bornstein 3/18/26] Add some test points where we test recovery with updates and
 // deletes, not just inserts.
 //
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+TEST_F(KVStoreTest, SyncWriteOptions)
+{
+  std::filesystem::path test_kv_store_dir =
+      this->data_root / "turtle_kv_Test" / "sync_write_opts_recovery";
+
+  std::map<std::string, std::string> expected_keys_values;
+  std::set<std::string> deleted_keys;
+
+  {
+    StatusOr<std::unique_ptr<KVStore>> open_result = this->CreateAndOpenKVStore(test_kv_store_dir);
+    ASSERT_TRUE(open_result.ok()) << BATT_INSPECT(open_result.status());
+
+    std::unique_ptr<KVStore>& kv_store = *open_result;
+
+    KVStore::WriteOptions opts{.sync = true};
+    this->PopulateKVStore(*kv_store, 50, &expected_keys_values, 0.25, &deleted_keys, opts);
+
+    this->ShutdownKVStore(kv_store);
+  }
+
+  // Recover and verify state.
+  //
+  {
+    StatusOr<std::unique_ptr<KVStore>> recovered_kv_store =
+        turtle_kv::KVStore::open(test_kv_store_dir,
+                                 this->kv_store_config.tree_options,
+                                 this->runtime_options);
+
+    ASSERT_TRUE(recovered_kv_store.ok()) << BATT_INSPECT(recovered_kv_store.status());
+
+    for (const auto& [key, expected_value] : expected_keys_values) {
+      StatusOr<ValueView> actual_value = (*recovered_kv_store)->get(KeyView{key});
+
+      if (deleted_keys.count(key)) {
+        ASSERT_EQ(actual_value.status(), batt::StatusCode::kNotFound);
+      } else {
+        ASSERT_TRUE(actual_value.ok()) << "Didn't find key after recovery: " << key;
+        EXPECT_EQ(actual_value->as_str(), expected_value)
+            << "Wrong value for key after recovery: " << key;
+      }
+    }
+
+    (*recovered_kv_store)->halt();
+    (*recovered_kv_store)->join();
+  }
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+TEST_F(KVStoreTest, SyncExplicit)
+{
+  std::filesystem::path test_kv_store_dir =
+      this->data_root / "turtle_kv_Test" / "sync_explicit_recovery";
+
+  std::map<std::string, std::string> expected_keys_values;
+  std::set<std::string> deleted_keys;
+
+  {
+    StatusOr<std::unique_ptr<KVStore>> open_result = this->CreateAndOpenKVStore(test_kv_store_dir);
+    ASSERT_TRUE(open_result.ok()) << BATT_INSPECT(open_result.status());
+
+    std::unique_ptr<KVStore>& kv_store = *open_result;
+
+    this->PopulateKVStore(*kv_store, 200, &expected_keys_values, 0.25, &deleted_keys);
+
+    BATT_CHECK_OK(kv_store->sync());
+
+    this->ShutdownKVStore(kv_store);
+  }
+
+  // Recover and verify state.
+  //
+  {
+    StatusOr<std::unique_ptr<KVStore>> recovered_kv_store =
+        turtle_kv::KVStore::open(test_kv_store_dir,
+                                 this->kv_store_config.tree_options,
+                                 this->runtime_options);
+
+    ASSERT_TRUE(recovered_kv_store.ok()) << BATT_INSPECT(recovered_kv_store.status());
+
+    for (const auto& [key, expected_value] : expected_keys_values) {
+      StatusOr<ValueView> actual_value = (*recovered_kv_store)->get(KeyView{key});
+
+      if (deleted_keys.count(key)) {
+        ASSERT_EQ(actual_value.status(), batt::StatusCode::kNotFound);
+      } else {
+        ASSERT_TRUE(actual_value.ok()) << "Didn't find key after recovery: " << key;
+        EXPECT_EQ(actual_value->as_str(), expected_value)
+            << "Wrong value for key after recovery: " << key;
+      }
+    }
+
+    (*recovered_kv_store)->halt();
+    (*recovered_kv_store)->join();
+  }
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+TEST_F(KVStoreTest, SyncMultithreadedStress)
+{
+  std::filesystem::path test_kv_store_dir =
+      this->data_root / "turtle_kv_Test" / "sync_multithread_stress";
+
+  StatusOr<std::unique_ptr<KVStore>> open_result = this->CreateAndOpenKVStore(test_kv_store_dir);
+  ASSERT_TRUE(open_result.ok()) << BATT_INSPECT(open_result.status());
+
+  std::unique_ptr<KVStore>& kv_store = *open_result;
+
+  const usize num_threads = std::thread::hardware_concurrency();
+  const usize ops_per_thread = 200;
+
+  struct PerThreadState {
+    std::unordered_map<std::string, std::string> live_keys;
+    std::unordered_set<std::string> removed_keys;
+  };
+
+  ObjectThreadStorage<PerThreadState>::ScopedSlot per_thread_state;
+
+  std::vector<std::thread> threads;
+  threads.reserve(num_threads);
+
+  std::atomic<usize> total_sync_ok{0};
+  std::atomic<usize> total_put_ok{0};
+  std::atomic<usize> total_remove_ok{0};
+
+  for (usize t = 0; t < num_threads; ++t) {
+    threads.emplace_back([&, thread_id = t]() {
+      std::default_random_engine thread_rng{(usize)(42 + thread_id)};
+      RandomStringGenerator gen_key{};
+
+      PerThreadState& state = per_thread_state.get();
+
+      for (usize i = 0; i < ops_per_thread; ++i) {
+        std::string key = gen_key(thread_rng);
+        std::string value = "t" + std::to_string(thread_id) + "_v" + std::to_string(i);
+
+        // Alternate between sync put, non-sync put + explicit sync, non-sync put, and remove.
+        //
+        usize op = i % 4;
+
+        if (op == 0) {
+          // Sync put.
+          //
+          KVStore::WriteOptions opts{.sync = true};
+          StatusOr<EditOffset> result =
+              kv_store->put(KeyView{key}, ValueView::from_str(value), opts);
+          if (result.ok()) {
+            total_put_ok.fetch_add(1);
+            total_sync_ok.fetch_add(1);
+            state.live_keys[key] = value;
+            state.removed_keys.erase(key);
+          }
+        } else if (op == 1) {
+          // Non-sync put followed by explicit sync.
+          //
+          Status put_result = kv_store->put(KeyView{key}, ValueView::from_str(value));
+          if (put_result.ok()) {
+            total_put_ok.fetch_add(1);
+            state.live_keys[key] = value;
+            state.removed_keys.erase(key);
+            Status sync_result = kv_store->sync();
+            if (sync_result.ok()) {
+              total_sync_ok.fetch_add(1);
+            }
+          }
+        } else if (op == 2) {
+          // Non-sync put (no sync at all).
+          //
+          Status put_result = kv_store->put(KeyView{key}, ValueView::from_str(value));
+          if (put_result.ok()) {
+            total_put_ok.fetch_add(1);
+            state.live_keys[key] = value;
+            state.removed_keys.erase(key);
+          }
+        } else {
+          // Remove a key that this thread previously inserted.
+          //
+          if (state.live_keys.empty()) {
+            continue;
+          }
+          std::string remove_key = state.live_keys.begin()->first;
+
+          KVStore::WriteOptions opts{.sync = true};
+          StatusOr<EditOffset> result = kv_store->remove(KeyView{remove_key}, opts);
+          if (result.ok()) {
+            total_remove_ok.fetch_add(1);
+            total_sync_ok.fetch_add(1);
+            state.live_keys.erase(remove_key);
+            state.removed_keys.insert(remove_key);
+          }
+        }
+      }
+    });
+  }
+
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  EXPECT_GT(total_put_ok.load(), 0);
+  EXPECT_GT(total_sync_ok.load(), 0);
+  EXPECT_GT(total_remove_ok.load(), 0);
+
+  // Final sync to ensure everything is flushed.
+  //
+  Status final_sync = kv_store->sync();
+  ASSERT_TRUE(final_sync.ok()) << BATT_INSPECT(final_sync);
+
+  // Verify all live keys are readable with correct values, and removed keys are gone.
+  //
+  per_thread_state.visit_each([&](PerThreadState& state) -> bool {
+    for (const auto& [key, expected_value] : state.live_keys) {
+      StatusOr<ValueView> actual_value = kv_store->get(KeyView{key});
+      EXPECT_TRUE(actual_value.ok()) << "Missing key: " << key;
+      if (actual_value.ok()) {
+        EXPECT_EQ(actual_value->as_str(), expected_value) << "Wrong value for key: " << key;
+      }
+    }
+
+    for (const std::string& key : state.removed_keys) {
+      StatusOr<ValueView> actual_value = kv_store->get(KeyView{key});
+      EXPECT_EQ(actual_value.status(), batt::StatusCode::kNotFound)
+          << "Key should have been removed: " << key;
+    }
+
+    return false;
+  });
+
+  this->ShutdownKVStore(kv_store);
+}
 
 }  // namespace
 

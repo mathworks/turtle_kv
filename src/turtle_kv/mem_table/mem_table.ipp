@@ -72,7 +72,7 @@ BasicMemTable<StorageT, AllocationTrackerT>::~BasicMemTable() noexcept
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <MemTableStorage StorageT, MemTableAllocationTracker AllocationTrackerT>
-Status BasicMemTable<StorageT, AllocationTrackerT>::put(
+StatusOr<EditOffset> BasicMemTable<StorageT, AllocationTrackerT>::put(
     StorageWriterContext& storage_writer_context,
     const KeyView& key,
     const ValueView& value) noexcept
@@ -101,6 +101,9 @@ Status BasicMemTable<StorageT, AllocationTrackerT>::put(
 
     BATT_REQUIRE_OK(this->art_index_.insert(key, inserter));
     BATT_CHECK_NOT_NULLPTR(inserter.entry_out);
+
+    return inserter.entry_out->edit_offset() +
+           EditOffsetDelta{(i64)packed_key_value_slot_size(key, value)};
   }
 
   return OkStatus();

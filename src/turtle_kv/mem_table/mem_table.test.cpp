@@ -195,16 +195,17 @@ class MemTableTest : public ::testing::Test
           }));
     }
 
-    Status status = this->mem_table->put(this->storage_writer_context, key, value);
-    EXPECT_EQ((status == batt::StatusCode::kResourceExhausted), expect_overflow);
+    StatusOr<EditOffset> edit_status =
+        this->mem_table->put(this->storage_writer_context, key, value);
+    EXPECT_EQ((edit_status.status() == batt::StatusCode::kResourceExhausted), expect_overflow);
 
-    if (status.ok()) {
+    if (edit_status.ok()) {
       this->total_inserted_items_size += item_size;
     }
 
     Mock::VerifyAndClearExpectations(&this->storage_writer_context);
 
-    return status;
+    return edit_status.status();
   }
 
   /** \brief Returns a worst-case estimate of the number of batches which will be produced by the

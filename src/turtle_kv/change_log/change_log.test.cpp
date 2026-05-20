@@ -681,4 +681,254 @@ TEST_F(ChangeLogTest, CorruptBlockInMiddle)
   }
 }
 
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+TEST_F(ChangeLogTest, Sync)
+{
+  ChangeLogFile::Config config = ChangeLogFile::Config::with_default_values();
+  ChangeLogWriter::Options options = ChangeLogWriter::Options::with_default_values();
+
+  StatusOr<std::unique_ptr<ChangeLogWriter>> writer =
+      ChangeLogWriter::open_or_create(this->test_file_, config, options, RemoveExisting{true});
+  ASSERT_TRUE(writer.ok());
+
+  (*writer)->start(batt::Runtime::instance().default_scheduler().schedule_task());
+
+  ChangeLogWriter::Context context(**writer);
+
+  // Append a slot and capture the edit offset after it.
+  //
+  std::string test_data = "Slot data for sync test";
+  Status write_status = context.append_slot(
+      /*min_edit_offset_lower_bound=*/EditOffset{0},
+      test_data.size(),
+      [&test_data](FirstVisitToBlock, ChangeLogBlock*, MutableBuffer buffer, EditOffset) {
+        std::memcpy(buffer.data(), test_data.data(), test_data.size());
+      });
+  ASSERT_TRUE(write_status.ok());
+
+  const EditOffset target = (*writer)->next_edit_offset();
+
+  Status sync_status = (*writer)->sync(target);
+  EXPECT_TRUE(sync_status.ok()) << BATT_INSPECT(sync_status);
+
+  // After sync returns, durable_upper_bound must be >= target.
+  //
+  EXPECT_EQ((*writer)->durable_upper_bound().value(), target.value());
+
+  (*writer)->halt();
+  (*writer)->join();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+TEST_F(ChangeLogTest, SyncUpperBoundMonotonic)
+{
+  ChangeLogFile::Config config = ChangeLogFile::Config::with_default_values();
+  config.block_count = BlockCount{20};
+  ChangeLogWriter::Options options = ChangeLogWriter::Options::with_default_values();
+
+  StatusOr<std::unique_ptr<ChangeLogWriter>> writer =
+      ChangeLogWriter::open_or_create(this->test_file_, config, options, RemoveExisting{true});
+  ASSERT_TRUE(writer.ok());
+
+  (*writer)->start(batt::Runtime::instance().default_scheduler().schedule_task());
+
+  ChangeLogWriter::Context context(**writer);
+
+  const usize num_slots = 50;
+  std::atomic<bool> done{false};
+  std::atomic<i64> max_observed{0};
+  std::atomic<bool> monotonicity_violated{false};
+
+  // Reader thread: continuously sample durable_upper_bound() and assert non-decreasing.
+  //
+  std::thread reader([&]() {
+    i64 prev = 0;
+    while (!done.load()) {
+      i64 current = (*writer)->durable_upper_bound().value();
+      if (current < prev) {
+        monotonicity_violated.store(true);
+      }
+      prev = current;
+      max_observed.store(std::max(max_observed.load(), current));
+    }
+  });
+
+  // Writer: append slots.
+  //
+  for (usize i = 0; i < num_slots; ++i) {
+    std::string data = "slot" + std::to_string(i);
+    Status write_status = context.append_slot(
+        /*min_edit_offset_lower_bound=*/EditOffset{0},
+        data.size(),
+        [&data](FirstVisitToBlock, ChangeLogBlock*, MutableBuffer buffer, EditOffset) {
+          std::memcpy(buffer.data(), data.data(), data.size());
+        });
+    ASSERT_TRUE(write_status.ok());
+  }
+
+  ASSERT_TRUE((*writer)->wait_for_flush());
+
+  done.store(true);
+  reader.join();
+
+  EXPECT_FALSE(monotonicity_violated.load()) << "sync_upper_bound_ decreased during writes!";
+  EXPECT_GT(max_observed.load(), 0) << "Reader never observed sync_upper_bound_ advance!";
+
+  (*writer)->halt();
+  (*writer)->join();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+TEST_F(ChangeLogTest, SyncGroup)
+{
+  ChangeLogFile::Config config = ChangeLogFile::Config::with_default_values();
+  config.block_count = BlockCount{20};
+  ChangeLogWriter::Options options = ChangeLogWriter::Options::with_default_values();
+
+  StatusOr<std::unique_ptr<ChangeLogWriter>> writer =
+      ChangeLogWriter::open_or_create(this->test_file_, config, options, RemoveExisting{true});
+  ASSERT_TRUE(writer.ok());
+
+  (*writer)->start(batt::Runtime::instance().default_scheduler().schedule_task());
+
+  ChangeLogWriter::Context context(**writer);
+
+  // Append a slot so we have a target offset to sync to.
+  //
+  std::string test_data = "Group sync test slot";
+  Status write_status = context.append_slot(
+      /*min_edit_offset_lower_bound=*/EditOffset{0},
+      test_data.size(),
+      [&test_data](FirstVisitToBlock, ChangeLogBlock*, MutableBuffer buffer, EditOffset) {
+        std::memcpy(buffer.data(), test_data.data(), test_data.size());
+      });
+  ASSERT_TRUE(write_status.ok());
+
+  const EditOffset target = (*writer)->next_edit_offset();
+  const usize num_waiters = std::thread::hardware_concurrency();
+
+  std::atomic<bool> start{false};
+  std::atomic<usize> completed{0};
+
+  std::vector<std::thread> threads;
+  threads.reserve(num_waiters);
+
+  for (usize i = 0; i < num_waiters; ++i) {
+    threads.emplace_back([&]() {
+      while (!start.load()) {
+        continue;
+      }
+
+      Status s = (*writer)->sync(target);
+      EXPECT_TRUE(s.ok()) << BATT_INSPECT(s);
+
+      completed.fetch_add(1);
+    });
+  }
+
+  start.store(true);
+
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  // All threads must have completed successfully.
+  //
+  EXPECT_EQ(completed.load(), num_waiters);
+
+  (*writer)->halt();
+  (*writer)->join();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+TEST_F(ChangeLogTest, SyncStaggeredOffsets)
+{
+  // Use small blocks with large payloads to force slots into separate blocks and therefore
+  // separate write batches.
+  //
+  ChangeLogFile::Config config = ChangeLogFile::Config::with_default_values();
+  config.block_size = BlockSize{512};
+  config.block_count = BlockCount{20};
+  ChangeLogWriter::Options options = ChangeLogWriter::Options::with_default_values();
+
+  StatusOr<std::unique_ptr<ChangeLogWriter>> writer =
+      ChangeLogWriter::open_or_create(this->test_file_, config, options, RemoveExisting{true});
+  ASSERT_TRUE(writer.ok());
+
+  (*writer)->start(batt::Runtime::instance().default_scheduler().schedule_task());
+
+  const usize num_slots = 4;
+  const usize slot_size = 400;
+
+  // Pre-compute the target offsets. Each slot occupies most of a block, so they'll land in
+  // separate blocks and be written in separate batches.
+  //
+  std::vector<EditOffset> targets;
+  targets.reserve(num_slots);
+  for (usize i = 0; i < num_slots; ++i) {
+    targets.push_back(EditOffset{(i64)(i + 1) * (i64)slot_size});
+  }
+
+  // Launch sync threads BEFORE appending data, so they actually block on await_true.
+  //
+  std::vector<std::atomic<i64>> completion_order(num_slots);
+  std::atomic<i64> completion_counter{0};
+
+  std::vector<std::thread> sync_threads;
+  sync_threads.reserve(num_slots);
+
+  for (usize i = 0; i < num_slots; ++i) {
+    sync_threads.emplace_back([&, i]() {
+      Status s = (*writer)->sync(targets[i]);
+      EXPECT_TRUE(s.ok()) << BATT_INSPECT(s);
+
+      completion_order[i].store(completion_counter.fetch_add(1));
+    });
+  }
+
+  // Append slots one at a time, waiting for each to flush before appending the next.
+  // This forces each slot into its own write batch, so sync_upper_bound_ advances
+  // incrementally rather than jumping to the final value in one shot.
+  //
+  std::thread appender([&]() {
+    ChangeLogWriter::Context context(**writer);
+
+    for (usize i = 0; i < num_slots; ++i) {
+      std::string data(slot_size, 'A' + i);
+      Status write_status = context.append_slot(
+          /*min_edit_offset_lower_bound=*/EditOffset{0},
+          data.size(),
+          [&data](FirstVisitToBlock, ChangeLogBlock*, MutableBuffer buffer, EditOffset) {
+            std::memcpy(buffer.data(), data.data(), data.size());
+          });
+      ASSERT_TRUE(write_status.ok());
+      ASSERT_TRUE((*writer)->wait_for_flush());
+    }
+  });
+
+  appender.join();
+
+  for (auto& t : sync_threads) {
+    t.join();
+  }
+
+  // Verify partial ordering: a thread waiting on a smaller offset must complete no later than
+  // a thread waiting on a larger offset, since earlier blocks are written first.
+  //
+  for (usize i = 0; i < num_slots; ++i) {
+    for (usize j = i + 1; j < num_slots; ++j) {
+      EXPECT_LE(completion_order[i].load(), completion_order[j].load())
+          << "Thread waiting on offset " << targets[i] << " completed after thread waiting on "
+          << targets[j];
+    }
+  }
+
+  (*writer)->halt();
+  (*writer)->join();
+}
+
 }  // namespace turtle_kv

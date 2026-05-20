@@ -173,7 +173,9 @@ class BasicMemTable : public MemTableBase
   /** \brief Applies a single key/value update to the MemTable, recording the update in the
    * change log via the passed context.
    */
-  Status put(StorageWriterContext& context, const KeyView& key, const ValueView& value) noexcept;
+  StatusOr<EditOffset> put(StorageWriterContext& context,
+                           const KeyView& key,
+                           const ValueView& value) noexcept;
 
   /** \brief Returns the value currently bound to the passed key, if present; otherwise, returns
    * None.
