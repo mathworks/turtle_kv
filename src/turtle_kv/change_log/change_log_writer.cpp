@@ -842,7 +842,7 @@ Status ChangeLogWriter::activate_blocks(WrittenBlocksState& input,
       continue;
     }
 
-    // Insert this block's slots into the hash map before we release it.
+    // Insert this block's slots into the sync upper bound hash map.
     //
     for (usize i = 0; i < next_block->slot_count(); ++i) {
       const i64 slot_start = next_block->slot_edit_offset(i).value();
@@ -988,6 +988,8 @@ Status ChangeLogWriter::sync(EditOffset upper_bound) noexcept
 //
 void ChangeLogWriter::advance_sync_upper_bound() noexcept
 {
+  LatencyTimer timer{Every2ToTheConst<0>{}, this->metrics_.advance_sync_upper_bound_latency};
+
   i64 current_upper_bound = this->sync_upper_bound_.get_value();
 
   for (;;) {

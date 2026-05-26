@@ -712,7 +712,7 @@ TEST_F(ChangeLogTest, Sync)
   Status sync_status = (*writer)->sync(target);
   EXPECT_TRUE(sync_status.ok()) << BATT_INSPECT(sync_status);
 
-  // After sync returns, durable_upper_bound must be >= target.
+  // After sync returns, durable_upper_bound must return target.
   //
   EXPECT_EQ((*writer)->durable_upper_bound().value(), target.value());
 
@@ -741,7 +741,8 @@ TEST_F(ChangeLogTest, SyncUpperBoundMonotonic)
   std::atomic<i64> max_observed{0};
   std::atomic<bool> monotonicity_violated{false};
 
-  // Reader thread: continuously sample durable_upper_bound() and assert non-decreasing.
+  // Reader thread continuously samples durable_upper_bound() and asserts that it is
+  // non-decreasing.
   //
   std::thread reader([&]() {
     i64 prev = 0;
@@ -755,7 +756,7 @@ TEST_F(ChangeLogTest, SyncUpperBoundMonotonic)
     }
   });
 
-  // Writer: append slots.
+  // Append slots.
   //
   for (usize i = 0; i < num_slots; ++i) {
     std::string data = "slot" + std::to_string(i);
@@ -782,7 +783,7 @@ TEST_F(ChangeLogTest, SyncUpperBoundMonotonic)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-TEST_F(ChangeLogTest, SyncGroup)
+TEST_F(ChangeLogTest, MultipleSync)
 {
   ChangeLogFile::Config config = ChangeLogFile::Config::with_default_values();
   config.block_count = BlockCount{20};
@@ -798,7 +799,7 @@ TEST_F(ChangeLogTest, SyncGroup)
 
   // Append a slot so we have a target offset to sync to.
   //
-  std::string test_data = "Group sync test slot";
+  std::string test_data = "Multiple sync test slot";
   Status write_status = context.append_slot(
       /*min_edit_offset_lower_bound=*/EditOffset{0},
       test_data.size(),
@@ -847,7 +848,7 @@ TEST_F(ChangeLogTest, SyncGroup)
 //
 TEST_F(ChangeLogTest, SyncStaggeredOffsets)
 {
-  // Use small blocks with large payloads to force slots into separate blocks and therefore
+  // Use small blocks with large payloads to force slots into separate blocks and
   // separate write batches.
   //
   ChangeLogFile::Config config = ChangeLogFile::Config::with_default_values();
@@ -864,8 +865,7 @@ TEST_F(ChangeLogTest, SyncStaggeredOffsets)
   const usize num_slots = 4;
   const usize slot_size = 400;
 
-  // Pre-compute the target offsets. Each slot occupies most of a block, so they'll land in
-  // separate blocks and be written in separate batches.
+  // Pre-compute the target offsets.
   //
   std::vector<EditOffset> targets;
   targets.reserve(num_slots);
@@ -873,7 +873,7 @@ TEST_F(ChangeLogTest, SyncStaggeredOffsets)
     targets.push_back(EditOffset{(i64)(i + 1) * (i64)slot_size});
   }
 
-  // Launch sync threads BEFORE appending data, so they actually block on await_true.
+  // Launch sync threads before appending data, so they block on await_true.
   //
   std::vector<std::atomic<i64>> completion_order(num_slots);
   std::atomic<i64> completion_counter{0};
@@ -891,8 +891,6 @@ TEST_F(ChangeLogTest, SyncStaggeredOffsets)
   }
 
   // Append slots one at a time, waiting for each to flush before appending the next.
-  // This forces each slot into its own write batch, so sync_upper_bound_ advances
-  // incrementally rather than jumping to the final value in one shot.
   //
   std::thread appender([&]() {
     ChangeLogWriter::Context context(**writer);
@@ -916,8 +914,8 @@ TEST_F(ChangeLogTest, SyncStaggeredOffsets)
     t.join();
   }
 
-  // Verify partial ordering: a thread waiting on a smaller offset must complete no later than
-  // a thread waiting on a larger offset, since earlier blocks are written first.
+  // Verify that a thread waiting on a smaller offset must complete no later than
+  // a thread waiting on a larger offset.
   //
   for (usize i = 0; i < num_slots; ++i) {
     for (usize j = i + 1; j < num_slots; ++j) {

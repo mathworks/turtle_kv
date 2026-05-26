@@ -644,7 +644,7 @@ TEST_P(KVStoreRecoveryTest, KVStoreRecovery)
 TEST_F(KVStoreTest, SyncWriteOptions)
 {
   std::filesystem::path test_kv_store_dir =
-      this->data_root / "turtle_kv_Test" / "sync_write_opts_recovery";
+      this->data_root / "turtle_kv_Test" / "sync_write_opts";
 
   std::map<std::string, std::string> expected_keys_values;
   std::set<std::string> deleted_keys;
@@ -776,7 +776,7 @@ TEST_F(KVStoreTest, SyncMultithreadedStress)
 
       for (usize i = 0; i < ops_per_thread; ++i) {
         std::string key = gen_key(thread_rng);
-        std::string value = "t" + std::to_string(thread_id) + "_v" + std::to_string(i);
+        std::string value = this->generate_value();
 
         // Alternate between sync put, non-sync put + explicit sync, non-sync put, and remove.
         //

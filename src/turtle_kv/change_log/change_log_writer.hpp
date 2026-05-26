@@ -112,6 +112,7 @@ class ChangeLogWriter
       return (double)this->received_user_byte_count.load() /
              ((double)this->received_block_byte_count.load() + 1e-6);
     }};
+    LatencyMetric advance_sync_upper_bound_latency;
   };
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
