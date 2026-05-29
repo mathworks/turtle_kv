@@ -108,14 +108,15 @@ StatusOr<RecoveredChangeLogState> ChangeLogReader::visit_slots(
   Status visit_status = OkStatus();
 
   EditOffset expected_next_edit_offset{walk_change_log_blocks(
-      target_trim_edit_offset.value(), pending_blocks,
+      target_trim_edit_offset.value(),
+      pending_blocks,
       [&](ChangeLogBlock* block, usize slot_i, EditOffset edit_offset) {
         if (!visit_status.ok()) {
           return;
         }
 
-        auto first_visit_to_block =
-            FirstVisitToBlock{visited_block_set.insert(block->get_block_index().value_or_panic()).second};
+        auto first_visit_to_block = FirstVisitToBlock{
+            visited_block_set.insert(block->get_block_index().value_or_panic()).second};
 
         ConstBuffer slot_buffer = block->get_slot(slot_i);
         ConstBuffer payload = slot_buffer + sizeof(PackedEditOffsetDelta);

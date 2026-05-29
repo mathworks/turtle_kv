@@ -597,20 +597,20 @@ i64 walk_change_log_blocks(i64 edit_offset_start,
       break;
     }
 
-    BlockIterator entry = std::move(it->second);
+    BlockIterator block_iter = std::move(it->second);
     pending_blocks.erase(it);
 
     do {
-      slot_fn(entry.block.get(), entry.next_slot_i, EditOffset{edit_offset_start});
+      slot_fn(block_iter.block.get(), block_iter.next_slot_i, EditOffset{edit_offset_start});
 
-      edit_offset_start +=
-          (i64)(entry.block->slot_size(entry.next_slot_i) - sizeof(PackedEditOffsetDelta));
-      ++entry.next_slot_i;
-    } while (entry.has_more() &&
-             entry.current_edit_offset().value() == edit_offset_start);
+      edit_offset_start += (i64)(block_iter.block->slot_size(block_iter.next_slot_i) -
+                                 sizeof(PackedEditOffsetDelta));
+      ++block_iter.next_slot_i;
+    } while (block_iter.has_more() &&
+             block_iter.current_edit_offset().value() == edit_offset_start);
 
-    if (entry.has_more()) {
-      pending_blocks[entry.current_edit_offset().value()] = std::move(entry);
+    if (block_iter.has_more()) {
+      pending_blocks[block_iter.current_edit_offset().value()] = std::move(block_iter);
     }
   }
   return edit_offset_start;
