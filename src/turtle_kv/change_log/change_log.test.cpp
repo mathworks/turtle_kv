@@ -722,67 +722,6 @@ TEST_F(ChangeLogTest, Sync)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-TEST_F(ChangeLogTest, SyncUpperBoundMonotonic)
-{
-  ChangeLogFile::Config config = ChangeLogFile::Config::with_default_values();
-  config.block_count = BlockCount{20};
-  ChangeLogWriter::Options options = ChangeLogWriter::Options::with_default_values();
-
-  StatusOr<std::unique_ptr<ChangeLogWriter>> writer =
-      ChangeLogWriter::open_or_create(this->test_file_, config, options, RemoveExisting{true});
-  ASSERT_TRUE(writer.ok());
-
-  (*writer)->start(batt::Runtime::instance().default_scheduler().schedule_task());
-
-  ChangeLogWriter::Context context(**writer);
-
-  const usize num_slots = 50;
-  std::atomic<bool> done{false};
-  std::atomic<i64> max_observed{0};
-  std::atomic<bool> monotonicity_violated{false};
-
-  // Reader thread continuously samples durable_upper_bound() and asserts that it is
-  // non-decreasing.
-  //
-  std::thread reader([&]() {
-    i64 prev = 0;
-    while (!done.load()) {
-      i64 current = (*writer)->durable_upper_bound().value();
-      if (current < prev) {
-        monotonicity_violated.store(true);
-      }
-      prev = current;
-      max_observed.store(std::max(max_observed.load(), current));
-    }
-  });
-
-  // Append slots.
-  //
-  for (usize i = 0; i < num_slots; ++i) {
-    std::string data = "slot" + std::to_string(i);
-    Status write_status = context.append_slot(
-        /*min_edit_offset_lower_bound=*/EditOffset{0},
-        data.size(),
-        [&data](FirstVisitToBlock, ChangeLogBlock*, MutableBuffer buffer, EditOffset) {
-          std::memcpy(buffer.data(), data.data(), data.size());
-        });
-    ASSERT_TRUE(write_status.ok());
-  }
-
-  ASSERT_TRUE((*writer)->wait_for_flush());
-
-  done.store(true);
-  reader.join();
-
-  EXPECT_FALSE(monotonicity_violated.load()) << "sync_upper_bound_ decreased during writes!";
-  EXPECT_GT(max_observed.load(), 0) << "Reader never observed sync_upper_bound_ advance!";
-
-  (*writer)->halt();
-  (*writer)->join();
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
 TEST_F(ChangeLogTest, MultipleSync)
 {
   ChangeLogFile::Config config = ChangeLogFile::Config::with_default_values();

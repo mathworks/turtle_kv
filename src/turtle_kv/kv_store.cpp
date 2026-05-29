@@ -1351,10 +1351,10 @@ using CheckpointEvent = llfs::PackedVariant<turtle_kv::PackedCheckpoint>;
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status KVStore::sync(Optional<i64> upper_bound) noexcept
+Status KVStore::sync(Optional<EditOffset> upper_bound) noexcept
 {
   EditOffset target =
-      upper_bound ? EditOffset{*upper_bound} : this->change_log_writer_->next_edit_offset();
+      upper_bound ? *upper_bound : this->change_log_writer_->next_edit_offset();
 
   return this->change_log_writer_->sync(target);
 }

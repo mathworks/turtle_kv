@@ -11,71 +11,11 @@
 
 #include <functional>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace turtle_kv {
 
 namespace {
-
-// Used to read slots from a block. Tracks which slot to read next with `next_slot_i`.
-//
-struct BlockIterator {
-  boost::intrusive_ptr<ChangeLogBlock> block;
-  usize next_slot_i = 0;
-  bool visited = false;
-
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-
-  explicit BlockIterator(boost::intrusive_ptr<ChangeLogBlock>&& block_arg) noexcept
-      : block{std::move(block_arg)}
-  {
-  }
-
-  BlockIterator(BlockIterator&& other) noexcept
-      : block{std::exchange(other.block, nullptr)}
-      , next_slot_i{std::exchange(other.next_slot_i, 0)}
-      , visited{std::exchange(other.visited, false)}
-  {
-  }
-
-  BlockIterator(const BlockIterator&) = delete;
-  BlockIterator& operator=(const BlockIterator&) = delete;
-
-  // Get the EditOffset of the current slot.
-  //
-  EditOffset current_edit_offset() const
-  {
-    BATT_CHECK(this->has_more());
-    return this->block->slot_edit_offset(this->next_slot_i);
-  }
-
-  // Check if there are more slots to process.
-  //
-  bool has_more() const
-  {
-    return next_slot_i < block->slot_count();
-  }
-
-  bool operator<(const BlockIterator& other) const
-  {
-    // If this has no more, it cannot be before anything else.
-    //
-    if (!this->has_more()) {
-      return false;
-    }
-
-    // If the other has no more, this comes before; otherwise we know both have more so compare the
-    // current edit offsets.
-    //
-    return !other.has_more() || this->current_edit_offset() < other.current_edit_offset();
-  }
-};
-
-struct BlockIteratorCompare {
-  bool operator()(BlockIterator* left, BlockIterator* right) const
-  {
-    return *left < *right;
-  }
-};
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
@@ -130,9 +70,9 @@ StatusOr<RecoveredChangeLogState> ChangeLogReader::visit_slots(
   //
   std::unordered_set<BlockIndex, BlockIndex::Hash> visited_block_set;
 
-  // Create block iterators, filtering out empty blocks.
+  // Build the pending block map, filtering out empty blocks.
   //
-  std::vector<BlockIterator> block_iterators;
+  BlockIteratorMap pending_blocks;
 
   for (auto& block : blocks_vec) {
     if (block->edit_offset_upper_bound() <= target_trim_edit_offset) {
@@ -142,13 +82,14 @@ StatusOr<RecoveredChangeLogState> ChangeLogReader::visit_slots(
       continue;
     }
     if (block->slot_count() > 0) {
-      block_iterators.emplace_back(batt::make_copy(block));
+      const i64 first_slot_offset = block->slot_edit_offset(0).value();
+      pending_blocks[first_slot_offset] = BlockIterator{batt::make_copy(block), 0};
     }
   }
 
   // If there's no slots to process, return early.
   //
-  if (block_iterators.empty()) {
+  if (pending_blocks.empty()) {
     RecoveredChangeLogState recovered_state;
     recovered_state.block_range = Interval<BlockIndex>{BlockIndex{0}, BlockIndex{0}};
     recovered_state.trim_edit_offset = target_trim_edit_offset;
@@ -161,71 +102,28 @@ StatusOr<RecoveredChangeLogState> ChangeLogReader::visit_slots(
     return {recovered_state};
   }
 
-  StackMerger<BlockIterator, BlockIteratorCompare> heap{
-      Slice<BlockIterator>{as_slice(block_iterators)}};
-
-  // The first expected slot edit offset is the trim edit offset.
-  //
-  EditOffset expected_next_edit_offset = target_trim_edit_offset;
-
   //+++++++++++-+-+--+----- --- -- -  -  -   -
   // Process slots in EditOffset order.
   //
-  while (!heap.empty()) {
-    BlockIterator* current = heap.first();
-    ConstBuffer slot_buffer = current->block->get_slot(current->next_slot_i);
-    EditOffset edit_offset = current->current_edit_offset();
+  Status visit_status = OkStatus();
 
-    // Advance to the next slot when we finish each iteration of the loop.
-    //
-    auto on_loop_iter_exit = batt::finally([&] {
-      ++current->next_slot_i;
-      if (current->has_more()) {
-        heap.update_first();
-      } else {
-        heap.remove_first();
-      }
-    });
+  EditOffset expected_next_edit_offset{walk_change_log_blocks(
+      target_trim_edit_offset.value(), pending_blocks,
+      [&](ChangeLogBlock* block, usize slot_i, EditOffset edit_offset) {
+        if (!visit_status.ok()) {
+          return;
+        }
 
-    // Skip slots below the trim bound.
-    //
-    if (edit_offset < target_trim_edit_offset) {
-      continue;
-    }
+        auto first_visit_to_block =
+            FirstVisitToBlock{visited_block_set.insert(block->get_block_index().value_or_panic()).second};
 
-    // If there's a gap in our slots, we're missing data and can't continue.
-    //
-    if (expected_next_edit_offset != edit_offset) {
-      VLOG(1) << "Gap found;" << BATT_INSPECT(expected_next_edit_offset)
-              << BATT_INSPECT(edit_offset) << BATT_INSPECT(current->block->get_block_index());
-      break;
-    }
+        ConstBuffer slot_buffer = block->get_slot(slot_i);
+        ConstBuffer payload = slot_buffer + sizeof(PackedEditOffsetDelta);
 
-    expected_next_edit_offset =
-        edit_offset +
-        EditOffsetDelta{static_cast<i64>(slot_buffer.size() - sizeof(PackedEditOffsetDelta))};
+        visit_status = visitor(first_visit_to_block, block, edit_offset, payload);
+      })};
 
-    auto first_visit_to_block = FirstVisitToBlock{!current->visited};
-    ChangeLogBlock* block = current->block.get();
-
-    // If recovering state, add each block which contains recovered slots to the
-    // `block_edit_ranges` hash table.
-    //
-    if (first_visit_to_block) {
-      visited_block_set.insert(block->get_block_index().value_or_panic());
-      BATT_CHECK_EQ(false, current->visited);
-      current->visited = true;
-    } else {
-      BATT_CHECK(current->visited);
-    }
-
-    // Move the payload past the EditOffset.
-    //
-    ConstBuffer payload = slot_buffer + sizeof(PackedEditOffsetDelta);
-
-    Status visit_status = visitor(first_visit_to_block, block, edit_offset, payload);
-    BATT_REQUIRE_OK(visit_status);
-  }
+  BATT_REQUIRE_OK(visit_status);
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
   // Initialize the `recovered_state` object.

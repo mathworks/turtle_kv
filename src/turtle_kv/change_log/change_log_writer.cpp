@@ -138,6 +138,12 @@ struct ChangeLogWriter::WrittenBlocksState {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+struct ChangeLogWriter::AdvanceSyncState {
+  BlockIteratorMap pending_blocks;
+};
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 struct ChangeLogWriter::ActiveBlocksState : ChangeLogFile::MetaState {
   using Super = ChangeLogFile::MetaState;
 
@@ -411,6 +417,7 @@ void ChangeLogWriter::start(batt::Task::executor_type&& executor) noexcept
 //
 void ChangeLogWriter::halt() noexcept
 {
+  this->sync_upper_bound_.close();
   this->halt_requested_.store(true);
   this->free_block_tokens_.close();
 }
@@ -507,6 +514,7 @@ void ChangeLogWriter::writer_task_main() noexcept
     CollectedBlocksState collected;
     PreparedBlocksState prepared{this->config(), *this->state_.lock()->active_blocks_state_};
     WrittenBlocksState written;
+    AdvanceSyncState synced;
 
     for (;;) {
       // Collect BlockBuffers from writer contexts.
@@ -554,10 +562,17 @@ void ChangeLogWriter::writer_task_main() noexcept
 
       // "Activate" the written blocks by adding them to the active blocks state; this allows
       // accurate trimming and reclamation of storage resources.
+      //
+      batt::SmallVec<boost::intrusive_ptr<ChangeLogBlock>, kStaticQueueSize> newly_activated;
       {
         batt::ScopedLock<State> locked_state{this->state_};
-        BATT_REQUIRE_OK(this->activate_blocks(written, *locked_state->active_blocks_state_));
+        BATT_REQUIRE_OK(
+            this->activate_blocks(written, *locked_state->active_blocks_state_, newly_activated));
       }
+
+      // Advance the durable upper bound with the newly activated blocks.
+      //
+      this->advance_sync_upper_bound(newly_activated, synced);
 
       // If halt is requested and we don't appear to be making any progress, then return.
       //
@@ -571,8 +586,6 @@ void ChangeLogWriter::writer_task_main() noexcept
       VLOG(2) << "done writing!  polling for more";
     }
   }();
-
-  this->sync_upper_bound_.close();
 
   if (VLOG_IS_ON(1) || (!status.ok() && !this->halt_requested_.load())) {
     LOG(INFO) << "ChangeLogWriter::writer_task exiting with status=" << status;
@@ -774,8 +787,10 @@ auto ChangeLogWriter::write_blocks(PreparedBlocksState& input, WrittenBlocksStat
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status ChangeLogWriter::activate_blocks(WrittenBlocksState& input,
-                                        ActiveBlocksState& output) noexcept
+Status ChangeLogWriter::activate_blocks(
+    WrittenBlocksState& input,
+    ActiveBlocksState& output,
+    batt::SmallVecBase<boost::intrusive_ptr<ChangeLogBlock>>& newly_activated) noexcept
 {
   if (input.blocks.empty()) {
     return OkStatus();
@@ -842,13 +857,10 @@ Status ChangeLogWriter::activate_blocks(WrittenBlocksState& input,
       continue;
     }
 
-    // Insert this block's slots into the sync upper bound hash map.
+    // Collect blocks with slots for advancing the durable upper bound.
     //
-    for (usize i = 0; i < next_block->slot_count(); ++i) {
-      const i64 slot_start = next_block->slot_edit_offset(i).value();
-      const i64 slot_end = slot_start +
-          (i64)(next_block->slot_size(i) - sizeof(PackedEditOffsetDelta));
-      this->pending_slot_ends_[slot_start] = slot_end;
+    if (next_block->slot_count() > 0) {
+      newly_activated.emplace_back(next_block);
     }
 
     // Update active blocks edit offset upper bound.
@@ -865,8 +877,6 @@ Status ChangeLogWriter::activate_blocks(WrittenBlocksState& input,
   }
 
   BATT_REQUIRE_OK(this->refresh_meta_block(output));
-
-  this->advance_sync_upper_bound();
 
   return OkStatus();
 }
@@ -986,19 +996,22 @@ Status ChangeLogWriter::sync(EditOffset upper_bound) noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-void ChangeLogWriter::advance_sync_upper_bound() noexcept
+void ChangeLogWriter::advance_sync_upper_bound(
+    batt::SmallVecBase<boost::intrusive_ptr<ChangeLogBlock>>& newly_activated,
+    AdvanceSyncState& sync_state) noexcept
 {
   LatencyTimer timer{Every2ToTheConst<0>{}, this->metrics_.advance_sync_upper_bound_latency};
 
   i64 current_upper_bound = this->sync_upper_bound_.get_value();
 
-  for (;;) {
-    auto it = this->pending_slot_ends_.find(current_upper_bound);
-    if (it == this->pending_slot_ends_.end()) {
-      break;
-    }
-    current_upper_bound = it->second;
-    this->pending_slot_ends_.erase(it);
+  for (auto& block_ptr : newly_activated) {
+    const i64 first_slot_offset = block_ptr->slot_edit_offset(0).value();
+    sync_state.pending_blocks[first_slot_offset] = BlockIterator{std::move(block_ptr), 0};
+
+    current_upper_bound = walk_change_log_blocks(current_upper_bound,
+                                                 sync_state.pending_blocks,
+                                                 [](ChangeLogBlock*, usize, EditOffset) {
+                                                 });
   }
 
   this->sync_upper_bound_.set_value(current_upper_bound);

@@ -29,6 +29,8 @@
 #include <llfs/ioring.hpp>
 #include <llfs/ioring_file.hpp>
 
+#include <absl/container/flat_hash_map.h>
+
 #include <boost/intrusive_ptr.hpp>
 
 namespace turtle_kv {
@@ -552,6 +554,66 @@ inline void ChangeLogBlock::init_ephemeral_state(RecoveryChecksPassed&& token,
 {
   new (&this->ephemeral_state_storage_)
       EphemeralStatePtr{new EphemeralState{std::move(token), block_index}};
+}
+
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+
+struct BlockIterator {
+  boost::intrusive_ptr<ChangeLogBlock> block;
+  usize next_slot_i;
+
+  bool has_more() const noexcept
+  {
+    return this->next_slot_i < this->block->slot_count();
+  }
+
+  EditOffset current_edit_offset() const noexcept
+  {
+    return this->block->slot_edit_offset(this->next_slot_i);
+  }
+};
+
+using BlockIteratorMap = absl::flat_hash_map<i64, BlockIterator>;
+
+/** \brief Walks an EditOffset edit_offset_start forward through a set of pending blocks, consuming
+ * contiguous slots in order. Calls `slot_fn` for each slot consumed. Stops at the first gap
+ * (edit_offset_start not found in map).
+ *
+ * \param edit_offset_start The starting EditOffset value.
+ * \param pending_blocks Map from slot EditOffset to block entry; entries are consumed as the
+ *   edit_offset_start advances. Blocks with remaining non-contiguous slots are re-inserted.
+ * \param slot_fn Called for each consumed slot with (ChangeLogBlock*, slot_index, EditOffset).
+ *
+ * \return The new edit_offset_start value after walking.
+ */
+template <typename SlotFn>
+i64 walk_change_log_blocks(i64 edit_offset_start,
+                           BlockIteratorMap& pending_blocks,
+                           SlotFn&& slot_fn)
+{
+  for (;;) {
+    auto it = pending_blocks.find(edit_offset_start);
+    if (it == pending_blocks.end()) {
+      break;
+    }
+
+    BlockIterator entry = std::move(it->second);
+    pending_blocks.erase(it);
+
+    do {
+      slot_fn(entry.block.get(), entry.next_slot_i, EditOffset{edit_offset_start});
+
+      edit_offset_start +=
+          (i64)(entry.block->slot_size(entry.next_slot_i) - sizeof(PackedEditOffsetDelta));
+      ++entry.next_slot_i;
+    } while (entry.has_more() &&
+             entry.current_edit_offset().value() == edit_offset_start);
+
+    if (entry.has_more()) {
+      pending_blocks[entry.current_edit_offset().value()] = std::move(entry);
+    }
+  }
+  return edit_offset_start;
 }
 
 }  // namespace turtle_kv

@@ -102,11 +102,8 @@ StatusOr<EditOffset> BasicMemTable<StorageT, AllocationTrackerT>::put(
     BATT_REQUIRE_OK(this->art_index_.insert(key, inserter));
     BATT_CHECK_NOT_NULLPTR(inserter.entry_out);
 
-    return inserter.entry_out->edit_offset() +
-           EditOffsetDelta{(i64)packed_key_value_slot_size(key, value)};
+    return inserter.edit_range_out.upper_bound;
   }
-
-  return OkStatus();
   //
   // ~on_scope_exit calls commit_edit.
 }

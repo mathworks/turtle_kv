@@ -29,8 +29,6 @@
 #include <batteries/async/task_scheduler.hpp>
 #include <batteries/interval.hpp>
 
-#include <absl/container/flat_hash_map.h>
-
 #include <chrono>
 #include <concepts>
 #include <ranges>
@@ -381,6 +379,10 @@ class ChangeLogWriter
 
   struct ActiveBlocksState;
 
+  // activate_blocks() -> AdvanceSyncState -> advance_sync_upper_bound()
+  //
+  struct AdvanceSyncState;
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   struct State {
@@ -501,17 +503,26 @@ class ChangeLogWriter
    *
    * ChangeLogBlock (BlockBuffer) objects removed from `input.blocks` are released by decrementing
    * their ref count via `remove_ref`.
+   *
+   * Blocks with slots are appended to `newly_activated` for post-activation advancing of the
+   * durable upper bound.
    */
-  Status activate_blocks(WrittenBlocksState& input, ActiveBlocksState& output) noexcept;
+  Status activate_blocks(
+      WrittenBlocksState& input,
+      ActiveBlocksState& output,
+      batt::SmallVecBase<boost::intrusive_ptr<ChangeLogBlock>>& newly_activated) noexcept;
 
   /** \brief Refreshes the meta-block in the change log file.
    */
   Status refresh_meta_block(ActiveBlocksState& active_blocks) noexcept;
 
-  /** \brief Advances sync_upper_bound_ by walking the pending_slot_ends_ hash map from the current
-   * upper bound. Called after activating blocks.
+  /** \brief Inserts newly activated blocks into the pending map and advances sync_upper_bound_ by
+   * walking slots from the current upper bound. Called after activate_blocks, outside the
+   * state mutex.
    */
-  void advance_sync_upper_bound() noexcept;
+  void advance_sync_upper_bound(
+      batt::SmallVecBase<boost::intrusive_ptr<ChangeLogBlock>>& newly_activated,
+      AdvanceSyncState& sync_state) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -555,11 +566,6 @@ class ChangeLogWriter
   /** \brief The confirmed durable EditOffset upper bound.
    */
   batt::Watch<i64> sync_upper_bound_;
-
-  /** \brief Maps slot start EditOffset -> slot end EditOffset for activated slots not yet
-   * incorporated into sync_upper_bound_.
-   */
-  absl::flat_hash_map<i64, i64> pending_slot_ends_;
 };
 
 // #=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++

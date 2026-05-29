@@ -268,7 +268,7 @@ class KVStore : public Table
    */
   void release_thread_context() noexcept;
 
-  Status sync(Optional<i64> upper_bound = None) noexcept;
+  Status sync(Optional<EditOffset> upper_bound = None) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
