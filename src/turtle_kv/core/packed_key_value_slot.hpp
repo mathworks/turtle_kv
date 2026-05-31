@@ -17,8 +17,146 @@
 #include <turtle_kv/import/int_types.hpp>
 #include <turtle_kv/import/status.hpp>
 
+#include <llfs/packed_pointer.hpp>
+
 namespace turtle_kv {
 
+struct PackedKeyValueSlot;
+
+using PackedKeyValueSlotPtr = llfs::PackedPointer<PackedKeyValueSlot, little_u16>;
+
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+//
+struct PackedKeyValueSlot {
+  little_u16 key_size;
+  char key_data_[0];
+
+  //----- --- -- -  -  -   -
+  // u8 key_bytes[this->key_size]
+  //----- --- -- -  -  -   -
+  // u8 op_code
+  // u8 value_bytes[this->item_size - offsetof(this->value_bytes)]
+  //----- --- -- -  -  -   -
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  PackedKeyValueSlot(const PackedKeyValueSlot&) = delete;
+  PackedKeyValueSlot& operator=(const PackedKeyValueSlot&) = delete;
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  usize slot_size(const PackedKeyValueSlotPtr* p_this) const noexcept
+  {
+    const PackedKeyValueSlotPtr* const p_next = p_this + 1;
+    return usize{p_next->offset.value()} - usize{p_this->offset.value()} +
+           sizeof(PackedKeyValueSlotPtr);
+  }
+
+  const char* key_data() const noexcept
+  {
+    return this->key_data_;
+  }
+
+  KeyView key_view() const noexcept
+  {
+    return KeyView{this->key_data_, this->key_size};
+  }
+
+  const char* value_data() const noexcept
+  {
+    return this->key_data() + (this->key_size + 1);
+  }
+
+  const char* value_data_end(const PackedKeyValueSlotPtr* p_this) const noexcept
+  {
+    return this->value_data_end(/*size_of_slot=*/this->slot_size(p_this));
+  }
+
+  const char* value_data_end(usize size_of_slot) const noexcept
+  {
+    return reinterpret_cast<const char*>(this) + size_of_slot;
+  }
+
+  usize value_size(const PackedKeyValueSlotPtr* p_this) const noexcept
+  {
+    return this->value_size(/*size_of_slot=*/this->slot_size(p_this));
+  }
+
+  usize value_size(usize size_of_slot) const noexcept
+  {
+    return this->value_data_end(size_of_slot) - this->value_data();
+  }
+
+  ValueView::OpCode value_op_code() const noexcept
+  {
+    return static_cast<ValueView::OpCode>(this->key_data_[this->key_size]);
+  }
+
+  ValueView value_view(const PackedKeyValueSlotPtr* p_this) const noexcept
+  {
+    return this->value_view(/*size_of_slot=*/this->slot_size(p_this));
+  }
+
+  ValueView value_view(usize size_of_slot) const noexcept
+  {
+    return ValueView::from_packed(
+        this->value_op_code(),
+        std::string_view{this->value_data(), this->value_size(size_of_slot)});
+  }
+};
+
+inline KeyView get_key(const PackedKeyValueSlot& packed_slot) noexcept
+{
+  return packed_slot.key_view();
+}
+
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+// TODO [tastolfi 2026-05-31] use 16-bit pointer tagging to store slot_size with the pointer in one
+// 64-bit word.
+//
+struct PackedKeyValueSlotRef {
+  const PackedKeyValueSlot* p_slot;
+  usize slot_size;
+};
+
+inline KeyView get_key(const PackedKeyValueSlotRef& slot_ref) noexcept
+{
+  return slot_ref.p_slot->key_view();
+}
+
+inline ValueView get_value(const PackedKeyValueSlotRef& slot_ref) noexcept
+{
+  return slot_ref.p_slot->value_view(slot_ref.slot_size);
+}
+
+inline const PackedKeyValueSlotRef& to_key_value_slot_ref(const PackedKeyValueSlotRef& ref) noexcept
+{
+  return ref;
+}
+
+inline PackedKeyValueSlotRef to_key_value_slot_ref(const PackedKeyValueSlotPtr* pp_slot) noexcept
+{
+  return PackedKeyValueSlotRef{
+      .p_slot = pp_slot->get(),
+      .slot_size = pp_slot->get()->slot_size(pp_slot),
+  };
+}
+
+inline PackedKeyValueSlotRef to_key_value_slot_ref(const ConstBuffer& slot_buffer) noexcept
+{
+  return PackedKeyValueSlotRef{
+      .p_slot = static_cast<const PackedKeyValueSlot*>(slot_buffer.data()),
+      .slot_size = slot_buffer.size(),
+  };
+}
+
+template <typename T>
+concept ConvertibleToKeyValueSlotRef = requires(const T& obj) {
+  { to_key_value_slot_ref(obj) } -> std::convertible_to<const PackedKeyValueSlotRef&>;
+};
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 /** \brief Returns the size required (in bytes) to pack a slot with the passed key and
  * value.
  */
@@ -30,6 +168,21 @@ inline usize packed_key_value_slot_size(const KeyView& key, const ValueView& val
          + value.size();
 }
 
+template <ConvertibleToKeyValueSlotRef T>
+inline usize packed_key_value_slot_size(const T& obj) noexcept
+{
+  return to_key_value_slot_ref(obj).slot_size;
+}
+
+template <typename T>
+  requires HasKeyView<T> && HasValueView<T>
+inline usize packed_key_value_slot_size(const T& obj) noexcept
+{
+  return packed_key_value_slot_size(get_key(obj), get_value(obj));
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 /** \brief Serializes the passed key and value into the destination buffer.
  */
 inline std::pair<KeyView, ValueView> pack_key_value_slot(const KeyView& key,
@@ -72,6 +225,37 @@ inline std::pair<KeyView, ValueView> pack_key_value_slot(const KeyView& key,
                              }));
 }
 
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+/** \brief
+ */
+template <typename T>
+  requires HasKeyView<T> && HasValueView<T>
+inline usize pack_key_value_slot(const T& src, void* dst) noexcept
+{
+  const KeyView& key = get_key(src);
+  const ValueView& value = get_value(src);
+  const usize slot_size = packed_key_value_slot_size(key, value);
+
+  pack_key_value_slot(key, value, MutableBuffer{dst, slot_size});
+
+  return slot_size;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+/** \brief
+ */
+template <ConvertibleToKeyValueSlotRef T>
+inline usize pack_key_value_slot(const T& src, void* dst) noexcept
+{
+  const PackedKeyValueSlotRef& slot_ref = to_key_value_slot_ref(src);
+  std::memcpy(dst, slot_ref.p_slot, slot_ref.slot_size);
+  return slot_ref.slot_size;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 /** \brief Unpacks a key/value pair from the passed packed slot buffer.
  */
 inline StatusOr<std::pair<KeyView, ValueView>> unpack_key_value_slot(ConstBuffer payload)

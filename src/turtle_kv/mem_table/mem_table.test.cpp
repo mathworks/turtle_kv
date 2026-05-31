@@ -377,9 +377,9 @@ TEST_F(MemTableTest, PutGet)
 //
 TEST_F(MemTableTest, PutUntilFull)
 {
-  usize total_key_bytes = 0;
-  usize total_value_bytes = 0;
-  usize put_count = 0;
+  [[maybe_unused]] usize total_key_bytes = 0;
+  [[maybe_unused]] usize total_value_bytes = 0;
+  [[maybe_unused]] usize put_count = 0;
 
   for (;;) {
     KeyView key = this->make_random_key();

@@ -85,6 +85,7 @@ class TurtleKvRecipe(ConanFile):
         }
 
         self.requires("abseil/20250127.0", **VISIBLE, **OVERRIDE)
+        self.requires("artc/[>=0.0.1 <1]")
         self.requires("batteries/[>=0.70.2 <1]", **VISIBLE, **OVERRIDE)
         self.requires("boost/1.88.0", **VISIBLE, **OVERRIDE)
         self.requires("glog/0.7.1", **VISIBLE)
