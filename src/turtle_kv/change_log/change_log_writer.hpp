@@ -11,6 +11,7 @@
 
 #include <turtle_kv/change_log/api_types.hpp>
 #include <turtle_kv/change_log/change_log_block.hpp>
+#include <turtle_kv/change_log/change_log_blocks_visitor.hpp>
 #include <turtle_kv/change_log/change_log_file.hpp>
 #include <turtle_kv/change_log/edit_offset.hpp>
 

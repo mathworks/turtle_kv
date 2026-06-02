@@ -9,6 +9,8 @@
 #include <turtle_kv/change_log/change_log_reader.hpp>
 //
 
+#include <turtle_kv/change_log/change_log_blocks_visitor.hpp>
+
 #include <functional>
 #include <unordered_map>
 #include <unordered_set>
@@ -70,9 +72,9 @@ StatusOr<RecoveredChangeLogState> ChangeLogReader::visit_slots(
   //
   std::unordered_set<BlockIndex, BlockIndex::Hash> visited_block_set;
 
-  // Build the pending block map, filtering out empty blocks.
+  // Build the visitor, filtering out empty/trimmed blocks.
   //
-  BlockIteratorMap pending_blocks;
+  ChangeLogBlocksVisitor blocks_visitor{target_trim_edit_offset};
 
   for (auto& block : blocks_vec) {
     if (block->edit_offset_upper_bound() <= target_trim_edit_offset) {
@@ -82,14 +84,13 @@ StatusOr<RecoveredChangeLogState> ChangeLogReader::visit_slots(
       continue;
     }
     if (block->slot_count() > 0) {
-      const i64 first_slot_offset = block->slot_edit_offset(0).value();
-      pending_blocks[first_slot_offset] = BlockIterator{batt::make_copy(block), 0};
+      blocks_visitor.add_block(batt::make_copy(block));
     }
   }
 
   // If there's no slots to process, return early.
   //
-  if (pending_blocks.empty()) {
+  if (blocks_visitor.pending_blocks().empty()) {
     RecoveredChangeLogState recovered_state;
     recovered_state.block_range = Interval<BlockIndex>{BlockIndex{0}, BlockIndex{0}};
     recovered_state.trim_edit_offset = target_trim_edit_offset;
@@ -107,21 +108,26 @@ StatusOr<RecoveredChangeLogState> ChangeLogReader::visit_slots(
   //
   Status visit_status = OkStatus();
 
-  EditOffset expected_next_edit_offset{walk_change_log_blocks(
-      target_trim_edit_offset.value(),
-      pending_blocks,
-      [&](ChangeLogBlock* block, usize slot_i, EditOffset edit_offset) {
-        if (!visit_status.ok()) {
-          return;
+  EditOffset expected_next_edit_offset{blocks_visitor.visit_change_log_blocks(
+      [&](FirstVisitToBlock first_visit, ChangeLogBlock* block, usize slot_i,
+          EditOffset edit_offset) -> Optional<batt::seq::LoopControl> {
+        if (first_visit) {
+          auto [_, inserted] =
+              visited_block_set.insert(block->get_block_index().value_or_panic());
+          BATT_CHECK(inserted);
+        } else {
+          BATT_CHECK(visited_block_set.count(block->get_block_index().value_or_panic()) > 0);
         }
-
-        auto first_visit_to_block = FirstVisitToBlock{
-            visited_block_set.insert(block->get_block_index().value_or_panic()).second};
 
         ConstBuffer slot_buffer = block->get_slot(slot_i);
         ConstBuffer payload = slot_buffer + sizeof(PackedEditOffsetDelta);
 
-        visit_status = visitor(first_visit_to_block, block, edit_offset, payload);
+        visit_status = visitor(first_visit, block, edit_offset, payload);
+
+        if (!visit_status.ok()) {
+          return batt::seq::LoopControl::kBreak;
+        }
+        return None;
       })};
 
   BATT_REQUIRE_OK(visit_status);

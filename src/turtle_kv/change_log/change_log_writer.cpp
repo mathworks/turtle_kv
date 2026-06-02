@@ -139,7 +139,7 @@ struct ChangeLogWriter::WrittenBlocksState {
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 struct ChangeLogWriter::AdvanceSyncState {
-  BlockIteratorMap pending_blocks;
+  ChangeLogBlocksVisitor visitor;
 };
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -1002,19 +1002,16 @@ void ChangeLogWriter::advance_sync_upper_bound(
 {
   LatencyTimer timer{Every2ToTheConst<0>{}, this->metrics_.advance_sync_upper_bound_latency};
 
-  i64 current_upper_bound = this->sync_upper_bound_.get_value();
+  sync_state.visitor.set_visited_upper_bound(EditOffset{this->sync_upper_bound_.get_value()});
 
   for (auto& block_ptr : newly_activated) {
-    const i64 first_slot_offset = block_ptr->slot_edit_offset(0).value();
-    sync_state.pending_blocks[first_slot_offset] = BlockIterator{std::move(block_ptr), 0};
-
-    current_upper_bound = walk_change_log_blocks(current_upper_bound,
-                                                 sync_state.pending_blocks,
-                                                 [](ChangeLogBlock*, usize, EditOffset) {
-                                                 });
+    sync_state.visitor.add_block(std::move(block_ptr));
+    sync_state.visitor.visit_change_log_blocks(
+        [](FirstVisitToBlock, ChangeLogBlock*, usize, EditOffset) {
+        });
   }
 
-  this->sync_upper_bound_.set_value(current_upper_bound);
+  this->sync_upper_bound_.set_value(sync_state.visitor.visited_upper_bound().value());
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

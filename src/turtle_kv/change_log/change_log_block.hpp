@@ -29,8 +29,6 @@
 #include <llfs/ioring.hpp>
 #include <llfs/ioring_file.hpp>
 
-#include <absl/container/flat_hash_map.h>
-
 #include <boost/intrusive_ptr.hpp>
 
 namespace turtle_kv {
@@ -203,6 +201,11 @@ class ChangeLogBlock
   {
     return this->edit_offset_lower_bound() +
            BATT_OK_RESULT_OR_PANIC(Self::read_slot_edit_offset_delta(this->get_slot(i)));
+  }
+
+  EditOffset next_edit_offset_of_slot(usize slot_index) const noexcept
+  {
+    return EditOffset{(i64)(this->slot_size(slot_index) - sizeof(PackedEditOffsetDelta))};
   }
 
   /** \brief Adds `count` references to this buffer.
@@ -554,66 +557,6 @@ inline void ChangeLogBlock::init_ephemeral_state(RecoveryChecksPassed&& token,
 {
   new (&this->ephemeral_state_storage_)
       EphemeralStatePtr{new EphemeralState{std::move(token), block_index}};
-}
-
-//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
-
-struct BlockIterator {
-  boost::intrusive_ptr<ChangeLogBlock> block;
-  usize next_slot_i;
-
-  bool has_more() const noexcept
-  {
-    return this->next_slot_i < this->block->slot_count();
-  }
-
-  EditOffset current_edit_offset() const noexcept
-  {
-    return this->block->slot_edit_offset(this->next_slot_i);
-  }
-};
-
-using BlockIteratorMap = absl::flat_hash_map<i64, BlockIterator>;
-
-/** \brief Walks an EditOffset edit_offset_start forward through a set of pending blocks, consuming
- * contiguous slots in order. Calls `slot_fn` for each slot consumed. Stops at the first gap
- * (edit_offset_start not found in map).
- *
- * \param edit_offset_start The starting EditOffset value.
- * \param pending_blocks Map from slot EditOffset to block entry; entries are consumed as the
- *   edit_offset_start advances. Blocks with remaining non-contiguous slots are re-inserted.
- * \param slot_fn Called for each consumed slot with (ChangeLogBlock*, slot_index, EditOffset).
- *
- * \return The new edit_offset_start value after walking.
- */
-template <typename SlotFn>
-i64 walk_change_log_blocks(i64 edit_offset_start,
-                           BlockIteratorMap& pending_blocks,
-                           SlotFn&& slot_fn)
-{
-  for (;;) {
-    auto it = pending_blocks.find(edit_offset_start);
-    if (it == pending_blocks.end()) {
-      break;
-    }
-
-    BlockIterator block_iter = std::move(it->second);
-    pending_blocks.erase(it);
-
-    do {
-      slot_fn(block_iter.block.get(), block_iter.next_slot_i, EditOffset{edit_offset_start});
-
-      edit_offset_start += (i64)(block_iter.block->slot_size(block_iter.next_slot_i) -
-                                 sizeof(PackedEditOffsetDelta));
-      ++block_iter.next_slot_i;
-    } while (block_iter.has_more() &&
-             block_iter.current_edit_offset().value() == edit_offset_start);
-
-    if (block_iter.has_more()) {
-      pending_blocks[block_iter.current_edit_offset().value()] = std::move(block_iter);
-    }
-  }
-  return edit_offset_start;
 }
 
 }  // namespace turtle_kv

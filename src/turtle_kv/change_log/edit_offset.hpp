@@ -23,6 +23,13 @@ class WrappedInt
   using Self = WrappedInt;
   using IntT = Int;
 
+  struct Hash {
+    decltype(auto) operator()(const Self& wrapped_int) const
+    {
+      return std::hash<Int>{}(wrapped_int.value());
+    }
+  };
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   constexpr explicit WrappedInt(IntT value) noexcept : value_{value}
@@ -131,9 +138,15 @@ inline EditOffsetDelta operator-(EditOffset left, EditOffset right)
   return EditOffsetDelta{left.value() - right.value()};
 }
 
+inline EditOffset& operator+=(EditOffset& left, EditOffsetDelta right)
+{
+  left = EditOffset{left.value() + right.value()};
+  return left;
+}
+
 inline EditOffset operator+(EditOffset left, EditOffsetDelta right)
 {
-  return EditOffset{left.value() + right.value()};
+  return left += right;
 }
 
 inline EditOffset operator+(EditOffset left, SlotEditOffsetDelta right)
