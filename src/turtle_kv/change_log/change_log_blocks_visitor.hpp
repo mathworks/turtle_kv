@@ -95,8 +95,15 @@ class ChangeLogBlocksVisitor
 
   void add_block(boost::intrusive_ptr<ChangeLogBlock>&& block)
   {
-    const EditOffset first_slot_offset = block->slot_edit_offset(0);
-    this->pending_blocks_[first_slot_offset] = BlockIterator{std::move(block), 0};
+    // Find the edit offset lower bound in the block w.r.t. the visited upper bound, to account
+    // for cases where a trim has happened mid-block.
+    //
+    Optional<usize> slot_i = block->lower_bound_slot(this->visited_upper_bound_);
+    if (!slot_i) {
+      return;
+    }
+    const EditOffset slot_offset = block->slot_edit_offset(*slot_i);
+    this->pending_blocks_[slot_offset] = BlockIterator{std::move(block), *slot_i};
   }
 
   /** \brief Walks from current_offset_start_ forward through a set of pending blocks,

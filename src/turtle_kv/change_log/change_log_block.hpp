@@ -208,6 +208,37 @@ class ChangeLogBlock
     return EditOffset{(i64)(this->slot_size(slot_index) - sizeof(PackedEditOffsetDelta))};
   }
 
+  /** \brief Returns the index of the first slot with EditOffset >= `target`, or None if no such
+   * slot exists.
+   */
+  Optional<usize> lower_bound_slot(EditOffset target) const noexcept
+  {
+    if (this->slot_count() == 0) {
+      return None;
+    }
+
+    // SlotInfo pointers are in descending EditOffset order.
+    //
+    const SlotInfo* first = this->slots_rend();
+    const SlotInfo* last = this->slots_rbegin() + 1;
+
+    auto it = std::upper_bound(first, last, target,
+                               [this](EditOffset value, const SlotInfo& info) {
+                                 const usize slot_i = this->slots_rbegin() - &info;
+                                 return value > this->slot_edit_offset(slot_i);
+                               });
+
+    // All edit offsets are strictly less than `target`, so return None.
+    //
+    if (it == first) {
+      return None;
+    }
+
+    // it - 1 points to the last slot where edit offset >= target.
+    //
+    return static_cast<usize>(this->slots_rbegin() - (it - 1));
+  }
+
   /** \brief Adds `count` references to this buffer.
    */
   void add_ref(i32 count) noexcept;

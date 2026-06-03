@@ -527,10 +527,10 @@ void ChangeLogWriter::writer_task_main() noexcept
                             this->prepare_blocks(collected, prepared));
 
       // If there are no updates, then sleep before polling again (unless halt requested or
-      // sync_upper_bound_ is behind next_edit_offset_, indicating a sync caller may be waiting).
+      // there is pending urgent work).
       //
       if ((force_sleep || prepared.empty()) && this->halt_requested_.load() == false &&
-          this->sync_upper_bound_.get_value() >= this->next_edit_offset_.load()) {
+          !this->has_pending_urgent_sync_work()) {
         force_sleep = false;
         inactive_count += 1;
         this->metrics_.sleep_count.add(1);
@@ -554,12 +554,6 @@ void ChangeLogWriter::writer_task_main() noexcept
 
       const BlockBufferStats block_stats = prepare_stats + write_stats;
 
-      // Force a sleep if the collected buffers weren't full enough to hit the target density,
-      // unless sync_upper_bound_ is behind (a sync caller may be waiting).
-      //
-      force_sleep = block_stats.is_under_target() &&
-                    this->sync_upper_bound_.get_value() >= this->next_edit_offset_.load();
-
       // "Activate" the written blocks by adding them to the active blocks state; this allows
       // accurate trimming and reclamation of storage resources.
       //
@@ -573,6 +567,11 @@ void ChangeLogWriter::writer_task_main() noexcept
       // Advance the durable upper bound with the newly activated blocks.
       //
       this->advance_sync_upper_bound(newly_activated, synced);
+
+      // Force a sleep if the collected buffers weren't full enough to hit the target density,
+      // unless there is pending urgent work.
+      //
+      force_sleep = block_stats.is_under_target() && !this->has_pending_urgent_sync_work();
 
       // If halt is requested and we don't appear to be making any progress, then return.
       //
@@ -970,13 +969,23 @@ Optional<batt::Grant> ChangeLogWriter::ActiveBlocksState::apply_trim(
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status ChangeLogWriter::sync(EditOffset upper_bound) noexcept
+Status ChangeLogWriter::sync(EditOffset upper_bound, bool urgent) noexcept
 {
   // Return early if upper bound is already synced.
   //
   if (this->sync_upper_bound_.get_value() >= upper_bound.value()) {
     return OkStatus();
   }
+
+  if (urgent) {
+    this->urgent_sync_counter_.fetch_add(1);
+  }
+
+  auto on_exit = batt::finally([&] {
+    if (urgent) {
+      this->urgent_sync_counter_.fetch_sub(1);
+    }
+  });
 
   if (this->task_) {
     this->task_->wake();
@@ -992,6 +1001,23 @@ Status ChangeLogWriter::sync(EditOffset upper_bound) noexcept
   (void)observed;
 
   return OkStatus();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+i64 ChangeLogWriter::get_unflushed_byte_count() noexcept
+{
+  const i64 count =
+      std::max<i64>(0, this->next_edit_offset_.load() - this->sync_upper_bound_.get_value());
+  this->metrics_.unflushed_byte_count.set(BATT_CHECKED_CAST(u64, count));
+  return count;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+bool ChangeLogWriter::has_pending_urgent_sync_work() noexcept
+{
+  return this->urgent_sync_counter_.load() > 0 && this->get_unflushed_byte_count() > 0;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

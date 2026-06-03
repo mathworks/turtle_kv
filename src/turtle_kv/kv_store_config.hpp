@@ -76,6 +76,7 @@ struct KVStoreRuntimeOptions {
 //
 struct KVStoreWriteOptions {
   bool sync = false;
+  bool urgent_sync = false;
 };
 
 BATT_OBJECT_PRINT_IMPL((inline),

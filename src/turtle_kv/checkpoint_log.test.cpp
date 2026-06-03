@@ -85,7 +85,9 @@ TEST(CheckpointLogTest, CreateOpen)
     LOG(INFO) << "Finished opening checkpoint log...";
 
     ASSERT_TRUE(checkpoint_log.ok()) << BATT_INSPECT(checkpoint_log.status());
+    LOG(INFO) << "Finished first assert...";
     EXPECT_NE(*checkpoint_log, nullptr);
+    LOG(INFO) << "Finished second assert...";
   }
 }
 

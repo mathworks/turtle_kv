@@ -112,6 +112,7 @@ class ChangeLogWriter
              ((double)this->received_block_byte_count.load() + 1e-6);
     }};
     LatencyMetric advance_sync_upper_bound_latency;
+    FastCountMetric<u64> unflushed_byte_count{0};
   };
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -349,12 +350,17 @@ class ChangeLogWriter
     return false;
   }
 
-  Status sync(EditOffset upper_bound) noexcept;
+  Status sync(EditOffset upper_bound, bool urgent = false) noexcept;
 
   EditOffset durable_upper_bound() const noexcept
   {
     return EditOffset{this->sync_upper_bound_.get_value()};
   }
+
+  /** \brief Returns the number of bytes between the sync upper bound and the next edit offset.
+   * Updates the unflushed_byte_count metric.
+   */
+  i64 get_unflushed_byte_count() noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
@@ -525,6 +531,11 @@ class ChangeLogWriter
       batt::SmallVecBase<boost::intrusive_ptr<ChangeLogBlock>>& newly_activated,
       AdvanceSyncState& sync_state) noexcept;
 
+  /** \brief Returns true when the writer task should stay awake: there are pending urgent syncs and
+   * unflushed bytes.
+   */
+  bool has_pending_urgent_sync_work() noexcept;
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   /** \brief The state of the log file.
@@ -567,6 +578,10 @@ class ChangeLogWriter
   /** \brief The confirmed durable EditOffset upper bound.
    */
   batt::Watch<i64> sync_upper_bound_;
+
+  /** \brief The number of pending sync callers that have an urgent priority.
+   */
+  std::atomic<usize> urgent_sync_counter_{0};
 };
 
 // #=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
