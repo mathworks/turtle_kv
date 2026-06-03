@@ -236,7 +236,7 @@ class ChangeLogBlock
 
     // it - 1 points to the last slot where edit offset >= target.
     //
-    return static_cast<usize>(this->slots_rbegin() - (it - 1));
+    return BATT_CHECKED_CAST(usize, this->slots_rbegin() - (it - 1));
   }
 
   /** \brief Adds `count` references to this buffer.
