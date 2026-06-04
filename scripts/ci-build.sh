@@ -27,6 +27,15 @@ fi
 #
 cor select --clean --profile=linux-gcc12-x86_64 --build-type=Release
 
+LLFS_BRANCH="${LLFS_BRANCH:-fsync_debugging}"                                                        
+LLFS_REPO="${LLFS_REPO:-https://github.com/vidyasilai/llfs.git}"                                                
+                                                                                                                    
+git clone --depth 1 --branch "${LLFS_BRANCH}" "${LLFS_REPO}" /tmp/llfs                                               
+cd /tmp/llfs
+cor export
+
+cd "${PROJECT_DIR}"
+
 # Build.
 #
 # cor install makes sure deps are uploaded to the cache server first;

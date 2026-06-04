@@ -88,10 +88,6 @@ TEST(CheckpointLogTest, CreateOpen)
     LOG(INFO) << "Finished first assert...";
     EXPECT_NE(*checkpoint_log, nullptr);
     LOG(INFO) << "Finished second assert...";
-
-    LOG(INFO) << "About to reset checkpoint_log...";                                                                   
-    checkpoint_log->reset();                                           
-    LOG(INFO) << "Finished checkpoint_log reset...";
   }
 }
 
