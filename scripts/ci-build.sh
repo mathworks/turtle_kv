@@ -34,8 +34,6 @@ git clone --depth 1 --branch "${LLFS_BRANCH}" "${LLFS_REPO}" /tmp/llfs
 cd /tmp/llfs
 cor export
 
-conan graph info .
-
 cd "${PROJECT_DIR}"
 
 # Build.
