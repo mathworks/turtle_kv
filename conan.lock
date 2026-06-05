@@ -11,7 +11,7 @@
         "glog/0.7.1",
         "gtest/1.17.0",
         "keyvcr/0.2.2",
-        "libbacktrace/cci.20240730",
+        "libbacktrace/cci.20210118",
         "libfuse/3.16.2",
         "libpfm4/4.13.0",
         "libunwind/1.8.1",

@@ -31,7 +31,7 @@ struct PackedBlockedLeafPage {
   big_u64 magic;
   little_u32 item_count;
   little_u32 total_packed_size;
-  little_u32 blocks_per_trie_key;
+  little_u32 blocks_per_art_key;
   little_u32 block_size_bytes;
   little_u32 block_count;
   little_u32 block0_byte_offset_in_page;

@@ -16,7 +16,7 @@ from conan.tools.scm import Version
 class TurtleKvRecipe(ConanFile):
     name = "turtle_kv"
 
-    python_requires = "cor_recipe_utils/0.21.4.dev2+g938c9a386"
+    python_requires = "cor_recipe_utils/0.21.4.dev3+g0d8231b80"
     python_requires_extend = "cor_recipe_utils.ConanFileBase"
 
     settings = "os", "compiler", "build_type", "arch"
