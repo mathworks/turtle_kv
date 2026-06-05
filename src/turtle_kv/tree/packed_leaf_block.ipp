@@ -11,8 +11,14 @@
 
 #include "packed_leaf_block.hpp"
 
-#include <turtle_kv/import/buffer.hpp>
+#include <turtle_kv/core/key_range.hpp>
 
+#include <turtle_kv/import/buffer.hpp>
+#include <turtle_kv/import/interval.hpp>
+
+#include <llfs/strings.hpp>
+
+#include <batteries/checked_cast.hpp>
 #include <batteries/status.hpp>
 
 #include <glog/logging.h>
@@ -64,13 +70,18 @@ template <std::ranges::range RangeT>
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <std::ranges::range RangeT, typename IterT>
-StatusOr<IterT> pack_leaf_block(const RangeT& src, MutableBuffer dst) noexcept
+StatusOr<IterT> pack_leaf_block(const RangeT& src,
+                                MutableBuffer dst,
+                                const Optional<PackedLeafBlockStats>& opt_stats) noexcept
 {
   if (dst.size() < sizeof(PackedLeafBlock)) {
     return {batt::StatusCode::kResourceExhausted};
   }
 
-  auto stats = PackedLeafBlockStats::from(src, dst.size());
+  PackedLeafBlockStats stats = opt_stats.or_else([&] {
+    return PackedLeafBlockStats::from(src, dst.size());
+  });
+
   if (stats.block_size != dst.size()) {
     return {batt::StatusCode::kResourceExhausted};
   }
@@ -82,6 +93,8 @@ StatusOr<IterT> pack_leaf_block(const RangeT& src, MutableBuffer dst) noexcept
         byte_distance(block->items_, advance_pointer(&block->items_[1], stats.item_ptr_bytes));
   }
 
+  //----- --- -- -  -  -   -
+  // Pack all slot data.
   PackedKeyValueSlotPtr* pp_slot = block->items_;
   void* p_slot = const_cast<PackedKeyValueSlot*>(pp_slot->get());
 
@@ -94,7 +107,90 @@ StatusOr<IterT> pack_leaf_block(const RangeT& src, MutableBuffer dst) noexcept
     pp_slot->offset = byte_distance(pp_slot, p_slot);
   }
 
+  //----- --- -- -  -  -   -
+  // Set the common prefix.
+  //
+  block->shared_prefix_size =
+      BATT_CHECKED_CAST(u16,
+                        llfs::find_common_prefix(0, block->min_key(), block->max_key()).size());
+
   return {src_iter};
+}
+
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+// struct PackedLeafBlock
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+/*static*/ const PackedLeafBlock& PackedLeafBlock::view_of(const ConstBuffer& buffer) noexcept
+{
+  BATT_CHECK_GE(buffer.size(), sizeof(PackedLeafBlock));
+
+  const auto* block = static_cast<const PackedLeafBlock*>(buffer.data());
+
+  BATT_CHECK_EQ(block->magic, PackedLeafBlock::kMagic);
+
+  return *block;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+inline const PackedKeyValueSlotPtr* PackedLeafBlock::find_key(const KeyView& key) const noexcept
+{
+  const auto convert_result = [](auto&& first_last_pair) -> const PackedKeyValueSlotPtr* {
+    if (first_last_pair.first == first_last_pair.second) {
+      return nullptr;
+    }
+    return first_last_pair.first;
+  };
+
+  if (this->shared_prefix_size > 0) {
+    const usize prefix_size = this->shared_prefix_size;
+    if (key.size() < prefix_size) {
+      return nullptr;
+    }
+    auto order = batt::compare(key.substr(0, prefix_size), this->shared_key_prefix());
+    if (order != batt::Order::Equal) {
+      return nullptr;
+    }
+
+    return convert_result(
+        std::equal_range(this->items_begin(), this->items_end(), key, KeySuffixOrder{prefix_size}));
+  }
+
+  return convert_result(std::equal_range(this->items_begin(),
+                                         this->items_end(),
+                                         key,
+                                         [](const auto& l, const auto& r) {
+                                           return batt::compare(get_key(l), get_key(r)) ==
+                                                  batt::Order::Less;
+                                         }));
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+inline const PackedKeyValueSlotPtr* PackedLeafBlock::lower_bound(const KeyView& key) const noexcept
+{
+  return std::lower_bound(this->items_begin(),
+                          this->items_end(),
+                          key,
+                          [](const auto& l, const auto& r) {
+                            return batt::compare(get_key(l), get_key(r)) == batt::Order::Less;
+                          });
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Slice<const PackedKeyValueSlotPtr> PackedLeafBlock::items_slice(
+    Optional<KeyView> key_lower_bound,
+    Optional<KeyView> key_upper_bound) const noexcept
+{
+  auto [first, last] = std::equal_range(this->items_begin(),
+                                        this->items_end(),
+                                        Interval<KeyView>{key_lower_bound.or_else(global_min_key),
+                                                          key_upper_bound.or_else(global_max_key)},
+                                        ExtendedKeyRangeOrder{});
+  return as_slice(first, last);
 }
 
 }  // namespace turtle_kv

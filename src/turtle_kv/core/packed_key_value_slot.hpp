@@ -150,6 +150,16 @@ inline PackedKeyValueSlotRef to_key_value_slot_ref(const ConstBuffer& slot_buffe
   };
 }
 
+inline KeyView get_key(const PackedKeyValueSlotPtr& p_kv) noexcept
+{
+  return get_key(*p_kv);
+}
+
+inline ValueView get_value(const PackedKeyValueSlotPtr& p_kv) noexcept
+{
+  return p_kv->value_view(std::addressof(p_kv));
+}
+
 template <typename T>
 concept ConvertibleToKeyValueSlotRef = requires(const T& obj) {
   { to_key_value_slot_ref(obj) } -> std::convertible_to<const PackedKeyValueSlotRef&>;

@@ -15,6 +15,7 @@
 
 #include <turtle_kv/import/buffer.hpp>
 #include <turtle_kv/import/int_types.hpp>
+#include <turtle_kv/import/optional.hpp>
 #include <turtle_kv/import/slice.hpp>
 #include <turtle_kv/import/status.hpp>
 
@@ -26,13 +27,6 @@
 #include <ranges>
 
 namespace turtle_kv {
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-inline KeyView get_key(const PackedKeyValueSlotPtr& p_kv) noexcept
-{
-  return get_key(*p_kv);
-}
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 //
@@ -47,16 +41,10 @@ struct PackedLeafBlock {
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  static const PackedLeafBlock& view_of(const ConstBuffer& buffer) noexcept
-  {
-    BATT_CHECK_GE(buffer.size(), sizeof(PackedLeafBlock));
-
-    const auto* block = static_cast<const PackedLeafBlock*>(buffer.data());
-
-    BATT_CHECK_EQ(block->magic, PackedLeafBlock::kMagic);
-
-    return *block;
-  }
+  /** \brief Returns the passed buffer's memory region, validated as a PackedLeafBlock and cast to
+   * `const PackedLeafBlock &`.
+   */
+  static const PackedLeafBlock& view_of(const ConstBuffer& buffer) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -111,6 +99,9 @@ struct PackedLeafBlock {
     return as_slice(this->items_begin(), this->items_end());
   }
 
+  Slice<const PackedKeyValueSlotPtr> items_slice(Optional<KeyView> key_lower_bound,
+                                                 Optional<KeyView> key_upper_bound) const noexcept;
+
   KeyView min_key() const noexcept
   {
     return get_key(this->front_item());
@@ -121,31 +112,19 @@ struct PackedLeafBlock {
     return get_key(this->back_item());
   }
 
-  const PackedKeyValueSlotPtr* find_key(const KeyView& key) const noexcept
+  KeyView shared_key_prefix() const noexcept
   {
-    auto [first, last] =
-        std::equal_range(this->items_begin(),
-                         this->items_end(),
-                         key,
-                         [](const auto& l, const auto& r) {
-                           return batt::compare(get_key(l), get_key(r)) == batt::Order::Less;
-                         });
-
-    if (first == last) {
-      return nullptr;
-    }
-    return std::addressof(*first);
+    return this->min_key().substr(0, this->shared_prefix_size);
   }
 
-  const PackedKeyValueSlotPtr* lower_bound(const KeyView& key) const noexcept
-  {
-    return std::lower_bound(this->items_begin(),
-                            this->items_end(),
-                            key,
-                            [](const auto& l, const auto& r) {
-                              return batt::compare(get_key(l), get_key(r)) == batt::Order::Less;
-                            });
-  }
+  /** \brief Returns an iterator to the given key in this block if found or nullptr if not found.
+   */
+  const PackedKeyValueSlotPtr* find_key(const KeyView& key) const noexcept;
+
+  /** \brief Returns an iterator to the first item in this block whose key is not less than `key`;
+   * if all keys in the block are less than `key`, returns `this->items_end()`.
+   */
+  const PackedKeyValueSlotPtr* lower_bound(const KeyView& key) const noexcept;
 };
 
 static_assert(sizeof(PackedLeafBlock) == 8);
@@ -168,7 +147,9 @@ struct PackedLeafBlockStats {
 //
 template <std::ranges::range RangeT,
           typename IterT = std::decay_t<decltype(std::begin(std::declval<const RangeT&>()))>>
-StatusOr<IterT> pack_leaf_block(const RangeT& src, MutableBuffer dst) noexcept;
+StatusOr<IterT> pack_leaf_block(const RangeT& src,
+                                MutableBuffer dst,
+                                const Optional<PackedLeafBlockStats>& stats = None) noexcept;
 
 }  // namespace turtle_kv
 

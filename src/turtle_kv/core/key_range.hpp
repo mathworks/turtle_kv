@@ -34,27 +34,12 @@ inline CInterval<KeyView> get_key_range(const Chunk<const T*>& chunk)
   };
 }
 
-inline CInterval<KeyView> get_key_range(const EditView& edit)
+template <HasKeyView T>
+inline CInterval<KeyView> get_key_range(const T& has_key_view)
 {
   return CInterval<KeyView>{
-      .lower_bound = get_key(edit),
-      .upper_bound = get_key(edit),
-  };
-}
-
-inline CInterval<KeyView> get_key_range(const ItemView& item)
-{
-  return CInterval<KeyView>{
-      .lower_bound = get_key(item),
-      .upper_bound = get_key(item),
-  };
-}
-
-inline CInterval<KeyView> get_key_range(const KeyView& key)
-{
-  return CInterval<KeyView>{
-      .lower_bound = key,
-      .upper_bound = key,
+      .lower_bound = get_key(has_key_view),
+      .upper_bound = get_key(has_key_view),
   };
 }
 
