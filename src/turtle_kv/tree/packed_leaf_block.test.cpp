@@ -13,6 +13,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "random_str.hpp"
+
 #include <batteries/stable_string_store.hpp>
 
 #include <random>
@@ -28,36 +30,10 @@ using batt::StableStringStore;
 using batt::StatusOr;
 
 using turtle_kv::EditView;
+using turtle_kv::KeyOrder;
 using turtle_kv::KeyView;
+using turtle_kv::random_str;
 using turtle_kv::ValueView;
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-template <typename SizeDistribution>
-std::string_view random_str(std::default_random_engine& rng,
-                            SizeDistribution&& pick_size,
-                            usize min_size,
-                            usize max_size,
-                            StableStringStore& strings,
-                            std::string_view prefix = "") noexcept
-{
-  std::uniform_int_distribution<i8> pick_char{'a', 'z'};
-
-  const usize n = min_size + std::min(pick_size(rng), max_size - min_size);
-  MutableBuffer buf = strings.allocate(prefix.size() + n);
-  char* chars = static_cast<char*>(buf.data());
-
-  if (!prefix.empty()) {
-    std::memcpy(chars, prefix.data(), prefix.size());
-    chars += prefix.size();
-  }
-
-  for (usize i = 0; i < n; ++i, ++chars) {
-    *chars = pick_char(rng);
-  }
-
-  return std::string_view{static_cast<const char*>(buf.data()), buf.size()};
-}
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
@@ -76,7 +52,7 @@ TEST(TreePackedLeafBlockTest, Random)
 
   std::geometric_distribution<usize> pick_prefix_size{0.5};
   std::geometric_distribution<usize> pick_key_size{0.7};
-  std::uniform_int_distribution<usize> pick_value_size{0, kMaxValueSize - kMaxValueSize};
+  std::uniform_int_distribution<usize> pick_value_size{0, kMaxValueSize - kMinValueSize};
 
   for (usize seed = 0; seed < kNumSeeds; ++seed) {
     std::default_random_engine rng{seed};
@@ -106,7 +82,7 @@ TEST(TreePackedLeafBlockTest, Random)
       src_edits.push_back(EditView{key, ValueView::from_str(value)});
       src_size += key.size() + value.size();
     }
-    std::sort(src_edits.begin(), src_edits.end(), turtle_kv::KeyOrder{});
+    std::sort(src_edits.begin(), src_edits.end(), KeyOrder{});
 
     // Pack a block.
     //
@@ -173,7 +149,7 @@ TEST(TreePackedLeafBlockTest, Random)
                                                   prefix);
 
       const auto expected_iter =
-          std::lower_bound(src_edits.begin(), src_edits.end(), key, turtle_kv::KeyOrder{});
+          std::lower_bound(src_edits.begin(), src_edits.end(), key, KeyOrder{});
 
       const usize expected_i = std::distance(src_edits.begin(), expected_iter);
 

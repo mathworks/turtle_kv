@@ -23,6 +23,7 @@
 #include <llfs/packed_pointer.hpp>
 
 #include <batteries/compare.hpp>
+#include <batteries/operators.hpp>
 
 #include <ranges>
 
@@ -40,6 +41,20 @@ struct PackedLeafBlock {
   PackedKeyValueSlotPtr items_[1];  // +2 = 8
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  template <typename EditT>
+  static usize packed_edit_size(const EditT& edit) noexcept
+  {
+    const usize slot_size = packed_key_value_slot_size(edit);
+    const usize edit_size = slot_size + sizeof(PackedKeyValueSlotPtr);
+
+    return edit_size;
+  }
+
+  static constexpr usize capacity(usize block_size) noexcept
+  {
+    return block_size - std::min(block_size, sizeof(PackedLeafBlock));
+  }
 
   /** \brief Returns the passed buffer's memory region, validated as a PackedLeafBlock and cast to
    * `const PackedLeafBlock &`.
@@ -140,8 +155,12 @@ struct PackedLeafBlockStats {
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   template <std::ranges::range RangeT>
-  static PackedLeafBlockStats from(const RangeT& src, usize dst_size) noexcept;
+  static PackedLeafBlockStats from(const RangeT& src, usize block_size) noexcept;
 };
+
+BATT_OBJECT_PRINT_IMPL((inline),
+                       PackedLeafBlockStats,
+                       (block_size, item_count, item_slot_bytes, item_ptr_bytes))
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //

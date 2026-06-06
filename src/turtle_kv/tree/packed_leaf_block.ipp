@@ -28,8 +28,8 @@ namespace turtle_kv {
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <std::ranges::range RangeT>
-/*static*/ PackedLeafBlockStats PackedLeafBlockStats::from(const RangeT& src,
-                                                           usize dst_size) noexcept
+inline /*static*/ PackedLeafBlockStats PackedLeafBlockStats::from(const RangeT& src,
+                                                                  usize dst_size) noexcept
 {
   PackedLeafBlockStats stats{
       .block_size = 0,
@@ -70,9 +70,9 @@ template <std::ranges::range RangeT>
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <std::ranges::range RangeT, typename IterT>
-StatusOr<IterT> pack_leaf_block(const RangeT& src,
-                                MutableBuffer dst,
-                                const Optional<PackedLeafBlockStats>& opt_stats) noexcept
+inline StatusOr<IterT> pack_leaf_block(const RangeT& src,
+                                       MutableBuffer dst,
+                                       const Optional<PackedLeafBlockStats>& opt_stats) noexcept
 {
   if (dst.size() < sizeof(PackedLeafBlock)) {
     return {batt::StatusCode::kResourceExhausted};
@@ -122,7 +122,8 @@ StatusOr<IterT> pack_leaf_block(const RangeT& src,
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-/*static*/ const PackedLeafBlock& PackedLeafBlock::view_of(const ConstBuffer& buffer) noexcept
+inline /*static*/ const PackedLeafBlock& PackedLeafBlock::view_of(
+    const ConstBuffer& buffer) noexcept
 {
   BATT_CHECK_GE(buffer.size(), sizeof(PackedLeafBlock));
 
@@ -181,7 +182,7 @@ inline const PackedKeyValueSlotPtr* PackedLeafBlock::lower_bound(const KeyView& 
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Slice<const PackedKeyValueSlotPtr> PackedLeafBlock::items_slice(
+inline Slice<const PackedKeyValueSlotPtr> PackedLeafBlock::items_slice(
     Optional<KeyView> key_lower_bound,
     Optional<KeyView> key_upper_bound) const noexcept
 {
