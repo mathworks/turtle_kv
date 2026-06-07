@@ -23,6 +23,9 @@
 #include <artc/packed/query.hpp>
 
 #include <batteries/bit_ops/bit_count.hpp>
+#include <batteries/seq.hpp>
+
+#include <ranges>
 
 namespace turtle_kv {
 
@@ -64,6 +67,35 @@ struct PackedBlockedLeafPage {
   u8 pad_[24];
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  PackedLeafBlock::Iterator blocks_begin() const noexcept
+  {
+    return PackedLeafBlock::Iterator{this->block0.get(), (isize)this->block_size_bytes.value()};
+  }
+
+  PackedLeafBlock::Iterator blocks_end() const noexcept
+  {
+    return this->blocks_begin() + this->block_count;
+  }
+
+  auto blocks() const noexcept
+  {
+    return std::ranges::subrange<PackedLeafBlock::Iterator>(this->blocks_begin(),
+                                                            this->blocks_end());
+  }
+
+  auto blocks_seq() const noexcept
+  {
+    return batt::as_seq(this->blocks());
+  }
+
+  auto items_seq() const noexcept
+  {
+    return this->blocks_seq() | batt::seq::map([](const PackedLeafBlock& block) {
+             return batt::as_seq(block.items_slice());
+           }) |
+           batt::seq::flatten();
+  }
 };
 
 static_assert(sizeof(PackedBlockedLeafPage) == 64);

@@ -36,6 +36,7 @@ using batt::StatusOr;
 using turtle_kv::EditView;
 using turtle_kv::KeyOrder;
 using turtle_kv::KeyView;
+using turtle_kv::Optional;
 using turtle_kv::pack_blocked_leaf_page;
 using turtle_kv::PackedBlockedLeafPage;
 using turtle_kv::random_str;
@@ -71,6 +72,9 @@ TEST(TreePackedBlockedLeafPageTest, Random)
   std::uniform_int_distribution<usize> pick_prefix{0, kNumPrefixes - 1};
   std::geometric_distribution<usize> pick_key_size{0.7};
   std::uniform_int_distribution<usize> pick_value_size{0, kMaxValueSize - kMinValueSize};
+
+  usize total_keys = 0;
+  usize total_bytes = 0;
 
   for (usize seed = 0; seed < kNumSeeds; ++seed) {
     std::default_random_engine rng{seed};
@@ -135,6 +139,9 @@ TEST(TreePackedBlockedLeafPageTest, Random)
           break;
         }
 
+        ++total_keys;
+        total_bytes += edit_size;
+
         edits.push_back(edit);
         total_edits_size += edit_size;
         max_edit_size = new_max_edit_size;
@@ -156,11 +163,30 @@ TEST(TreePackedBlockedLeafPageTest, Random)
 
     MutableBuffer leaf_buffer{leaf_storage.data(), kLeafPageSize};
 
-    StatusOr<PackedBlockedLeafPage*> packed_leaf =
+    StatusOr<PackedBlockedLeafPage*> status_or_packed_leaf =
         pack_blocked_leaf_page(kBlockSize, edits, leaf_buffer);
 
-    ASSERT_TRUE(packed_leaf.ok()) << BATT_INSPECT(packed_leaf.status());
+    ASSERT_TRUE(status_or_packed_leaf.ok()) << BATT_INSPECT(status_or_packed_leaf.status());
+
+    const PackedBlockedLeafPage& packed_leaf = **status_or_packed_leaf;
+
+    //+++++++++++-+-+--+----- --- -- -  -  -   -
+    //
+    //
+    {
+      auto packed_items = packed_leaf.items_seq();
+      using Item = decltype(*packed_items.peek());
+      for (const EditView& edit : edits) {
+        Optional<Item> next_packed = packed_items.next();
+
+        ASSERT_TRUE(next_packed.has_value());
+        ASSERT_EQ(get_key(*next_packed), get_key(edit));
+        ASSERT_EQ(get_value(*next_packed), get_value(edit));
+      }
+    }
   }
+
+  std::cerr << BATT_INSPECT(total_keys) << BATT_INSPECT(total_bytes) << std::endl;
 }
 
 }  // namespace

@@ -89,22 +89,28 @@ inline StatusOr<IterT> pack_leaf_block(const RangeT& src,
   PackedLeafBlock* block = static_cast<PackedLeafBlock*>(dst.data());
   {
     block->magic = PackedLeafBlock::kMagic;
-    block->items_[0].offset =
-        byte_distance(block->items_, advance_pointer(&block->items_[1], stats.item_ptr_bytes));
+    block->items_[0].offset = BATT_CHECKED_CAST(
+        u32,
+        byte_distance(block->items_, advance_pointer(&block->items_[1], stats.item_ptr_bytes)));
   }
 
   //----- --- -- -  -  -   -
   // Pack all slot data.
+  //
   PackedKeyValueSlotPtr* pp_slot = block->items_;
   void* p_slot = const_cast<PackedKeyValueSlot*>(pp_slot->get());
+  void* const dst_end = advance_pointer(dst.data(), dst.size());
 
   IterT src_iter = std::begin(src);
   const IterT src_end = std::next(src_iter, stats.item_count);
   for (; src_iter != src_end; ++src_iter) {
     const usize slot_size = pack_key_value_slot(*src_iter, p_slot);
     p_slot = advance_pointer(p_slot, slot_size);
+    BATT_CHECK_LE(p_slot, dst_end);
     ++pp_slot;
     pp_slot->offset = byte_distance(pp_slot, p_slot);
+
+    BATT_CHECK_EQ((void*)pp_slot->get(), (void*)p_slot);
   }
 
   //----- --- -- -  -  -   -
