@@ -52,15 +52,11 @@ TEST(CheckpointLogTest, CreateOpen)
   llfs::ScopedIoRing scoped_io_ring = BATT_OK_RESULT_OR_PANIC(
       llfs::ScopedIoRing::make_new(llfs::MaxQueueDepth{64}, llfs::ThreadPoolSize{1}));
 
-  LOG(INFO) << "Finished creating scoped_io_ring...";
-
   const llfs::IoRing& io_ring = scoped_io_ring.get_io_ring();
 
   {
     auto storage_context =
         llfs::StorageContext::make_shared(batt::Runtime::instance().default_scheduler(), io_ring);
-
-    LOG(INFO) << "Finished creating storage_context once...";
 
     Status status = turtle_kv::create_checkpoint_log(*storage_context,
                                                      turtle_kv::TreeOptions::with_default_values(),
@@ -77,17 +73,11 @@ TEST(CheckpointLogTest, CreateOpen)
     auto storage_context =
         llfs::StorageContext::make_shared(batt::Runtime::instance().default_scheduler(), io_ring);
 
-    LOG(INFO) << "Finished creating storage_context again...";
-
     StatusOr<std::unique_ptr<llfs::Volume>> checkpoint_log =
         turtle_kv::open_checkpoint_log(*storage_context, filename);
 
-    LOG(INFO) << "Finished opening checkpoint log...";
-
     ASSERT_TRUE(checkpoint_log.ok()) << BATT_INSPECT(checkpoint_log.status());
-    LOG(INFO) << "Finished first assert...";
     EXPECT_NE(*checkpoint_log, nullptr);
-    LOG(INFO) << "Finished second assert...";
   }
 }
 
