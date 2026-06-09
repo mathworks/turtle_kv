@@ -62,8 +62,6 @@ TEST(CheckpointLogTest, CreateOpen)
                                                      turtle_kv::TreeOptions::with_default_values(),
                                                      filename);
 
-    LOG(INFO) << "Finished creating checkpoint log...";
-
     ASSERT_TRUE(status.ok()) << BATT_INSPECT(status);
   }
 
