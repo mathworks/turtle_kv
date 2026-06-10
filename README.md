@@ -147,13 +147,10 @@ We currently support:
 
 Currently missing/under development:
 
-- Removing deletion tombstones from checkpoint trees
-- Recovery of existing KVStore instances after shutdown
 - Time-consistent isolated multi-key reads
 - Key-only queries (i.e., `has_key`/`contains`; note, key-only scans
   *are* currently supported)
 - Saving/loading full point-in-time snapshots
-- `fsync` like blocking call to ensure updates are durable (in the WAL)
 
 Limitations (out-of-scope):
 
