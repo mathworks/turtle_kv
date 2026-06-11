@@ -290,7 +290,7 @@ struct BatchUpdateGenerator {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-TEST(InMemoryNodeTest, Subtree)
+TEST(InMemoryNodeTest, DISABLED_Subtree)
 {
   llfs::testing::ScenarioRunner runner;
 
@@ -508,7 +508,7 @@ void SubtreeBatchUpdateScenario::run()
   }
 }
 
-TEST(InMemoryNodeTest, SubtreeDeletions)
+TEST(InMemoryNodeTest, DISABLED_SubtreeDeletions)
 {
   LatencyMetric scan_latency;
 

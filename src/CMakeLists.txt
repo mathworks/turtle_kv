@@ -13,6 +13,7 @@ macro (SetFlagsForOptionBool name)
   endif ()
 endmacro()
 
+SetFlagsForOptionBool(coverage)
 SetFlagsForOptionBool(with_keyvcr)
 SetFlagsForOptionBool(use_bloom_filter)
 SetFlagsForOptionBool(use_quotient_filter)
@@ -20,6 +21,7 @@ SetFlagsForOptionBool(enable_leaf_filters)
 SetFlagsForOptionBool(enable_metrics)
 SetFlagsForOptionBool(profile_updates)
 SetFlagsForOptionBool(profile_queries)
+
 
 if (("${TURTLE_KV_OPTION_WITH_KEYVCR}" STREQUAL "True") AND (LINUX))
   set(TURTLE_KV_KEYVCR_DEPS keyvcr::keyvcr)

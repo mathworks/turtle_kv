@@ -34,6 +34,10 @@ add_compile_options(-Wall -Wextra -Werror -Werror=switch-enum -Wswitch-enum -Wsu
 #
 add_compile_options(-Wno-array-bounds)
 
+message("Code Coverage is STILL ON")
+add_compile_options(--coverage -O0 -fno-inline -fno-default-inline -fno-elide-constructors)
+add_link_options(--coverage)
+
 add_compile_definitions(BOOST_ERROR_CODE_HEADER_ONLY)
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-address-of-packed-member")

@@ -129,27 +129,21 @@ class TurtleKvRecipe(ConanFile):
         self.cpp.build.libs += ['turtle_kv']
 
     def generate(self):
-        from conan.tools.cmake import CMakeToolchain
-        toolchain = CMakeToolchain(self)
-        if (self.options.coverage):
-            toolchain.cache_variables["COVERAGE"] = True
-            toolchain.extra_cxxflags.append("--coverage")
-            toolchain.extra_cflags.append("--coverage")
-            toolchain.extra_sharedlinkflags.append("--coverage")
-            toolchain.extra_exelinkflags.append("--coverage")
-        else:
-            toolchain.cache_variables["COVERAGE"] = False
+        # from conan.tools.cmake import CMakeToolchain
+        # toolchain = CMakeToolchain(self)
+        # if (self.options.coverage):
+        #     toolchain.cache_variables["COVERAGE"] = True
+        #     toolchain.extra_cxxflags.append("--coverage")
+        #     toolchain.extra_cflags.append("--coverage")
+        #     toolchain.extra_sharedlinkflags.append("--coverage")
+        #     toolchain.extra_exelinkflags.append("--coverage")
+        # else:
+        #     toolchain.cache_variables["COVERAGE"] = False
             
         self.cor.generate_cmake_default(self)
 
     def build(self):
         self.cor.build_cmake_default(self)
-
-        if self.options.coverage:
-            self.run("gcovr --gcov-ignore-parse-errors --cobertura " + self.build_folder +
-                    "/coverage.xml --html " + self.build_folder + "/coverage.html --txt",
-                    cwd=self.recipe_folder)
-
 
     def package(self):
         self.cor.package_cmake_lib_default(self)

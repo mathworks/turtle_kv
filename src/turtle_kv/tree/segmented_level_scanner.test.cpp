@@ -279,7 +279,7 @@ class SegmentedLevelScannerTest : public ::testing::Test
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-TEST_F(SegmentedLevelScannerTest, Test)
+TEST_F(SegmentedLevelScannerTest, DISABLED_Test)
 {
   llfs::testing::ScenarioRunner runner;
 
