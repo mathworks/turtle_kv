@@ -206,8 +206,8 @@ class KVStore : public Table
   Status put(const KeyView& key, const ValueView& value) noexcept override;
 
   StatusOr<EditOffset> put(const KeyView& key,
-                          const ValueView& value,
-                          Optional<WriteOptions> write_options) noexcept;
+                           const ValueView& value,
+                           Optional<WriteOptions> write_options) noexcept;
 
   StatusOr<ValueView> get(const KeyView& key) noexcept override;
 
@@ -218,8 +218,7 @@ class KVStore : public Table
 
   Status remove(const KeyView& key) noexcept override;
 
-  StatusOr<EditOffset> remove(const KeyView& key,
-                              Optional<WriteOptions> write_options) noexcept;
+  StatusOr<EditOffset> remove(const KeyView& key, Optional<WriteOptions> write_options) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -268,7 +267,13 @@ class KVStore : public Table
    */
   void release_thread_context() noexcept;
 
-  Status sync(Optional<EditOffset> upper_bound = None) noexcept;
+  /** \brief Allows for the explicit syncing of data up till a specified upper bound `EditOffset`.
+   * Callers of this function are guaranteed that the data up till the upper bound is hardened to
+   * disk after this function returns successfully. If no upper bound `EditOffset` is provided to
+   * this function, the upper bound of the last inserted edit is used.
+   */
+  Status sync(Optional<EditOffset> upper_bound = None,
+              Optional<WriteOptions> write_options = None) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:

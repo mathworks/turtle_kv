@@ -219,7 +219,7 @@ class ChangeLogBlock
 
     // SlotInfo pointers are in descending EditOffset order.
     //
-    const SlotInfo* first = this->slots_rend();
+    const SlotInfo* first = this->slots_rend() + 1;
     const SlotInfo* last = this->slots_rbegin() + 1;
 
     auto it = std::upper_bound(first, last, target,

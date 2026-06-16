@@ -678,7 +678,7 @@ StatusOr<EditOffset> KVStore::put(const KeyView& key,
 
       if (result.ok()) {
         if (write_options && write_options->sync) {
-          BATT_REQUIRE_OK(this->change_log_writer_->sync(*result));
+          BATT_REQUIRE_OK(this->change_log_writer_->sync(*result, write_options->urgent_sync));
         }
         return result;
       }
@@ -1351,12 +1351,14 @@ using CheckpointEvent = llfs::PackedVariant<turtle_kv::PackedCheckpoint>;
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status KVStore::sync(Optional<EditOffset> upper_bound) noexcept
+Status KVStore::sync(Optional<EditOffset> upper_bound, Optional<WriteOptions> write_options) noexcept
 {
   EditOffset target =
       upper_bound ? *upper_bound : this->change_log_writer_->next_edit_offset();
 
-  return this->change_log_writer_->sync(target);
+  bool urgent = write_options && write_options->urgent_sync ? true : false;
+
+  return this->change_log_writer_->sync(target, urgent);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
