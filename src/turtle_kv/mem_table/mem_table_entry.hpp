@@ -153,15 +153,13 @@ struct MemTableValueEntryInserter {
 
     BATT_REQUIRE_OK(this->storage.store_data(  //
         insert_size,                           //
-        [this, entry_memory, insert_size]      //
+        [this, entry_memory]                   //
         (const MutableBuffer& buffer, EditOffset edit_offset) {
           const std::pair<KeyView, ValueView> packed_pair =
               pack_key_value_slot(this->key, this->value, buffer);
 
           this->entry_out = new (entry_memory) MemTableValueEntry{packed_pair, edit_offset};
-          this->edit_range_out =
-              Interval<i64>{edit_offset.value(),
-                            (edit_offset + EditOffsetDelta{(i64)insert_size}).value()};
+          this->set_edit_range_out(buffer, edit_offset);
         }));
 
     return OkStatus();
@@ -173,22 +171,26 @@ struct MemTableValueEntryInserter {
 
     BATT_REQUIRE_OK(this->storage.store_data(  //
         update_size,                           //
-        [this, p_entry, update_size](const MutableBuffer& buffer, EditOffset edit_offset) {
+        [this, p_entry](const MutableBuffer& buffer, EditOffset edit_offset) {
           const std::pair<KeyView, ValueView> packed_pair =
               pack_key_value_slot(this->key, this->value, buffer);
 
           p_entry->update_value(packed_pair, edit_offset);
 
           this->entry_out = p_entry;
-          this->edit_range_out =
-              Interval<i64>{edit_offset.value(),
-                            (edit_offset + EditOffsetDelta{(i64)update_size}).value()};
+          this->set_edit_range_out(buffer, edit_offset);
         }));
 
     return OkStatus();
   }
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
+ private:
+  void set_edit_range_out(const MutableBuffer& buffer, EditOffset edit_offset) noexcept
+  {
+    this->edit_range_out.lower_bound = edit_offset.value();
+    this->edit_range_out.upper_bound = this->edit_range_out.lower_bound + buffer.size();
+  }
 
   static_assert(MemTableEntryInserter<MemTableValueEntryInserter>);
 };

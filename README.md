@@ -148,8 +148,6 @@ We currently support:
 Currently missing/under development:
 
 - Time-consistent isolated multi-key reads
-- Key-only queries (i.e., `has_key`/`contains`; note, key-only scans
-  *are* currently supported)
 - Saving/loading full point-in-time snapshots
 
 Limitations (out-of-scope):

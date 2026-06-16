@@ -13,6 +13,8 @@
 
 #include <turtle_kv/util/small_queue.hpp>
 
+#include <batteries/do_nothing.hpp>
+
 #include <chrono>
 #include <cstdlib>
 #include <random>
@@ -139,7 +141,19 @@ struct ChangeLogWriter::WrittenBlocksState {
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 struct ChangeLogWriter::AdvanceSyncState {
+  /** \brief Visits all slots in all flushed blocks, to track the current durable 'sync' upper
+   * bound EditOffset.
+   */
   ChangeLogBlocksVisitor visitor;
+
+  //----- --- -- -  -  -   -
+
+  AdvanceSyncState() = delete;
+
+  explicit AdvanceSyncState(EditOffset recovered_upper_bound) noexcept
+      : visitor{recovered_upper_bound}
+  {
+  }
 };
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -514,7 +528,7 @@ void ChangeLogWriter::writer_task_main() noexcept
     CollectedBlocksState collected;
     PreparedBlocksState prepared{this->config(), *this->state_.lock()->active_blocks_state_};
     WrittenBlocksState written;
-    AdvanceSyncState synced;
+    AdvanceSyncState synced{EditOffset{this->sync_upper_bound_.get_value()}};
 
     for (;;) {
       // Collect BlockBuffers from writer contexts.
@@ -539,7 +553,7 @@ void ChangeLogWriter::writer_task_main() noexcept
         // appending; in this case, enter our timed polling loop.
         //
         const i64 delay_usec = pick_delay_usec(rng);
-        batt::Task::sleep(std::chrono::microseconds(delay_usec));
+        [[maybe_unused]] auto ec = batt::Task::sleep(std::chrono::microseconds(delay_usec));
 
         // After allowing other tasks to run, we should immediately poll updates again to see if we
         // have more data.
@@ -993,31 +1007,28 @@ Status ChangeLogWriter::sync(EditOffset upper_bound, bool urgent) noexcept
 
   // Block until the writer main task advances sync_upper_bound_ past our target.
   //
-  BATT_ASSIGN_OK_RESULT(const i64 observed,
+  BATT_ASSIGN_OK_RESULT([[maybe_unused]] const i64 observed,
                         this->sync_upper_bound_.await_true([upper_bound](i64 observed) {
                           return observed >= upper_bound.value();
                         }));
-
-  (void)observed;
 
   return OkStatus();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-i64 ChangeLogWriter::get_unflushed_byte_count() noexcept
+i64 ChangeLogWriter::get_unflushed_byte_count() const noexcept
 {
   const i64 count =
       std::max<i64>(0, this->next_edit_offset_.load() - this->sync_upper_bound_.get_value());
-  this->metrics_.unflushed_byte_count.set(BATT_CHECKED_CAST(u64, count));
   return count;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-bool ChangeLogWriter::has_pending_urgent_sync_work() noexcept
+bool ChangeLogWriter::has_pending_urgent_sync_work() const noexcept
 {
-  return this->urgent_sync_counter_.load() > 0 && this->get_unflushed_byte_count() > 0;
+  return this->urgent_sync_counter_.load() > 0;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -1028,14 +1039,18 @@ void ChangeLogWriter::advance_sync_upper_bound(
 {
   LatencyTimer timer{Every2ToTheConst<0>{}, this->metrics_.advance_sync_upper_bound_latency};
 
-  sync_state.visitor.set_visited_upper_bound(EditOffset{this->sync_upper_bound_.get_value()});
+  BATT_CHECK_EQ(sync_state.visitor.visited_upper_bound(),
+                EditOffset{this->sync_upper_bound_.get_value()})
+      << "The ChangeLogWriter::write_task_main thread must be the only modifier of "
+         "sync_upper_bound_!";
 
   for (auto& block_ptr : newly_activated) {
     sync_state.visitor.add_block(std::move(block_ptr));
-    sync_state.visitor.visit_change_log_blocks(
-        [](FirstVisitToBlock, ChangeLogBlock*, usize, EditOffset) {
-        });
   }
+
+  sync_state.visitor.visit_change_log_blocks(batt::DoNothing{});
+  //
+  // Nothing to do with the visited blocks; we just care about the new visited upper bound.
 
   this->sync_upper_bound_.set_value(sync_state.visitor.visited_upper_bound().value());
 }

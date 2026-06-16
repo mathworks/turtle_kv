@@ -112,7 +112,6 @@ class ChangeLogWriter
              ((double)this->received_block_byte_count.load() + 1e-6);
     }};
     LatencyMetric advance_sync_upper_bound_latency;
-    FastCountMetric<u64> unflushed_byte_count{0};
   };
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -360,7 +359,7 @@ class ChangeLogWriter
   /** \brief Returns the number of bytes between the sync upper bound and the next edit offset.
    * Updates the unflushed_byte_count metric.
    */
-  i64 get_unflushed_byte_count() noexcept;
+  i64 get_unflushed_byte_count() const noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
@@ -534,7 +533,7 @@ class ChangeLogWriter
   /** \brief Returns true when the writer task should stay awake: there are pending urgent syncs and
    * unflushed bytes.
    */
-  bool has_pending_urgent_sync_work() noexcept;
+  bool has_pending_urgent_sync_work() const noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 

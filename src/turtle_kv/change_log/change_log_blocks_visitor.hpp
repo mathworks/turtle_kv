@@ -15,6 +15,7 @@
 
 #include <turtle_kv/import/int_types.hpp>
 
+#include <batteries/assert.hpp>
 #include <batteries/seq/loop_control.hpp>
 
 #include <absl/container/flat_hash_map.h>
@@ -22,20 +23,20 @@
 #include <boost/intrusive_ptr.hpp>
 
 #include <concepts>
+#include <utility>
 
 namespace turtle_kv {
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 
 /** \brief Used to read slots from a block. Tracks which slot to read next with `next_slot_i`.
- * 
  */
 struct BlockIterator {
   boost::intrusive_ptr<ChangeLogBlock> block;
   usize next_slot_i = 0;
   bool visited = false;
 
-  explicit BlockIterator(boost::intrusive_ptr<ChangeLogBlock>&& block_arg, usize slot_i)
+  explicit BlockIterator(boost::intrusive_ptr<ChangeLogBlock>&& block_arg, usize slot_i) noexcept
       : block{std::move(block_arg)}
       , next_slot_i{slot_i}
       , visited{false}
@@ -88,7 +89,7 @@ class ChangeLogBlocksVisitor
     this->visited_upper_bound_ = value;
   }
 
-  BlockIteratorMap& pending_blocks() noexcept
+  const BlockIteratorMap& pending_blocks() const noexcept
   {
     return this->pending_blocks_;
   }
@@ -136,13 +137,14 @@ class ChangeLogBlocksVisitor
                              entry.next_slot_i,
                              this->visited_upper_bound_));
 
-        this->visited_upper_bound_ +=
-            EditOffsetDelta{entry.block->next_edit_offset_of_slot(entry.next_slot_i).value()};
+        this->visited_upper_bound_ += entry.block->next_edit_offset_of_slot(entry.next_slot_i);
+
         ++entry.next_slot_i;
       } while (entry.has_more() && entry.current_edit_offset() == this->visited_upper_bound_);
 
       if (entry.has_more()) {
-        this->pending_blocks_[entry.current_edit_offset()] = std::move(entry);
+        const EditOffset block_next_edit_offset = entry.current_edit_offset();
+        this->pending_blocks_[block_next_edit_offset] = std::move(entry);
       }
     }
     return this->visited_upper_bound_;

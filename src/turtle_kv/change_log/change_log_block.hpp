@@ -30,6 +30,7 @@
 #include <llfs/ioring_file.hpp>
 
 #include <boost/intrusive_ptr.hpp>
+#include <boost/range/irange.hpp>
 
 namespace turtle_kv {
 
@@ -203,9 +204,10 @@ class ChangeLogBlock
            BATT_OK_RESULT_OR_PANIC(Self::read_slot_edit_offset_delta(this->get_slot(i)));
   }
 
-  EditOffset next_edit_offset_of_slot(usize slot_index) const noexcept
+  EditOffsetDelta next_edit_offset_of_slot(usize slot_index) const noexcept
   {
-    return EditOffset{(i64)(this->slot_size(slot_index) - sizeof(PackedEditOffsetDelta))};
+    return EditOffsetDelta{
+        static_cast<i64>(this->slot_size(slot_index) - sizeof(PackedEditOffsetDelta))};
   }
 
   /** \brief Returns the index of the first slot with EditOffset >= `target`, or None if no such
@@ -219,24 +221,20 @@ class ChangeLogBlock
 
     // SlotInfo pointers are in descending EditOffset order.
     //
-    const SlotInfo* first = this->slots_rend() + 1;
-    const SlotInfo* last = this->slots_rbegin() + 1;
+    auto slot_index_range = boost::irange<usize>(0, this->slot_count());
+    auto first = std::begin(slot_index_range);
+    auto last = std::end(slot_index_range);
 
-    auto it = std::upper_bound(first, last, target,
-                               [this](EditOffset value, const SlotInfo& info) {
-                                 const usize slot_i = this->slots_rbegin() - &info;
-                                 return value > this->slot_edit_offset(slot_i);
-                               });
+    auto it = std::lower_bound(first, last, target, [this](usize slot_index, EditOffset value) {
+      return this->slot_edit_offset(slot_index) < value;
+    });
 
-    // All edit offsets are strictly less than `target`, so return None.
+    // If all edit offsets are strictly less than `target`, return None.
     //
-    if (it == first) {
+    if (it == last) {
       return None;
     }
-
-    // it - 1 points to the last slot where edit offset >= target.
-    //
-    return BATT_CHECKED_CAST(usize, this->slots_rbegin() - (it - 1));
+    return *it;
   }
 
   /** \brief Adds `count` references to this buffer.
