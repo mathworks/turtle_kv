@@ -645,6 +645,8 @@ TEST_F(ChangeLogTest, Sync)
   EXPECT_EQ(writer->durable_upper_bound().value(), target.value());
 
   this->shutdown_writer(writer, /*flush=*/false);
+
+  LOG(INFO) << BATT_INSPECT(writer->metrics().advance_sync_upper_bound_latency);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -697,6 +699,8 @@ TEST_F(ChangeLogTest, MultipleSync)
   EXPECT_EQ(completed.load(), num_waiters);
 
   this->shutdown_writer(writer, /*flush=*/false);
+
+  LOG(INFO) << BATT_INSPECT(writer->metrics().advance_sync_upper_bound_latency);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -771,6 +775,8 @@ TEST_F(ChangeLogTest, SyncStaggeredOffsets)
   }
 
   this->shutdown_writer(writer, /*flush=*/false);
+
+  LOG(INFO) << BATT_INSPECT(writer->metrics().advance_sync_upper_bound_latency);
 }
 
 }  // namespace turtle_kv
