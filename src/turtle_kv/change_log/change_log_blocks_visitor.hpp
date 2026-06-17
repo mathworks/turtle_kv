@@ -111,7 +111,8 @@ class ChangeLogBlocksVisitor
    * consuming contiguous slots in order. Calls `slot_fn` for each slot consumed. Stops at the first
    * gap.
    *
-   * \param slot_fn Called for each consumed slot with (ChangeLogBlock*, slot_index, EditOffset).
+   * \param slot_fn Called for each consumed slot with
+   * (FirstVisitToBlock, ChangeLogBlock*, slot_index, EditOffset).
    *
    * \return The new visited_upper_bound_ value after walking.
    */
