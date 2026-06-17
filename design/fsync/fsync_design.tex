@@ -1,0 +1,61 @@
+\documentclass[11pt]{article}
+\usepackage[margin=3cm]{geometry}
+\usepackage{parskip}
+\usepackage{graphicx}
+	\usepackage{times}
+
+\title{TurtleKV fsync Design}
+\author{
+Tony Astolfi
+\and
+Vidya Silai
+}
+
+\begin{document}
+\maketitle{}
+
+%%------------------------------------------------------------------------------
+\section{Overview of Existing System}
+
+All writes issued to TurtleKV are appended to a write ahead log (also called the change log file) when the operation first occurs. Asynchronously, a background thread flushes this data in the change log file to storage. Currently, there is no mechanism in place for client to request a durability guarantee for either a specific write operation or explicitly at any given point in their application code; all write operations are asynchronous with respect to writing to disk at present.
+
+This document describes the implementation of an fsync-like feature that would allow clients to perform blocking write operations with the guarantee that those operations are hardened to disk, as well as the ability to flush a desired amount of data to disk explicitly.
+
+\section{Requirements}
+
+The fsync design for TurtleKV is constrained by the following:
+
+\begin{enumerate}
+	\item[R1.] A TurtleKV client can perform a blocking write operation that guarantees that the data being written in the operation is durable on disk.
+    \item[R2.] A TurtleKV client can perform an explicit sync on all data written before a specified point, with the guarantee that this range of data is durable on disk.
+    \item[R3.] The functionalities described in requirements 1 and 2 are opt-in, and the current APIs for writing data remain unaffected.
+    \item[R4.] Data that is synced to disk as requested by the client is recoverable in the event of an unexpected shutdown of the database.
+    \item[R5.] A TurtleKV client should have the ability to specify control over the latency of a synced write operation.
+\end{enumerate}
+
+\section{Client Facing APIs}
+
+The following new client facing APIs help implement the requirements described above:
+
+\begin{enumerate}
+    \item \texttt{KVStoreConfig::WriteOptions}
+        \begin{itemize}
+            \item Has the field \texttt{sync}, a boolean that denotes whether or not a specific write operation should block until it is guaranteed to be durable. This flag is set to \texttt{false }by default. Clients can set it to \texttt{true} in their application code and pass the struct to different write operations.
+            \item Has the field \texttt{urgent\_sync}, a boolean which allows the client to specify the "priority" of a synced write operation. The "priority" of a sync operation helps the background writer task determine whether or not to keep polling for blocks of data to write without sleeping, allowing clients to have some control over the latency of this sync operation.
+        \end{itemize}
+    \item \texttt{KVStore::put} and \texttt{KVStore::remove} API new overloads. Both these existing \texttt{KVStore} functions have new overloads.
+        \begin{itemize}
+            \item Both overloads now take an optional parameter called \texttt{write_options} (of type \texttt{KVStoreConfig::WriteOptions}).
+            \item Both overloads return return an \texttt{EditOffset} corresponding to the upper bound of the \texttt{EditOffset} interval that the newly inserted edit spans.
+        \end{itemize}
+\end{enumerate}
+
+\section{Internal Architecture}
+
+\begin{figure}[ht!]
+    \centering
+    \includegraphics[width=0.8\textwidth]{fsync\_architecture.jpg}
+    \caption{Architecture diagram for the implementation of fsync.}
+\end{figure}
+
+\end{document}
