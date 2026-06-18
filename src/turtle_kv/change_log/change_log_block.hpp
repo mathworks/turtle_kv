@@ -30,6 +30,7 @@
 #include <llfs/ioring_file.hpp>
 
 #include <boost/intrusive_ptr.hpp>
+#include <boost/range/irange.hpp>
 
 namespace turtle_kv {
 
@@ -201,6 +202,39 @@ class ChangeLogBlock
   {
     return this->edit_offset_lower_bound() +
            BATT_OK_RESULT_OR_PANIC(Self::read_slot_edit_offset_delta(this->get_slot(i)));
+  }
+
+  EditOffsetDelta next_edit_offset_of_slot(usize slot_index) const noexcept
+  {
+    return EditOffsetDelta{
+        static_cast<i64>(this->slot_size(slot_index) - sizeof(PackedEditOffsetDelta))};
+  }
+
+  /** \brief Returns the index of the first slot with EditOffset >= `target`, or None if no such
+   * slot exists.
+   */
+  Optional<usize> lower_bound_slot(EditOffset target) const noexcept
+  {
+    if (this->slot_count() == 0) {
+      return None;
+    }
+
+    // SlotInfo pointers are in descending EditOffset order.
+    //
+    auto slot_index_range = boost::irange<usize>(0, this->slot_count());
+    auto first = std::begin(slot_index_range);
+    auto last = std::end(slot_index_range);
+
+    auto it = std::lower_bound(first, last, target, [this](usize slot_index, EditOffset value) {
+      return this->slot_edit_offset(slot_index) < value;
+    });
+
+    // If all edit offsets are strictly less than `target`, return None.
+    //
+    if (it == last) {
+      return None;
+    }
+    return *it;
   }
 
   /** \brief Adds `count` references to this buffer.

@@ -72,6 +72,23 @@ struct KVStoreRuntimeOptions {
   static Self with_default_values() noexcept;
 };
 
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+//
+/** \brief Options for KVStore write operations.
+ */
+struct KVStoreWriteOptions {
+  /** \brief If true, the write operation blocks until the data is guaranteed to be durable.
+   */
+  bool sync = false;
+
+  /** \brief Controls the polling behavior of the background task that writes blocks of edit data
+   * to disk. If true, sync must also be true and the background task will more aggressively poll
+   * for blocks to write. Setting to `true` may reduce the latency of a sync operation, but it may
+   * cause the change log storage utilization efficiency to decrease.
+   */
+  bool urgent_sync = false;
+};
+
 BATT_OBJECT_PRINT_IMPL((inline),
                        KVStoreRuntimeOptions,
                        (initial_checkpoint_distance,

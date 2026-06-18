@@ -639,7 +639,9 @@ boost::intrusive_ptr<MemTable> KVStore::create_mem_table(EditOffset edit_offset_
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status KVStore::put(const KeyView& key, const ValueView& value) noexcept /*override*/
+StatusOr<EditOffset> KVStore::put(const KeyView& key,
+                                  const ValueView& value,
+                                  Optional<WriteOptions> write_options) noexcept
 {
   for (usize retry_i = 0; retry_i != KVStore::kMaxUpdateRetries; ++retry_i) {
 #if TURTLE_KV_PROFILE_UPDATES
@@ -667,18 +669,25 @@ Status KVStore::put(const KeyView& key, const ValueView& value) noexcept /*overr
       // Insert the key/value pair into the active MemTable; this will also append a change log
       // buffer.
       //
-      Status status =
+      StatusOr<EditOffset> result =
           observed_mem_table->put(thread_context.change_log_writer_context_, key, value);
 
 #if TURTLE_KV_PROFILE_UPDATES
       put_mem_table_timer.stop();
 #endif
 
+      if (result.ok()) {
+        if (write_options && write_options->sync) {
+          BATT_REQUIRE_OK(this->change_log_writer_->sync(*result, write_options->urgent_sync));
+        }
+        return result;
+      }
+
       // On success and unrecoverable errors, just return immediately.
       //
-      if (status != batt::StatusCode::kResourceExhausted &&
-          status != batt::StatusCode::kGrantUnavailable) {
-        return status;
+      if (result.status() != batt::StatusCode::kResourceExhausted &&
+          result.status() != batt::StatusCode::kGrantUnavailable) {
+        return result.status();
       }
 
       // Grab a (owning) reference to the MemTable.
@@ -716,7 +725,15 @@ Status KVStore::put(const KeyView& key, const ValueView& value) noexcept /*overr
   //
   // Out of retries.
 
-  return batt::StatusCode::kUnavailable;
+  return Status{batt::StatusCode::kUnavailable};
+}
+
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Status KVStore::put(const KeyView& key, const ValueView& value) noexcept /*override*/
+{
+  return this->put(key, value, /*write_options=*/None).status();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -1041,6 +1058,14 @@ Status KVStore::remove(const KeyView& key) noexcept /*override*/
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+StatusOr<EditOffset> KVStore::remove(const KeyView& key,
+                                     Optional<WriteOptions> write_options) noexcept
+{
+  return this->put(key, ValueView::deleted(), write_options);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 Status KVStore::finalize_mem_table(boost::intrusive_ptr<MemTable>&& old_mem_table)
 {
   const bool newly_finalized = old_mem_table->finalize([this]() -> EditOffset {
@@ -1322,6 +1347,18 @@ using CheckpointEvent = llfs::PackedVariant<turtle_kv::PackedCheckpoint>;
   return turtle_kv::Checkpoint::recover(checkpoint_volume,
                                         prev_checkpoint.first,
                                         prev_checkpoint.second);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Status KVStore::sync(Optional<EditOffset> upper_bound, Optional<WriteOptions> write_options) noexcept
+{
+  EditOffset target =
+      upper_bound ? *upper_bound : this->change_log_writer_->next_edit_offset();
+
+  bool urgent = write_options && write_options->urgent_sync ? true : false;
+
+  return this->change_log_writer_->sync(target, urgent);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

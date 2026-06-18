@@ -21,6 +21,7 @@
 
 #include <turtle_kv/import/buffer.hpp>
 #include <turtle_kv/import/int_types.hpp>
+#include <turtle_kv/import/interval.hpp>
 #include <turtle_kv/import/status.hpp>
 
 #include <absl/base/config.h>
@@ -142,6 +143,7 @@ struct MemTableValueEntryInserter {
   // Outputs
 
   MemTableValueEntry* entry_out = nullptr;
+  Interval<i64> edit_range_out;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -157,6 +159,7 @@ struct MemTableValueEntryInserter {
               pack_key_value_slot(this->key, this->value, buffer);
 
           this->entry_out = new (entry_memory) MemTableValueEntry{packed_pair, edit_offset};
+          this->set_edit_range_out(buffer, edit_offset);
         }));
 
     return OkStatus();
@@ -175,12 +178,19 @@ struct MemTableValueEntryInserter {
           p_entry->update_value(packed_pair, edit_offset);
 
           this->entry_out = p_entry;
+          this->set_edit_range_out(buffer, edit_offset);
         }));
 
     return OkStatus();
   }
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
+ private:
+  void set_edit_range_out(const MutableBuffer& buffer, EditOffset edit_offset) noexcept
+  {
+    this->edit_range_out.lower_bound = edit_offset.value();
+    this->edit_range_out.upper_bound = this->edit_range_out.lower_bound + buffer.size();
+  }
 
   static_assert(MemTableEntryInserter<MemTableValueEntryInserter>);
 };

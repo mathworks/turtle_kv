@@ -13,6 +13,8 @@
 
 #include <turtle_kv/util/small_queue.hpp>
 
+#include <batteries/do_nothing.hpp>
+
 #include <chrono>
 #include <cstdlib>
 #include <random>
@@ -133,6 +135,24 @@ struct ChangeLogWriter::WrittenBlocksState {
 
     BATT_CHECK_LT(this->block_index.value_or(BlockIndex{0}), config.block_count)
         << "block_index must be strictly less than the block count!";
+  }
+};
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+struct ChangeLogWriter::AdvanceSyncState {
+  /** \brief Visits all slots in all flushed blocks, to track the current durable 'sync' upper
+   * bound EditOffset.
+   */
+  ChangeLogBlocksVisitor visitor;
+
+  //----- --- -- -  -  -   -
+
+  AdvanceSyncState() = delete;
+
+  explicit AdvanceSyncState(EditOffset recovered_upper_bound) noexcept
+      : visitor{recovered_upper_bound}
+  {
   }
 };
 
@@ -358,6 +378,7 @@ void ChangeLogWriter::Context::push_buffer(BlockBuffer*& buffer,
     , free_block_tokens_{BATT_CHECKED_CAST(u64, this->change_log_->config().block_count.value())}
     , metrics_{}
     , next_edit_offset_{recovered_state.next_edit_offset.value()}
+    , sync_upper_bound_{recovered_state.next_edit_offset.value()}
 {
   // Initialize the meta-block buffer to reflect the on-disk state.
   //
@@ -410,6 +431,7 @@ void ChangeLogWriter::start(batt::Task::executor_type&& executor) noexcept
 //
 void ChangeLogWriter::halt() noexcept
 {
+  this->sync_upper_bound_.close();
   this->halt_requested_.store(true);
   this->free_block_tokens_.close();
 }
@@ -506,6 +528,7 @@ void ChangeLogWriter::writer_task_main() noexcept
     CollectedBlocksState collected;
     PreparedBlocksState prepared{this->config(), *this->state_.lock()->active_blocks_state_};
     WrittenBlocksState written;
+    AdvanceSyncState synced{EditOffset{this->sync_upper_bound_.get_value()}};
 
     for (;;) {
       // Collect BlockBuffers from writer contexts.
@@ -517,9 +540,11 @@ void ChangeLogWriter::writer_task_main() noexcept
       BATT_ASSIGN_OK_RESULT(BlockBufferStats prepare_stats,
                             this->prepare_blocks(collected, prepared));
 
-      // If there are no updates, then sleep before polling again (unless halt requested).
+      // If there are no updates, then sleep before polling again (unless halt requested or
+      // there is pending urgent work).
       //
-      if ((force_sleep || prepared.empty()) && this->halt_requested_.load() == false) {
+      if ((force_sleep || prepared.empty()) && this->halt_requested_.load() == false &&
+          !this->has_pending_urgent_sync_work()) {
         force_sleep = false;
         inactive_count += 1;
         this->metrics_.sleep_count.add(1);
@@ -528,7 +553,7 @@ void ChangeLogWriter::writer_task_main() noexcept
         // appending; in this case, enter our timed polling loop.
         //
         const i64 delay_usec = pick_delay_usec(rng);
-        batt::Task::sleep(std::chrono::microseconds(delay_usec));
+        [[maybe_unused]] auto ec = batt::Task::sleep(std::chrono::microseconds(delay_usec));
 
         // After allowing other tasks to run, we should immediately poll updates again to see if we
         // have more data.
@@ -543,16 +568,24 @@ void ChangeLogWriter::writer_task_main() noexcept
 
       const BlockBufferStats block_stats = prepare_stats + write_stats;
 
-      // Force a sleep if the collected buffers weren't full enough to hit the target density.
-      //
-      force_sleep = block_stats.is_under_target();
-
       // "Activate" the written blocks by adding them to the active blocks state; this allows
       // accurate trimming and reclamation of storage resources.
+      //
+      batt::SmallVec<boost::intrusive_ptr<ChangeLogBlock>, kStaticQueueSize> newly_activated;
       {
         batt::ScopedLock<State> locked_state{this->state_};
-        BATT_REQUIRE_OK(this->activate_blocks(written, *locked_state->active_blocks_state_));
+        BATT_REQUIRE_OK(
+            this->activate_blocks(written, *locked_state->active_blocks_state_, newly_activated));
       }
+
+      // Advance the durable upper bound with the newly activated blocks.
+      //
+      this->advance_sync_upper_bound(newly_activated, synced);
+
+      // Force a sleep if the collected buffers weren't full enough to hit the target density,
+      // unless there is pending urgent work.
+      //
+      force_sleep = block_stats.is_under_target() && !this->has_pending_urgent_sync_work();
 
       // If halt is requested and we don't appear to be making any progress, then return.
       //
@@ -767,8 +800,10 @@ auto ChangeLogWriter::write_blocks(PreparedBlocksState& input, WrittenBlocksStat
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status ChangeLogWriter::activate_blocks(WrittenBlocksState& input,
-                                        ActiveBlocksState& output) noexcept
+Status ChangeLogWriter::activate_blocks(
+    WrittenBlocksState& input,
+    ActiveBlocksState& output,
+    batt::SmallVecBase<boost::intrusive_ptr<ChangeLogBlock>>& newly_activated) noexcept
 {
   if (input.blocks.empty()) {
     return OkStatus();
@@ -833,6 +868,12 @@ Status ChangeLogWriter::activate_blocks(WrittenBlocksState& input,
       cfg.increment_block_range(output.block_range);
       BATT_CHECK(output.block_range.empty()) << BATT_INSPECT(output.block_range);
       continue;
+    }
+
+    // Collect blocks with slots for advancing the durable upper bound.
+    //
+    if (next_block->slot_count() > 0) {
+      newly_activated.emplace_back(next_block);
     }
 
     // Update active blocks edit offset upper bound.
@@ -938,6 +979,80 @@ Optional<batt::Grant> ChangeLogWriter::ActiveBlocksState::apply_trim(
   VLOG(1) << BATT_INSPECT(this->in_use_block_grant.size());
 
   return released_grant;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Status ChangeLogWriter::sync(EditOffset upper_bound, bool urgent) noexcept
+{
+  // Return early if upper bound is already synced.
+  //
+  if (this->sync_upper_bound_.get_value() >= upper_bound.value()) {
+    return OkStatus();
+  }
+
+  if (urgent) {
+    this->urgent_sync_counter_.fetch_add(1);
+  }
+
+  auto on_exit = batt::finally([&] {
+    if (urgent) {
+      this->urgent_sync_counter_.fetch_sub(1);
+    }
+  });
+
+  if (this->task_) {
+    this->task_->wake();
+  }
+
+  // Block until the writer main task advances sync_upper_bound_ past our target.
+  //
+  BATT_ASSIGN_OK_RESULT([[maybe_unused]] const i64 observed,
+                        this->sync_upper_bound_.await_true([upper_bound](i64 observed) {
+                          return observed >= upper_bound.value();
+                        }));
+
+  return OkStatus();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+i64 ChangeLogWriter::get_unflushed_byte_count() const noexcept
+{
+  const i64 count =
+      std::max<i64>(0, this->next_edit_offset_.load() - this->sync_upper_bound_.get_value());
+  return count;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+bool ChangeLogWriter::has_pending_urgent_sync_work() const noexcept
+{
+  return this->urgent_sync_counter_.load() > 0;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void ChangeLogWriter::advance_sync_upper_bound(
+    batt::SmallVecBase<boost::intrusive_ptr<ChangeLogBlock>>& newly_activated,
+    AdvanceSyncState& sync_state) noexcept
+{
+  LatencyTimer timer{Every2ToTheConst<0>{}, this->metrics_.advance_sync_upper_bound_latency};
+
+  BATT_CHECK_EQ(sync_state.visitor.visited_upper_bound(),
+                EditOffset{this->sync_upper_bound_.get_value()})
+      << "The ChangeLogWriter::write_task_main thread must be the only modifier of "
+         "sync_upper_bound_!";
+
+  for (auto& block_ptr : newly_activated) {
+    sync_state.visitor.add_block(std::move(block_ptr));
+  }
+
+  sync_state.visitor.visit_change_log_blocks(batt::DoNothing{});
+  //
+  // Nothing to do with the visited blocks; we just care about the new visited upper bound.
+
+  this->sync_upper_bound_.set_value(sync_state.visitor.visited_upper_bound().value());
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

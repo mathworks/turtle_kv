@@ -2,7 +2,7 @@
     "version": "0.5",
     "requires": [
         "abseil/20250127.0",
-        "batteries/0.70.2",
+        "batteries/0.71.1",
         "boost/1.88.0",
         "bzip2/1.0.8",
         "cli11/2.5.0",
@@ -15,7 +15,7 @@
         "libpfm4/4.13.0",
         "libunwind/1.8.1",
         "liburing/2.11",
-        "llfs/0.44.0",
+        "llfs/0.46.0",
         "openssl/3.6.0",
         "pcg-cpp/cci.20220409",
         "protobuf/3.21.12",
