@@ -351,6 +351,11 @@ class ChangeLogWriter
 
   Status sync(EditOffset upper_bound, bool urgent = false) noexcept;
 
+  Status sync_latest(bool urgent = false) noexcept
+  {
+    return this->sync(this->next_edit_offset(), urgent);
+  }
+
   EditOffset durable_upper_bound() const noexcept
   {
     return EditOffset{this->sync_upper_bound_.get_value()};
