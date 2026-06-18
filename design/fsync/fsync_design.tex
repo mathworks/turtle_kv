@@ -17,7 +17,7 @@ Vidya Silai
 %%------------------------------------------------------------------------------
 \section{Overview of Existing System}
 
-All writes issued to TurtleKV are appended to a write ahead log (also called the change log file) when the operation first occurs. Asynchronously, a background thread flushes this data in the change log file to storage. Currently, there is no mechanism in place for a client to request a durability guarantee for either a specific write operation or explicitly at any given point in their application code; all write operations are asynchronous with respect to writing to disk at present.
+All writes issued to TurtleKV are appended to a write ahead log (also called the change log file) when the operation first occurs. Asynchronously, a background thread flushes this data in the change log to storage. Currently, there is no mechanism in place for a client to request a durability guarantee for either a specific write operation or explicitly at any given point in their application code; all write operations are asynchronous with respect to writing to disk at present.
 
 This document describes the implementation of an fsync-like feature that would allow clients to perform blocking write operations with the guarantee that those operations are hardened to disk when they complete, as well as the ability to flush a desired amount of data to disk explicitly.
 
