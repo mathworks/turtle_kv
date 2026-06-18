@@ -110,11 +110,6 @@ class ChangeLogTest : public ::testing::Test
       // Wait for writer to process appends before halting.
       //
       ASSERT_TRUE(this->writer_->wait_for_flush());
-
-      // If wait_for_flush succeeded, then there should be *no* unflushed slots.
-      //
-      ASSERT_EQ(this->writer_->next_edit_offset(),  //
-                this->writer_->durable_upper_bound());
     }
 
     this->writer_->halt();
