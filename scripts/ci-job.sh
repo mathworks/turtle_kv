@@ -27,12 +27,28 @@ fi
 #
 cor select --clean --profile=linux-gcc12-x86_64 --build-type=Release
 
-# Build.
-#
-# cor install makes sure deps are uploaded to the cache server first;
-# TODO [tastolfi 2025-09-27] - Add a `cor pre-cache <options> <package_name>/<version> ...` command
-#
-cor clean
-cor install
-cor build
-cor test --only
+: "${CI_JOB_NAME:?Error: CI_JOB_NAME environment variable must be set}"
+
+case "$CI_JOB_NAME" in
+  build_and_test)
+    echo "Running build_and_test job..."
+    # Build.
+    #
+    # cor install makes sure deps are uploaded to the cache server first;
+    # TODO [tastolfi 2025-09-27] - Add a `cor pre-cache <options> <package_name>/<version> ...` command
+    #
+    cor install --clean
+    cor build
+    cor test    --only
+    ;;
+  release)
+    echo "Running release job..."
+    cor export --only
+    cor export-pkg --clean
+    cor upload
+    ;;
+  *)
+    echo "Unknown job type: $CI_JOB_NAME"
+    exit 1
+    ;;
+esac
