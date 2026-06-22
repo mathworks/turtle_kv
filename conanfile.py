@@ -144,6 +144,19 @@ class TurtleKvRecipe(ConanFile):
     def package_info(self):
         self.cor.package_info_lib_default(self)
 
+        def _set_flags(name, value):
+            if value:
+                self.cpp_info.cxxflags += [f'-DTURTLE_KV_{name}=1']
+            else:
+                self.cpp_info.cxxflags += [f'-DTURTLE_KV_{name}=0']
+
+        _set_flags('USE_BLOOM_FILTER', self.options.use_bloom_filter)
+        _set_flags('USE_QUOTIENT_FILTER', self.options.use_quotient_filter)
+        _set_flags('ENABLE_LEAF_FILTERS', self.options.enable_leaf_filters)
+        _set_flags('ENABLE_METRICS', self.options.enable_metrics)
+        _set_flags('PROFILE_UPDATES', self.options.profile_updates)
+        _set_flags('PROFILE_QUERIES', self.options.profile_queries)
+
     def package_id(self):
         self.cor.package_id_lib_default(self)
 
