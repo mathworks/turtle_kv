@@ -52,8 +52,8 @@ class TurtleKvRecipe(ConanFile):
 
     default_options = {
         "with_keyvcr": False,
-        "use_bloom_filter": False,
-        "use_quotient_filter": True,
+        "use_bloom_filter": True,
+        "use_quotient_filter": False,
         "enable_leaf_filters": True,
         "enable_metrics": True,
         "profile_updates": True,
