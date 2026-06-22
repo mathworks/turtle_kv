@@ -32,8 +32,7 @@
         "ninja/1.13.2"
     ],
     "python_requires": [
-        "cor_recipe_utils/0.18.2",
-        "cor_recipe_utils/0.8.7"
+        "cor_recipe_utils/0.19.1"
     ],
     "overrides": {
         "libunwind/[>=1.8 <2]": [
