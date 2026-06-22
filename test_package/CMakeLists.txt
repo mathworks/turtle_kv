@@ -5,4 +5,4 @@ find_package(turtle_kv CONFIG REQUIRED)
 
 
 add_executable(example src/example.cpp)
-target_link_libraries(example turtle_kv::turtle_kv batteries::batteries)
+target_link_libraries(example turtle_kv::turtle_kv)
