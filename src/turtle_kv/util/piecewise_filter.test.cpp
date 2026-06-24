@@ -13,7 +13,14 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <turtle_kv/util/piecewise_filter.ipp>
+#include <turtle_kv/util/piecewise_filter.live_subranges.hpp>
+
 #include <turtle_kv/core/testing/generate.hpp>
+
+#include <batteries/bit_ops/first_bit.hpp>
+#include <batteries/bit_ops/mask.hpp>
+#include <batteries/bit_ops/next_bit.hpp>
 
 #include <algorithm>
 #include <random>
@@ -39,6 +46,7 @@ using turtle_kv::drop_item_range;
 
 using llfs::KeyRangeOrder;
 
+using batt::mask_from_interval;
 using batt::StableStringStore;
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -138,7 +146,7 @@ TEST(PiecewiseFilterTest, QueryTest)
 
       auto iter = live_items.lower_bound(start_i);
       Interval<usize> expected_range;
-      
+
       if (iter == live_items.end() || *iter >= end_i) {
         expected_range = Interval<usize>{end_i, end_i};
       } else {
@@ -284,4 +292,67 @@ TEST(PiecewiseFilterTest, KeyQueryTest)
     EXPECT_TRUE(filter.check_invariants());
   }
 }
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+TEST(PiecewiseFilterTest, LiveSubranges)
+{
+  std::uniform_int_distribution<u32> pick_bound{0, 64};
+
+  const auto pick_interval = [&](auto& rng) {
+    Interval<u32> i{pick_bound(rng), pick_bound(rng)};
+    if (i.upper_bound < i.lower_bound) {
+      std::swap(i.lower_bound, i.upper_bound);
+    }
+    return i;
+  };
+
+  std::array<Interval<u32>, 1> init_live{{{0, 64}}};
+
+  const usize n_seeds = 10000000;
+  const usize n_drops = 10;
+  const usize n_queries = 15;
+  const usize first_seed = 0;
+
+  for (usize seed_i = first_seed; seed_i < first_seed + n_seeds; ++seed_i) {
+    std::default_random_engine rng{seed_i};
+
+    PiecewiseFilter<u32> filter =
+        BATT_OK_RESULT_OR_PANIC(PiecewiseFilter<u32>::from_live(batt::as_slice(init_live)));
+
+    const auto query_as_bits = [&](Interval<u32> query) {
+      u64 bits = 0;
+      filter.live_subranges_of(query) | batt::seq::for_each([&bits](const Interval<u32>& live) {
+        bits |= mask_from_interval(live);
+      });
+      return bits;
+    };
+
+    u64 filter_state = ~u64{0};
+
+    for (usize i = 0; i < n_drops; ++i) {
+      const Interval<u32> drop_interval = pick_interval(rng);
+      const u64 drop_mask = mask_from_interval(drop_interval);
+      filter_state &= ~drop_mask;
+      filter.drop_index_range(drop_interval);
+
+      if constexpr (false) {
+        std::cerr << BATT_INSPECT(std::bitset<64>{filter_state}) << BATT_INSPECT(filter.dump())
+                  << std::endl;
+      }
+
+      for (usize j = 0; j < n_queries; ++j) {
+        const Interval<u32> query_interval = pick_interval(rng);
+        const u64 query_mask = mask_from_interval(query_interval);
+        const u64 expected_bits = query_mask & filter_state;
+        const u64 actual_bits = query_as_bits(query_interval);
+
+        ASSERT_EQ(std::bitset<64>{expected_bits}, std::bitset<64>{actual_bits})
+            << BATT_INSPECT(seed_i) << BATT_INSPECT(query_interval)
+            << BATT_INSPECT(query_interval.size()) << BATT_INSPECT(std::bitset<64>{query_mask});
+      }
+    }
+  }
+}
+
 }  // namespace

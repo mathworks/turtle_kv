@@ -142,6 +142,11 @@ inline PackedKeyValueSlotRef to_key_value_slot_ref(const PackedKeyValueSlotPtr* 
   };
 }
 
+inline PackedKeyValueSlotRef to_key_value_slot_ref(const PackedKeyValueSlotPtr& p_slot_ref) noexcept
+{
+  return to_key_value_slot_ref(std::addressof(p_slot_ref));
+}
+
 inline PackedKeyValueSlotRef to_key_value_slot_ref(const ConstBuffer& slot_buffer) noexcept
 {
   return PackedKeyValueSlotRef{

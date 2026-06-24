@@ -6,14 +6,14 @@
 //
 //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-#include <turtle_kv/tree/packed_leaf_block.hpp>
+#include <turtle_kv/tree/leaf/packed_leaf_block.hpp>
 //
-#include <turtle_kv/tree/packed_leaf_block.hpp>
+#include <turtle_kv/tree/leaf/packed_leaf_block.hpp>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include "random_str.hpp"
+#include <turtle_kv/tree/random_str.hpp>
 
 #include <batteries/stable_string_store.hpp>
 
@@ -119,6 +119,8 @@ TEST(TreePackedLeafBlockTest, Random)
       }
     }
 
+    // Run empty queries.
+    //
     for (usize i = 0; i < kNumNotFoundQueries; ++i) {
       std::string_view key;
       for (;;) {
@@ -135,6 +137,8 @@ TEST(TreePackedLeafBlockTest, Random)
       ASSERT_EQ(packed_block.find_key(key), nullptr);
     }
 
+    // Run lower bound queries.
+    //
     for (usize i = 0; i < kNumLowerBoundQueries; ++i) {
       std::string_view key = (i % 2) ? random_str(rng,
                                                   pick_key_size,

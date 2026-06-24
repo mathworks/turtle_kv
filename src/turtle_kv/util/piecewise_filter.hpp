@@ -9,6 +9,8 @@
 #pragma once
 #define TURTLE_KV_UTIL_PIECEWISE_FILTER_HPP
 
+#include "piecewise_filter_storage_model.concept.hpp"
+
 #include <turtle_kv/import/int_types.hpp>
 #include <turtle_kv/import/interval.hpp>
 #include <turtle_kv/import/optional.hpp>
@@ -26,11 +28,15 @@ namespace turtle_kv {
 
 /** \brief A representation of a filtered range of items.
  */
-template <typename OffsetT>
-class PiecewiseFilter
+template <typename OffsetT, PiecewiseFilterStorageModel<OffsetT> ModelT>
+class BasicPiecewiseFilter : private ModelT
 {
  public:
-  using Self = PiecewiseFilter;
+  using Self = BasicPiecewiseFilter;
+
+  using ConstIterator = typename ModelT::const_iterator;
+
+  class LiveSubranges;
 
   static_assert(std::is_integral<OffsetT>::value && std::is_unsigned<OffsetT>::value,
                 "Offset must be an unsigned integer type!");
@@ -46,14 +52,15 @@ class PiecewiseFilter
   /** \brief Creates and returns a PiecewiseFilter instance from a range of intervals that contain
    * the live item indexes.
    */
-  static StatusOr<PiecewiseFilter> from_live(const Slice<const Interval<OffsetT>>& live);
+  static StatusOr<Self> from_live(const Slice<const Interval<OffsetT>>& live)
+    requires PiecewiseFilterMutableStorageModel<ModelT, OffsetT>;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   /** \brief Constructs a default instance of a PiecewiseFilter object, initialized with no item
    * range and filtered items.
    */
-  PiecewiseFilter() noexcept;
+  BasicPiecewiseFilter() noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -63,7 +70,8 @@ class PiecewiseFilter
    *
    * \return The new dropped interval that coincides with `i`.
    */
-  Interval<OffsetT> drop_index_range(Interval<OffsetT> i);
+  Interval<OffsetT> drop_index_range(Interval<OffsetT> i)
+    requires PiecewiseFilterMutableStorageModel<ModelT, OffsetT>;
 
   /** \brief Returns whether or not the item at index `i` has been filtered out.
    *
@@ -99,7 +107,13 @@ class PiecewiseFilter
 
   /** \brief Merges two filters in place, taking the union of the live intervals.
    */
-  void merge(const PiecewiseFilter& other);
+  void merge(const Self& other)
+    requires PiecewiseFilterMutableStorageModel<ModelT, OffsetT>;
+
+  /** \brief Returns a seq of Interval<OffsetT> that is the intersection of `i` and the live ranges
+   * of this filter.
+   */
+  LiveSubranges live_subranges_of(Interval<OffsetT> i) const;
 
   /** \brief Validate the state of the live intervals.
    */
@@ -109,11 +123,22 @@ class PiecewiseFilter
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
-  /** \brief The range of filtered out item indexes.
-   */
-  SmallVec<Interval<OffsetT>, 64> live_;
+  BATT_ALWAYS_INLINE ModelT& live_() noexcept
+  {
+    return *this;
+  }
+
+  BATT_ALWAYS_INLINE const ModelT& live_() const noexcept
+  {
+    return *this;
+  }
 };
 
+template <typename OffsetT>
+using PiecewiseFilter = BasicPiecewiseFilter<OffsetT, SmallVec<Interval<OffsetT>, 64>>;
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 template <typename OffsetT, typename ItemT, typename Traits, typename OrderFn>
 inline Interval<OffsetT> drop_item_range(PiecewiseFilter<OffsetT>& filter,
                                          const Slice<const ItemT>& items,
@@ -127,6 +152,5 @@ inline Interval<OffsetT> drop_item_range(PiecewiseFilter<OffsetT>& filter,
 
   return filter.drop_index_range(Interval<OffsetT>{start_i, end_i});
 }
-}  // namespace turtle_kv
 
-#include <turtle_kv/util/piecewise_filter.ipp>
+}  // namespace turtle_kv

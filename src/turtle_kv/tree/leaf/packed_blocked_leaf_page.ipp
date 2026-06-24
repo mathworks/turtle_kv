@@ -7,13 +7,15 @@
 //+++++++++++-+-+--+----- --- -- -  -  -   -
 
 #pragma once
-#define TURTLE_KV_TREE_PACKED_BLOCKED_LEAF_PAGE_HPP
+#define TURTLE_KV_TREE_PACKED_BLOCKED_LEAF_PAGE_IPP
 
 #include "packed_blocked_leaf_page.hpp"
+#include "packed_blocked_leaf_page.item_iterator.hpp"
 
 #include <turtle_kv/import/small_vec.hpp>
 
 #include <artc/packed/art_builder.hpp>
+#include <artc/packed/query.hpp>
 
 #include <batteries/stable_string_store.hpp>
 
@@ -65,11 +67,9 @@ StatusOr<PackedBlockedLeafPage*> pack_blocked_leaf_page(const usize block_size,
   dst_remaining += sizeof(PackedBlockedLeafPage);
   {
     leaf_header->magic = PackedBlockedLeafPage::kMagic;
-    leaf_header->item_count = BATT_CHECKED_CAST(u32, item_count);
     leaf_header->total_packed_size = 0;
     leaf_header->blocks_per_art_key = 0;
     leaf_header->block_size_bytes = BATT_CHECKED_CAST(u32, block_size);
-    leaf_header->block_count = BATT_CHECKED_CAST(u32, block_count);
     leaf_header->block0.offset = 0;
     leaf_header->block_starting_item.offset = 0;
     leaf_header->art_block_index.offset = 0;
@@ -80,12 +80,12 @@ StatusOr<PackedBlockedLeafPage*> pack_blocked_leaf_page(const usize block_size,
   //
   {
     const usize block_starting_item_array_size =
-        sizeof(llfs::PackedArray<little_u32>) + sizeof(little_u32) * block_count;
+        sizeof(llfs::PackedArray<little_u32>) + sizeof(little_u32) * (block_count + 1);
 
     auto* block_starting_item = static_cast<llfs::PackedArray<little_u32>*>(dst_remaining.data());
     dst_remaining += block_starting_item_array_size;
 
-    block_starting_item->initialize(block_stats.size());
+    block_starting_item->initialize(block_count + 1);
 
     little_u32* block_start = block_starting_item->data();
     u32 item_i = 0;
@@ -94,6 +94,7 @@ StatusOr<PackedBlockedLeafPage*> pack_blocked_leaf_page(const usize block_size,
       item_i += stats.item_count;
       ++block_start;
     }
+    *block_start = item_count;
 
     leaf_header->block_starting_item.reset_unsafe(block_starting_item);
   }
@@ -105,13 +106,25 @@ StatusOr<PackedBlockedLeafPage*> pack_blocked_leaf_page(const usize block_size,
   const usize space_for_art = dst_remaining.size() - block_size * block_count;
   SmallVec<KeyView, 4096> art_keys;
   usize blocks_per_art_key = 1;
+  //----- --- -- -  -  -   -
+  const auto items = std::begin(src_items);
+  const auto key_at = [&items](usize i) {
+    return get_key(*(items + i));
+  };
+  //----- --- -- -  -  -   -
   for (;;) {
     art_keys.clear();
-    auto items = std::begin(src_items);
     for (usize block_i = blocks_per_art_key; block_i < block_count; block_i += blocks_per_art_key) {
       const usize item_i = block_starting_item[block_i];
       BATT_CHECK_LT(item_i, item_count);
-      art_keys.emplace_back(get_key(*(items + item_i)));
+      BATT_CHECK_GT(item_i, 0);
+
+      KeyView k0 = key_at(item_i - 1);
+      KeyView k1 = key_at(item_i);
+      KeyView common_prefix = llfs::find_common_prefix(0, k0, k1);
+      KeyView min_k1{k1.data(), common_prefix.size() + 1};
+
+      art_keys.emplace_back(min_k1);
     }
 
     using artc::packed::PackedARTBuilder;
@@ -187,6 +200,117 @@ StatusOr<PackedBlockedLeafPage*> pack_blocked_leaf_page(const usize block_size,
   // Success!  (nothing succeeds like it)
   //
   return leaf_header;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+/*static*/ const PackedBlockedLeafPage& PackedBlockedLeafPage::view_of(
+    const ConstBuffer& buffer) noexcept
+{
+  BATT_CHECK_GT(buffer.size(), sizeof(PackedBlockedLeafPage) + sizeof(llfs::PackedPageHeader));
+
+  auto* packed = static_cast<const PackedBlockedLeafPage*>(
+      advance_pointer(buffer.data(), sizeof(llfs::PackedPageHeader)));
+
+  BATT_CHECK_EQ(packed->magic, PackedBlockedLeafPage::kMagic);
+
+  return *packed;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+inline PackedBlockedLeafPage::ItemIterator PackedBlockedLeafPage::items_begin() const noexcept
+{
+  auto first_block = this->blocks_begin();
+  return ItemIterator{first_block, first_block->items_begin()};
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+inline PackedBlockedLeafPage::ItemIterator PackedBlockedLeafPage::items_end() const noexcept
+{
+  auto last_block = this->blocks_end();
+  return ItemIterator{last_block, last_block->items_begin()};
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+inline PackedBlockedLeafPage::ItemIterator PackedBlockedLeafPage::item_at(usize i) const noexcept
+{
+  const llfs::PackedArray<little_u32>& starts = *this->block_starting_item;
+
+  BATT_CHECK_NE(starts.size(), 0);
+  BATT_CHECK_EQ(starts.front(), 0);
+
+  const auto iter = std::prev(std::upper_bound(starts.begin(), starts.end(), i));
+  const isize item_pos_in_block = i - *iter;
+  const isize block_i = std::distance(starts.begin(), iter);
+  auto block_iter = this->blocks_begin() + block_i;
+
+  return ItemIterator{block_iter, block_iter->items_begin() + item_pos_in_block};
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+inline usize PackedBlockedLeafPage::find_block_index_containing_key(
+    const KeyView& key) const noexcept
+{
+  using artc::packed::find_lower_bound_rank;
+  using artc::packed::LowerBoundRank;
+
+  LowerBoundRank result = find_lower_bound_rank(this->art_block_index.get(), key);
+
+  const usize part_i = result.exact ? (result.rank + 1) : result.rank;
+  const usize block_i = part_i * this->blocks_per_art_key;
+
+  BATT_CHECK_LT(block_i, this->block_count());
+
+  return block_i;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+inline PackedLeafBlock::Iterator PackedBlockedLeafPage::find_block_containing_key(
+    const KeyView& key) const noexcept
+{
+  return this->blocks_begin() + this->find_block_index_containing_key(key);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+inline const PackedKeyValueSlotPtr* PackedBlockedLeafPage::find_key(
+    const KeyView& key) const noexcept
+{
+  return this->find_block_containing_key(key)->find_key(key);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+inline PackedBlockedLeafPage::ItemIterator PackedBlockedLeafPage::lower_bound(
+    const KeyView& key) const noexcept
+{
+  auto block_iter = this->find_block_containing_key(key);
+
+  const PackedKeyValueSlotPtr* p_slot = block_iter->lower_bound(key);
+  if (p_slot == block_iter->items_end()) {
+    ++block_iter;
+    return ItemIterator{block_iter, block_iter->items_begin()};
+  }
+
+  return ItemIterator{block_iter, p_slot};
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <PiecewiseFilterStorageModel<u32> FilterModelT>
+inline PackedBlockedLeafPage::ShardedLiveRanges<FilterModelT>
+PackedBlockedLeafPage::sharded_live_ranges(const BasicPiecewiseFilter<u32, FilterModelT>& filter,
+                                           const Interval<u32>& subrange) const noexcept
+{
+  return ShardedLiveRanges<FilterModelT>{
+      this->block_starting_item.get(),
+      filter.live_subranges_of(subrange),
+  };
 }
 
 }  // namespace turtle_kv

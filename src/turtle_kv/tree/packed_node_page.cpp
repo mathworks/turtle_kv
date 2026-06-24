@@ -1,3 +1,11 @@
+//=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
+//
+// Part of the TurtleKV Project, under Apache License v2.0.
+// See https://www.apache.org/licenses/LICENSE-2.0 for license information.
+// SPDX short identifier: Apache-2.0
+//
+//+++++++++++-+-+--+----- --- -- -  -  -   -
+
 #include <turtle_kv/tree/packed_node_page.hpp>
 //
 
@@ -8,6 +16,7 @@
 #include <turtle_kv/tree/subtree.hpp>
 
 #include <turtle_kv/util/buffer_bounds_checker.hpp>
+#include <turtle_kv/util/piecewise_filter.ipp>
 
 #include <llfs/packed_page_header.hpp>
 

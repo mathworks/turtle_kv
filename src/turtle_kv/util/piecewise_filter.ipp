@@ -11,20 +11,19 @@
 
 #include "piecewise_filter.hpp"
 
-#include <ranges>
-
 namespace turtle_kv {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-template <typename OffsetT>
-/*static*/ StatusOr<PiecewiseFilter<OffsetT>> PiecewiseFilter<OffsetT>::from_live(
-    const Slice<const Interval<OffsetT>>& live)
+template <typename OffsetT, PiecewiseFilterStorageModel<OffsetT> ModelT>
+/*static*/ StatusOr<BasicPiecewiseFilter<OffsetT, ModelT>>
+BasicPiecewiseFilter<OffsetT, ModelT>::from_live(const Slice<const Interval<OffsetT>>& live)
+  requires PiecewiseFilterMutableStorageModel<ModelT, OffsetT>
 {
-  PiecewiseFilter<OffsetT> filter;
-  filter.live_.clear();
+  Self filter;
 
-  filter.live_.insert(filter.live_.end(), live.begin(), live.end());
+  filter.live_().clear();
+  filter.live_().insert(filter.live_().end(), live.begin(), live.end());
 
   if (!filter.check_invariants()) {
     return Status{::batt::StatusCode::kInvalidArgument};
@@ -35,16 +34,16 @@ template <typename OffsetT>
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-template <typename OffsetT>
-PiecewiseFilter<OffsetT>::PiecewiseFilter() noexcept
-    : live_{{Interval<OffsetT>{Self::kMinLowerBound, Self::kMaxUpperBound}}}
+template <typename OffsetT, PiecewiseFilterStorageModel<OffsetT> ModelT>
+BasicPiecewiseFilter<OffsetT, ModelT>::BasicPiecewiseFilter() noexcept
+    : ModelT{{Interval<OffsetT>{Self::kMinLowerBound, Self::kMaxUpperBound}}}
 {
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-template <typename OffsetT>
-bool PiecewiseFilter<OffsetT>::check_invariants() const
+template <typename OffsetT, PiecewiseFilterStorageModel<OffsetT> ModelT>
+bool BasicPiecewiseFilter<OffsetT, ModelT>::check_invariants() const
 {
   Optional<OffsetT> prev_upper_bound = None;
 
@@ -52,7 +51,7 @@ bool PiecewiseFilter<OffsetT>::check_invariants() const
   //  - all intervals are in non-decreasing order
   //  - no intervals overlap or are adjacent (i.e., prev.upper_bound == next.lower_bound)
   //
-  for (const Interval<OffsetT>& range : this->live_) {
+  for (const Interval<OffsetT>& range : this->live_()) {
     // If a range has the minimum lower bound, it must be the first.
     //
     if (range.lower_bound == Self::kMinLowerBound && prev_upper_bound) {
@@ -80,15 +79,16 @@ bool PiecewiseFilter<OffsetT>::check_invariants() const
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-template <typename OffsetT>
-Interval<OffsetT> PiecewiseFilter<OffsetT>::drop_index_range(Interval<OffsetT> to_drop)
+template <typename OffsetT, PiecewiseFilterStorageModel<OffsetT> ModelT>
+Interval<OffsetT> BasicPiecewiseFilter<OffsetT, ModelT>::drop_index_range(Interval<OffsetT> to_drop)
+  requires PiecewiseFilterMutableStorageModel<ModelT, OffsetT>
 {
   if (to_drop.empty()) {
     return to_drop;
   }
 
-  auto [first, last] = std::equal_range(this->live_.begin(),
-                                        this->live_.end(),
+  auto [first, last] = std::equal_range(this->live_().begin(),
+                                        this->live_().end(),
                                         to_drop,
                                         typename Interval<OffsetT>::LinearOrder{});
 
@@ -98,7 +98,7 @@ Interval<OffsetT> PiecewiseFilter<OffsetT>::drop_index_range(Interval<OffsetT> t
   // the return value bounds correctly.
   //
   if (first == last || to_drop.lower_bound < first->lower_bound) {
-    if (first != this->live_.begin()) {
+    if (first != this->live_().begin()) {
       // We are starting in a live interval gap (dropped region), so we extend to the previous live
       // interval's upper bound.
       //
@@ -109,7 +109,7 @@ Interval<OffsetT> PiecewiseFilter<OffsetT>::drop_index_range(Interval<OffsetT> t
   }
 
   if (first == last || to_drop.upper_bound >= std::prev(last)->upper_bound) {
-    if (last != this->live_.end()) {
+    if (last != this->live_().end()) {
       // We are ending in a live interval gap, so we extend to the next live interval's start.
       //
       dropped.upper_bound = last->lower_bound;
@@ -164,7 +164,7 @@ Interval<OffsetT> PiecewiseFilter<OffsetT>::drop_index_range(Interval<OffsetT> t
 
   // Process all overlapping intervals with `to_drop`.
   //
-  while (first != this->live_.end()) {
+  while (first != this->live_().end()) {
     if (first->lower_bound >= to_drop.upper_bound) {
       // Interval is entirely after `to_drop`, so there is nothing left to process.
       //
@@ -177,7 +177,7 @@ Interval<OffsetT> PiecewiseFilter<OffsetT>::drop_index_range(Interval<OffsetT> t
         //
         Interval<OffsetT> right_half{to_drop.upper_bound, first->upper_bound};
         first->upper_bound = to_drop.lower_bound;
-        this->live_.insert(std::next(first), right_half);
+        this->live_().insert(std::next(first), right_half);
         return dropped;
       } else {
         // Cases 2b and 4.
@@ -193,7 +193,7 @@ Interval<OffsetT> PiecewiseFilter<OffsetT>::drop_index_range(Interval<OffsetT> t
     } else {
       // Case 1.
       //
-      first = this->live_.erase(first);
+      first = this->live_().erase(first);
     }
   }
 
@@ -202,41 +202,41 @@ Interval<OffsetT> PiecewiseFilter<OffsetT>::drop_index_range(Interval<OffsetT> t
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-template <typename OffsetT>
-Slice<const Interval<OffsetT>> PiecewiseFilter<OffsetT>::live() const
+template <typename OffsetT, PiecewiseFilterStorageModel<OffsetT> ModelT>
+Slice<const Interval<OffsetT>> BasicPiecewiseFilter<OffsetT, ModelT>::live() const
 {
-  return as_const_slice(this->live_);
+  return as_const_slice(this->live_());
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-template <typename OffsetT>
-bool PiecewiseFilter<OffsetT>::live_at_index(OffsetT i) const
+template <typename OffsetT, PiecewiseFilterStorageModel<OffsetT> ModelT>
+bool BasicPiecewiseFilter<OffsetT, ModelT>::live_at_index(OffsetT i) const
 {
   return this->live_lower_bound(i) == i;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-template <typename OffsetT>
-OffsetT PiecewiseFilter<OffsetT>::live_lower_bound(OffsetT i) const
+template <typename OffsetT, PiecewiseFilterStorageModel<OffsetT> ModelT>
+OffsetT BasicPiecewiseFilter<OffsetT, ModelT>::live_lower_bound(OffsetT i) const
 {
   // Compute the live interval which could contain `i`.
   //
-  auto iter = std::lower_bound(this->live_.begin(),
-                               this->live_.end(),
+  auto iter = std::lower_bound(this->live_().begin(),
+                               this->live_().end(),
                                i,
                                typename Interval<OffsetT>::LinearOrder{});
 
   // Check if current interval contains `i`.
   //
-  if (iter != this->live_.end() && iter->contains(i)) {
+  if (iter != this->live_().end() && iter->contains(i)) {
     return i;
   }
 
   // `i` is in a dropped range, so we return the start of the next live interval.
   //
-  if (iter != this->live_.end()) {
+  if (iter != this->live_().end()) {
     return iter->lower_bound;
   }
 
@@ -247,22 +247,22 @@ OffsetT PiecewiseFilter<OffsetT>::live_lower_bound(OffsetT i) const
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-template <typename OffsetT>
-Interval<OffsetT> PiecewiseFilter<OffsetT>::find_live_range(Interval<OffsetT> i) const
+template <typename OffsetT, PiecewiseFilterStorageModel<OffsetT> ModelT>
+Interval<OffsetT> BasicPiecewiseFilter<OffsetT, ModelT>::find_live_range(Interval<OffsetT> i) const
 {
   OffsetT start_i = i.lower_bound;
   OffsetT end_i = i.upper_bound;
 
   BATT_CHECK_LE(start_i, end_i);
 
-  auto iter = std::lower_bound(this->live_.begin(),
-                               this->live_.end(),
+  auto iter = std::lower_bound(this->live_().begin(),
+                               this->live_().end(),
                                start_i,
                                typename Interval<OffsetT>::LinearOrder{});
 
   // Check if current interval contains or starts at `start_i`.
   //
-  if (iter != this->live_.end()) {
+  if (iter != this->live_().end()) {
     if (iter->contains(start_i)) {
       OffsetT live_end = std::min(end_i, iter->upper_bound);
       return Interval<OffsetT>{start_i, live_end};
@@ -283,25 +283,26 @@ Interval<OffsetT> PiecewiseFilter<OffsetT>::find_live_range(Interval<OffsetT> i)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-template <typename OffsetT>
-void PiecewiseFilter<OffsetT>::merge(const PiecewiseFilter& other)
+template <typename OffsetT, PiecewiseFilterStorageModel<OffsetT> ModelT>
+void BasicPiecewiseFilter<OffsetT, ModelT>::merge(const Self& other)
+  requires PiecewiseFilterMutableStorageModel<ModelT, OffsetT>
 {
   // If other has no live intervals, we are done.
   //
-  if (other.live_.empty()) {
+  if (other.live_().empty()) {
     return;
   }
 
   // If this has no live intervals, copy from other.
   //
-  if (this->live_.empty()) {
-    this->live_.insert(this->live_.end(), other.live_.begin(), other.live_.end());
+  if (this->live_().empty()) {
+    this->live_().insert(this->live_().end(), other.live_().begin(), other.live_().end());
     BATT_CHECK(this->check_invariants());
     return;
   }
 
   SmallVec<Interval<OffsetT>, 64> merged_intervals;
-  merged_intervals.reserve(this->live_.size() + other.live_.size());
+  merged_intervals.reserve(this->live_().size() + other.live_().size());
 
   usize i = 0;
   usize j = 0;
@@ -329,42 +330,57 @@ void PiecewiseFilter<OffsetT>::merge(const PiecewiseFilter& other)
 
   // Merge the live intervals arrays.
   //
-  while (i < this->live_.size() && j < other.live_.size()) {
-    if (this->live_[i].lower_bound <= other.live_[j].lower_bound) {
-      add_interval(this->live_[i]);
+  while (i < this->live_().size() && j < other.live_().size()) {
+    if (this->live_()[i].lower_bound <= other.live_()[j].lower_bound) {
+      add_interval(this->live_()[i]);
       ++i;
     } else {
-      add_interval(other.live_[j]);
+      add_interval(other.live_()[j]);
       ++j;
     }
   }
 
-  // Add remaining intervals from this->live_.
+  // Add remaining intervals..
   //
-  while (i < this->live_.size()) {
-    add_interval(this->live_[i]);
+  while (i < this->live_().size()) {
+    add_interval(this->live_()[i]);
     ++i;
   }
 
   // Add remaining intervals from other.live_.
   //
-  while (j < other.live_.size()) {
-    add_interval(other.live_[j]);
+  while (j < other.live_().size()) {
+    add_interval(other.live_()[j]);
     ++j;
   }
 
-  this->live_ = std::move(merged_intervals);
+  this->live_() = std::move(merged_intervals);
 
   BATT_CHECK(this->check_invariants());
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-template <typename OffsetT>
-SmallFn<void(std::ostream&)> PiecewiseFilter<OffsetT>::dump() const
+template <typename OffsetT, PiecewiseFilterStorageModel<OffsetT> ModelT>
+SmallFn<void(std::ostream&)> BasicPiecewiseFilter<OffsetT, ModelT>::dump() const
 {
   return [this](std::ostream& out) {
-    out << batt::dump_range(this->live_);
+    out << batt::dump_range(this->live_());
   };
 }
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <typename OffsetT, PiecewiseFilterStorageModel<OffsetT> ModelT>
+auto BasicPiecewiseFilter<OffsetT, ModelT>::live_subranges_of(Interval<OffsetT> query_range) const
+    -> LiveSubranges
+{
+  const auto [first, last] = std::equal_range(this->live_().begin(),
+                                              this->live_().end(),
+                                              query_range,
+                                              typename Interval<OffsetT>::LinearOrder{});
+
+  return LiveSubranges{query_range, std::ranges::subrange(first, last)};
+}
+
 }  // namespace turtle_kv
