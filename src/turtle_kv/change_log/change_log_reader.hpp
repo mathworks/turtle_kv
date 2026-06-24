@@ -15,8 +15,6 @@
 #include <turtle_kv/change_log/edit_offset.hpp>
 #include <turtle_kv/change_log/recovered_change_log_state.hpp>
 
-#include <turtle_kv/util/stack_merger.hpp>
-
 #include <batteries/case_of.hpp>
 
 #include <functional>

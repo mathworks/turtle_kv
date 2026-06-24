@@ -19,6 +19,8 @@
 #include <turtle_kv/import/small_vec.hpp>
 #include <turtle_kv/import/status.hpp>
 
+#include <batteries/checked_cast.hpp>
+
 #include <boost/range/algorithm/equal_range.hpp>
 
 #include <limits>

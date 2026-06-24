@@ -12,6 +12,7 @@ class turtle_kvTestConan(ConanFile):
 
     def requirements(self):
         self.requires(self.tested_reference_str)
+        self.requires("batteries/[>=0.71.1 <1]", force=True)
 
     def build(self):
         cmake = CMake(self)

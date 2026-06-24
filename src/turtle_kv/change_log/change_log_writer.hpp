@@ -11,6 +11,7 @@
 
 #include <turtle_kv/change_log/api_types.hpp>
 #include <turtle_kv/change_log/change_log_block.hpp>
+#include <turtle_kv/change_log/change_log_blocks_visitor.hpp>
 #include <turtle_kv/change_log/change_log_file.hpp>
 #include <turtle_kv/change_log/edit_offset.hpp>
 
@@ -110,6 +111,7 @@ class ChangeLogWriter
       return (double)this->received_user_byte_count.load() /
              ((double)this->received_block_byte_count.load() + 1e-6);
     }};
+    LatencyMetric advance_sync_upper_bound_latency;
   };
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -347,6 +349,23 @@ class ChangeLogWriter
     return false;
   }
 
+  Status sync(EditOffset upper_bound, bool urgent = false) noexcept;
+
+  Status sync_latest(bool urgent = false) noexcept
+  {
+    return this->sync(this->next_edit_offset(), urgent);
+  }
+
+  EditOffset durable_upper_bound() const noexcept
+  {
+    return EditOffset{this->sync_upper_bound_.get_value()};
+  }
+
+  /** \brief Returns the number of bytes between the sync upper bound and the next edit offset.
+   * Updates the unflushed_byte_count metric.
+   */
+  i64 get_unflushed_byte_count() const noexcept;
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -370,6 +389,10 @@ class ChangeLogWriter
   // activate_blocks() ->  ActiveBlocksState -> trim()
 
   struct ActiveBlocksState;
+
+  // activate_blocks() -> AdvanceSyncState -> advance_sync_upper_bound()
+  //
+  struct AdvanceSyncState;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -491,12 +514,31 @@ class ChangeLogWriter
    *
    * ChangeLogBlock (BlockBuffer) objects removed from `input.blocks` are released by decrementing
    * their ref count via `remove_ref`.
+   *
+   * Blocks with slots are appended to `newly_activated` for post-activation advancing of the
+   * durable upper bound.
    */
-  Status activate_blocks(WrittenBlocksState& input, ActiveBlocksState& output) noexcept;
+  Status activate_blocks(
+      WrittenBlocksState& input,
+      ActiveBlocksState& output,
+      batt::SmallVecBase<boost::intrusive_ptr<ChangeLogBlock>>& newly_activated) noexcept;
 
   /** \brief Refreshes the meta-block in the change log file.
    */
   Status refresh_meta_block(ActiveBlocksState& active_blocks) noexcept;
+
+  /** \brief Inserts newly activated blocks into the pending map and advances sync_upper_bound_ by
+   * walking slots from the current upper bound. Called after activate_blocks, outside the
+   * state mutex.
+   */
+  void advance_sync_upper_bound(
+      batt::SmallVecBase<boost::intrusive_ptr<ChangeLogBlock>>& newly_activated,
+      AdvanceSyncState& sync_state) noexcept;
+
+  /** \brief Returns true when the writer task should stay awake: there are pending urgent syncs and
+   * unflushed bytes.
+   */
+  bool has_pending_urgent_sync_work() const noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -536,6 +578,14 @@ class ChangeLogWriter
   /** \brief The background writer task.
    */
   Optional<batt::Task> task_;
+
+  /** \brief The confirmed durable EditOffset upper bound.
+   */
+  batt::Watch<i64> sync_upper_bound_;
+
+  /** \brief The number of pending sync callers that have an urgent priority.
+   */
+  std::atomic<usize> urgent_sync_counter_{0};
 };
 
 // #=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++

@@ -52,13 +52,17 @@ class TurtleKvRecipe(ConanFile):
 
     default_options = {
         "with_keyvcr": False,
-        "use_bloom_filter": False,
-        "use_quotient_filter": True,
+        "use_bloom_filter": True,
+        "use_quotient_filter": False,
         "enable_leaf_filters": True,
         "enable_metrics": True,
         "profile_updates": True,
         "profile_queries": True,
     }
+
+    package_id_embed_mode = "full_mode"
+    package_id_non_embed_mode = "full_mode"
+    package_id_unknown_mode = "full_mode"
 
     #+++++++++++-+-+--+----- --- -- -  -  -   -
     # Optional metadata
@@ -86,10 +90,10 @@ class TurtleKvRecipe(ConanFile):
 
         self.requires("abseil/[>=20260107.1]", **VISIBLE, **OVERRIDE)
         self.requires("artc/[>=0.0.1 <1]")
-        self.requires("batteries/[>=0.70.2 <1]", **VISIBLE, **OVERRIDE)
+        self.requires("batteries/[>=0.71.1 <1]", **VISIBLE, **OVERRIDE)
         self.requires("boost/[>=1.88.0 <2]", **VISIBLE, **OVERRIDE)
         self.requires("glog/[>=0.7.1 <1]", **VISIBLE)
-        self.requires("llfs/[>=0.44.0 <1]", **VISIBLE)
+        self.requires("llfs/[>=0.47.0 <1]", **VISIBLE)
         self.requires("pcg-cpp/[>=cci.20220409]", **VISIBLE)
         self.requires("yaml-cpp/[>=0.9.0 <1]")
         self.requires("zlib/1.3.1", **OVERRIDE)
@@ -140,6 +144,19 @@ class TurtleKvRecipe(ConanFile):
 
     def package_info(self):
         self.cor.package_info_lib_default(self)
+
+        def _set_flags(name, value):
+            if value:
+                self.cpp_info.cxxflags += [f'-DTURTLE_KV_{name}=1']
+            else:
+                self.cpp_info.cxxflags += [f'-DTURTLE_KV_{name}=0']
+
+        _set_flags('USE_BLOOM_FILTER', self.options.use_bloom_filter)
+        _set_flags('USE_QUOTIENT_FILTER', self.options.use_quotient_filter)
+        _set_flags('ENABLE_LEAF_FILTERS', self.options.enable_leaf_filters)
+        _set_flags('ENABLE_METRICS', self.options.enable_metrics)
+        _set_flags('PROFILE_UPDATES', self.options.profile_updates)
+        _set_flags('PROFILE_QUERIES', self.options.profile_queries)
 
     def package_id(self):
         self.cor.package_id_lib_default(self)

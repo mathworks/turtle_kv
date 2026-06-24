@@ -61,6 +61,7 @@ class KVStore : public Table
 
   using Config = KVStoreConfig;
   using RuntimeOptions = KVStoreRuntimeOptions;
+  using WriteOptions = KVStoreWriteOptions;
 
   struct ThreadContext {
     llfs::PageCache& page_cache;
@@ -204,6 +205,10 @@ class KVStore : public Table
 
   Status put(const KeyView& key, const ValueView& value) noexcept override;
 
+  StatusOr<EditOffset> put(const KeyView& key,
+                           const ValueView& value,
+                           Optional<WriteOptions> write_options) noexcept;
+
   StatusOr<ValueView> get(const KeyView& key) noexcept override;
 
   StatusOr<usize> scan(const KeyView& min_key,
@@ -212,6 +217,8 @@ class KVStore : public Table
   StatusOr<usize> scan_keys(const KeyView& min_key, const Slice<KeyView>& keys_out) noexcept;
 
   Status remove(const KeyView& key) noexcept override;
+
+  StatusOr<EditOffset> remove(const KeyView& key, Optional<WriteOptions> write_options) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -259,6 +266,14 @@ class KVStore : public Table
    * the KVStore after calling this function.
    */
   void release_thread_context() noexcept;
+
+  /** \brief Allows for the explicit syncing of data up till a specified upper bound `EditOffset`.
+   * Callers of this function are guaranteed that the data up till the upper bound is hardened to
+   * disk after this function returns successfully. If no upper bound `EditOffset` is provided to
+   * this function, the upper bound of the last inserted edit is used.
+   */
+  Status sync(Optional<EditOffset> upper_bound = None,
+              Optional<WriteOptions> write_options = None) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
