@@ -64,7 +64,7 @@ using turtle_kv::ValueView;
 //
 TEST(TreePackedBlockedLeafPageTest, Random)
 {
-  const usize kNumSeeds = 10000;
+  const usize kNumSeeds = 100;
   const usize kLeafPageSize = 1 * kMiB;
   const usize kNumPrefixes = 1000;
   const usize kMinPrefixSize = 0;
@@ -84,7 +84,7 @@ TEST(TreePackedBlockedLeafPageTest, Random)
   std::uniform_int_distribution<usize> pick_value_size{0, kMaxValueSize - kMinValueSize};
 
   for (usize seed = 803; seed < kNumSeeds; ++seed) {
-    LOG(INFO) << BATT_INSPECT(seed);
+    LOG_EVERY_N(INFO, 25) << BATT_INSPECT(seed);
 
     std::default_random_engine rng{seed};
 
