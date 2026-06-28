@@ -16,6 +16,8 @@
 
 #include <turtle_kv/core/algo/split_parts.hpp>
 
+#include <turtle_kv/util/piecewise_filter.ipp>
+
 #include <batteries/case_of.hpp>
 
 namespace turtle_kv {

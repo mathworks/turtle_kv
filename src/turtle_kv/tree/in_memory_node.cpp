@@ -15,6 +15,8 @@
 #include <turtle_kv/core/key_view_range.hpp>
 #include <turtle_kv/core/value_view.hpp>
 
+#include <turtle_kv/util/piecewise_filter.ipp>
+
 #include <batteries/case_of.hpp>
 #include <batteries/require.hpp>
 
