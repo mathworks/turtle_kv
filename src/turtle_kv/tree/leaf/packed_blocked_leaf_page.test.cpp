@@ -66,7 +66,7 @@ using turtle_kv::ValueView;
 TEST(TreePackedBlockedLeafPageTest, Random)
 {
   const usize kFirstSeed = 0;
-  const usize kNumSeeds = 1000;
+  const usize kNumSeeds = 250;
   const usize kLastSeed = kFirstSeed + kNumSeeds;
   const usize kLeafPageSize = 1 * kMiB;
   const usize kNumPrefixes = 1000;

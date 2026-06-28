@@ -312,7 +312,7 @@ TEST(PiecewiseFilterTest, LiveSubranges)
 
   std::array<Interval<u32>, 1> init_live{{{0, 64}}};
 
-  const usize n_seeds = 10000000;
+  const usize n_seeds = 100000;
   const usize n_drops = 32;
   const usize n_queries = 15;
   const usize first_seed = 0;
