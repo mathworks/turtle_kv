@@ -15,9 +15,11 @@
 
 #include <turtle_kv/util/piecewise_filter.ipp>
 #include <turtle_kv/util/piecewise_filter.live_subranges.hpp>
+#include <turtle_kv/util/piecewise_filter.test.hpp>
 
 #include <turtle_kv/core/testing/generate.hpp>
 
+#include <batteries/async/debug_info.hpp>
 #include <batteries/bit_ops/first_bit.hpp>
 #include <batteries/bit_ops/mask.hpp>
 #include <batteries/bit_ops/next_bit.hpp>
@@ -40,6 +42,7 @@ using turtle_kv::PiecewiseFilter;
 using turtle_kv::Slice;
 using turtle_kv::Status;
 using turtle_kv::StatusOr;
+using turtle_kv::testing::drop_n_disjoint_intervals_from;
 using turtle_kv::testing::RandomStringGenerator;
 
 using turtle_kv::drop_item_range;
@@ -310,35 +313,35 @@ TEST(PiecewiseFilterTest, LiveSubranges)
   std::array<Interval<u32>, 1> init_live{{{0, 64}}};
 
   const usize n_seeds = 10000000;
-  const usize n_drops = 10;
+  const usize n_drops = 32;
   const usize n_queries = 15;
   const usize first_seed = 0;
+
+  PiecewiseFilter<u32> filter;
+
+  const auto query_as_bits = [&](Interval<u32> query) {
+    u64 bits = 0;
+    filter.live_subranges_of(query) | batt::seq::for_each([&bits](const Interval<u32>& live) {
+      bits |= mask_from_interval(live);
+    });
+    return bits;
+  };
 
   for (usize seed_i = first_seed; seed_i < first_seed + n_seeds; ++seed_i) {
     std::default_random_engine rng{seed_i};
 
-    PiecewiseFilter<u32> filter =
-        BATT_OK_RESULT_OR_PANIC(PiecewiseFilter<u32>::from_live(batt::as_slice(init_live)));
-
-    const auto query_as_bits = [&](Interval<u32> query) {
-      u64 bits = 0;
-      filter.live_subranges_of(query) | batt::seq::for_each([&bits](const Interval<u32>& live) {
-        bits |= mask_from_interval(live);
-      });
-      return bits;
-    };
-
-    u64 filter_state = ~u64{0};
-
     for (usize i = 0; i < n_drops; ++i) {
-      const Interval<u32> drop_interval = pick_interval(rng);
-      const u64 drop_mask = mask_from_interval(drop_interval);
-      filter_state &= ~drop_mask;
-      filter.drop_index_range(drop_interval);
+      BATT_DEBUG_INFO(BATT_INSPECT(i) << BATT_INSPECT(seed_i));
 
-      if constexpr (false) {
-        std::cerr << BATT_INSPECT(std::bitset<64>{filter_state}) << BATT_INSPECT(filter.dump())
-                  << std::endl;
+      filter = BATT_OK_RESULT_OR_PANIC(PiecewiseFilter<u32>::from_live(batt::as_slice(init_live)));
+      u64 filter_state = ~u64{0};
+
+      std::vector<Interval<u32>> dropped_ranges =
+          drop_n_disjoint_intervals_from(&filter, i, init_live[0], rng).second;
+
+      for (const Interval<u32>& drop_interval : dropped_ranges) {
+        const u64 drop_mask = mask_from_interval(drop_interval);
+        filter_state &= ~drop_mask;
       }
 
       for (usize j = 0; j < n_queries; ++j) {

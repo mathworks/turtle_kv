@@ -17,7 +17,6 @@
 #include <concepts>
 #include <iterator>
 #include <ostream>
-#include <ranges>
 #include <utility>
 
 namespace turtle_kv {

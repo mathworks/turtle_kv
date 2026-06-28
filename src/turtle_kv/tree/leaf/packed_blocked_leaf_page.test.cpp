@@ -20,6 +20,7 @@
 #include <turtle_kv/tree/random_str.hpp>
 
 #include <turtle_kv/util/piecewise_filter.ipp>
+#include <turtle_kv/util/piecewise_filter.test.hpp>
 
 #include <turtle_kv/import/constants.hpp>
 
@@ -64,7 +65,9 @@ using turtle_kv::ValueView;
 //
 TEST(TreePackedBlockedLeafPageTest, Random)
 {
-  const usize kNumSeeds = 100;
+  const usize kFirstSeed = 0;
+  const usize kNumSeeds = 1000;
+  const usize kLastSeed = kFirstSeed + kNumSeeds;
   const usize kLeafPageSize = 1 * kMiB;
   const usize kNumPrefixes = 1000;
   const usize kMinPrefixSize = 0;
@@ -83,7 +86,7 @@ TEST(TreePackedBlockedLeafPageTest, Random)
   std::geometric_distribution<usize> pick_key_size{0.7};
   std::uniform_int_distribution<usize> pick_value_size{0, kMaxValueSize - kMinValueSize};
 
-  for (usize seed = 803; seed < kNumSeeds; ++seed) {
+  for (usize seed = kFirstSeed; seed < kLastSeed; ++seed) {
     LOG_EVERY_N(INFO, 25) << BATT_INSPECT(seed);
 
     std::default_random_engine rng{seed};
@@ -264,56 +267,21 @@ TEST(TreePackedBlockedLeafPageTest, Random)
     // Test ShardedLiveRanges.
     //
     {
-      for (usize j = 0; j < 1000; ++j) {
+      for (usize j = 0; j < 10000; ++j) {
         // Drop up to 64 sub-ranges of the leaf.
         //
         for (usize drop_count = 0; drop_count < 64; ++drop_count) {
-          std::vector<Interval<u32>> dropped_ranges;
           PiecewiseFilter<u32> leaf_filter;
 
-          usize drops_remaining = drop_count;
+          std::vector<Interval<u32>> dropped_ranges;
+          u32 items_dropped = 0;
           const u32 item_count = packed_leaf.item_count();
 
-          u32 next_droppable = 0;
-          u32 items_dropped = 0;
-
-          for (usize drop_i = 0; drop_i < drop_count; ++drop_i) {
-            BATT_CHECK_GE(next_droppable, 0);
-            BATT_CHECK_LT(next_droppable, item_count);
-
-            std::uniform_int_distribution<usize> pick_lower_bound{
-                next_droppable,
-                item_count - (drops_remaining * 2 - 1),
-            };
-            const u32 lower_bound_i = pick_lower_bound(rng);
-
-            std::uniform_int_distribution<usize> pick_upper_bound{
-                lower_bound_i + 1,
-                item_count - (drops_remaining * 2 - 2),
-            };
-            const u32 upper_bound_i = pick_upper_bound(rng);
-
-            BATT_CHECK_LT(lower_bound_i, upper_bound_i);
-            BATT_CHECK_GE(lower_bound_i, next_droppable);
-
-            items_dropped += upper_bound_i - lower_bound_i;
-
-            const usize live_count_before = leaf_filter.live().size();
-            //----- --- -- -  -  -   -
-            dropped_ranges.push_back(Interval<u32>{lower_bound_i, upper_bound_i});
-            leaf_filter.drop_index_range(Interval<u32>{lower_bound_i, upper_bound_i});
-            //----- --- -- -  -  -   -
-            const usize live_count_after = leaf_filter.live().size();
-
-            if (lower_bound_i == 0) {
-              ASSERT_EQ(live_count_after, live_count_before);
-            } else {
-              ASSERT_EQ(live_count_after, live_count_before + 1);
-            }
-
-            --drops_remaining;
-            next_droppable = upper_bound_i + 1;
-          }
+          std::tie(items_dropped, dropped_ranges) =
+              turtle_kv::testing::drop_n_disjoint_intervals_from(&leaf_filter,
+                                                                 drop_count,
+                                                                 Interval<u32>{0, item_count},
+                                                                 rng);
 
           // Verify the number of expected live items.
           //
@@ -332,8 +300,6 @@ TEST(TreePackedBlockedLeafPageTest, Random)
           packed_leaf.sharded_live_ranges(leaf_filter, Interval<u32>{0, item_count}) |
               batt::seq::for_each([&](const std::pair<u32, Interval<u32>>& live_pair) {
                 const auto [block_index, live_range] = live_pair;
-
-                // std::cerr << BATT_INSPECT(block_index) << BATT_INSPECT(live_range) << std::endl;
 
                 BATT_CHECK_GE(block_index, next_possible_block);
                 BATT_CHECK_LT(block_index, packed_leaf.block_count());
