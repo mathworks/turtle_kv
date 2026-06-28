@@ -21,8 +21,10 @@ namespace {
 
 using namespace batt::int_types;
 
+using turtle_kv::ART;
 using turtle_kv::ARTBase;
 using turtle_kv::ByteInt;
+using turtle_kv::DefaultCopyInserter;
 using turtle_kv::LatencyMetric;
 using turtle_kv::LatencyTimer;
 using turtle_kv::None;
@@ -31,7 +33,7 @@ using turtle_kv::Optional;
 using turtle_kv::Status;
 using turtle_kv::testing::RandomStringGenerator;
 
-using ART = turtle_kv::ART<void>;
+using ARTSet = ART<void>;
 
 struct BigUInt64KeyGenerator {
   template <typename Rng>
@@ -110,35 +112,35 @@ TEST(ArtTest, OverlappingKeyPrefix)
   const std::string key3 = "application";
   const std::string key4 = "applesauce";
 
-  turtle_kv::ART<i32> art;
+  ART<i32> art;
 
   EXPECT_FALSE(art.contains(key1));
   EXPECT_FALSE(art.contains(key2));
   EXPECT_FALSE(art.contains(key3));
   EXPECT_FALSE(art.contains(key4));
 
-  BATT_CHECK_OK(art.insert(key1, turtle_kv::detail::DefaultCopyInserter<i32>{1}));
+  BATT_CHECK_OK(art.insert(key1, DefaultCopyInserter<i32>{1}));
 
   EXPECT_TRUE(art.contains(key1));
   EXPECT_FALSE(art.contains(key2));
   EXPECT_FALSE(art.contains(key3));
   EXPECT_FALSE(art.contains(key4));
 
-  BATT_CHECK_OK(art.insert(key2, turtle_kv::detail::DefaultCopyInserter<i32>{2}));
+  BATT_CHECK_OK(art.insert(key2, DefaultCopyInserter<i32>{2}));
 
   EXPECT_TRUE(art.contains(key1));
   EXPECT_TRUE(art.contains(key2));
   EXPECT_FALSE(art.contains(key3));
   EXPECT_FALSE(art.contains(key4));
 
-  BATT_CHECK_OK(art.insert(key3, turtle_kv::detail::DefaultCopyInserter<i32>{3}));
+  BATT_CHECK_OK(art.insert(key3, DefaultCopyInserter<i32>{3}));
 
   EXPECT_TRUE(art.contains(key1));
   EXPECT_TRUE(art.contains(key2));
   EXPECT_TRUE(art.contains(key3));
   EXPECT_FALSE(art.contains(key4));
 
-  BATT_CHECK_OK(art.insert(key4, turtle_kv::detail::DefaultCopyInserter<i32>{4}));
+  BATT_CHECK_OK(art.insert(key4, DefaultCopyInserter<i32>{4}));
 
   EXPECT_TRUE(art.contains(key1));
   EXPECT_TRUE(art.contains(key2));
@@ -168,10 +170,10 @@ void run_put_contains_test()
     keys.emplace_back(generate_key(rng));
   }
 
-  ART index;
+  ARTSet index;
 
   {
-    ART::Scanner<ART::Synchronized::kFalse> scanner{index, ""};
+    ARTSet::Scanner<ARTSet::Synchronized::kFalse> scanner{index, ""};
     EXPECT_TRUE(scanner.is_done());
   }
 
@@ -253,7 +255,7 @@ void run_put_contains_test()
         {
           LatencyTimer timer{scanner_latency};
 
-          ART::Scanner<ART::Synchronized::kTrue> scanner{index, lower_bound_key};
+          ARTSet::Scanner<ARTSet::Synchronized::kTrue> scanner{index, lower_bound_key};
 
           while (!scanner.is_done() && actual_result.size() < scan_length) {
             actual_result.emplace_back(scanner.get_key());
@@ -272,7 +274,7 @@ void run_put_contains_test()
         {
           LatencyTimer timer{scanner_nosync_latency};
 
-          ART::Scanner<ART::Synchronized::kFalse> scanner{index, lower_bound_key};
+          ARTSet::Scanner<ARTSet::Synchronized::kFalse> scanner{index, lower_bound_key};
 
           while (!scanner.is_done() && actual_result.size() < scan_length) {
             actual_result.emplace_back(scanner.get_key());
@@ -290,8 +292,9 @@ void run_put_contains_test()
         {
           auto start_time = std::chrono::steady_clock::now();
 
-          ART::Scanner<ART::Synchronized::kTrue, /*kValuesOnly=*/true> scanner{index,
-                                                                               lower_bound_key};
+          ARTSet::Scanner<ARTSet::Synchronized::kTrue, /*kValuesOnly=*/true> scanner{
+              index,
+              lower_bound_key};
 
           while (!scanner.is_done() && items_found < scan_length) {
             ++items_found;
@@ -309,8 +312,9 @@ void run_put_contains_test()
         {
           auto start_time = std::chrono::steady_clock::now();
 
-          ART::Scanner<ART::Synchronized::kFalse, /*kValuesOnly=*/true> scanner{index,
-                                                                                lower_bound_key};
+          ARTSet::Scanner<ARTSet::Synchronized::kFalse, /*kValuesOnly=*/true> scanner{
+              index,
+              lower_bound_key};
 
           while (!scanner.is_done() && items_found < scan_length) {
             ++items_found;
@@ -330,7 +334,7 @@ void run_put_contains_test()
     usize count = 0;
     {
       LatencyTimer timer{item_latency, num_keys};
-      ART::Scanner<ART::Synchronized::kTrue> scanner{index, std::string_view{}};
+      ARTSet::Scanner<ARTSet::Synchronized::kTrue> scanner{index, std::string_view{}};
       while (!scanner.is_done()) {
         ++count;
         scanner.advance();
@@ -344,7 +348,7 @@ void run_put_contains_test()
     usize count = 0;
     {
       LatencyTimer timer{item_nosync_latency, num_keys};
-      ART::Scanner<ART::Synchronized::kFalse> scanner{index, std::string_view{}};
+      ARTSet::Scanner<ARTSet::Synchronized::kFalse> scanner{index, std::string_view{}};
       while (!scanner.is_done()) {
         ++count;
         scanner.advance();
@@ -363,7 +367,7 @@ void run_put_contains_test()
             << BATT_INSPECT(nokeys_item_latency) << std::endl
             << BATT_INSPECT(nosync_nokeys_item_latency) << std::endl
             << BATT_INSPECT(sort_latency) << std::endl
-            << BATT_INSPECT(ART::default_metrics().bytes_per_insert()) << std::endl;
+            << BATT_INSPECT(ARTSet::default_metrics().bytes_per_insert()) << std::endl;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -400,7 +404,7 @@ TEST(ArtTest, WideKeySet)
     }
   }
 
-  ART index;
+  ARTSet index;
 
   for (const std::string& key : keys) {
     EXPECT_FALSE(index.contains(key));
@@ -432,7 +436,7 @@ TEST(ArtTest, SingleThreadTest)
 
     LatencyMetric insert_latency;
     for (usize trial = 0; trial < 3; ++trial) {
-      ART index;
+      ARTSet index;
       {
         LatencyTimer timer{insert_latency, num_keys};
         for (std::string_view s : keys) {
@@ -444,7 +448,7 @@ TEST(ArtTest, SingleThreadTest)
       }
     }
     std::cerr << BATT_INSPECT(insert_latency) << std::endl
-              << BATT_INSPECT(ART::default_metrics().bytes_per_insert()) << std::endl;
+              << BATT_INSPECT(ARTSet::default_metrics().bytes_per_insert()) << std::endl;
   }
 }
 
@@ -564,21 +568,21 @@ struct TestIntInserter {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-void insert_key(turtle_kv::ART<void>& art, const std::string& key)
+void insert_key(ART<void>& art, const std::string& key)
 {
   art.insert(key);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-void insert_key(turtle_kv::ART<std::string_view>& art, const std::string& key)
+void insert_key(ART<std::string_view>& art, const std::string& key)
 {
   BATT_CHECK_OK(art.insert(key, TestStringViewInserter{.src = key}));
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-void insert_key(turtle_kv::ART<usize>& art, const std::string& key)
+void insert_key(ART<usize>& art, const std::string& key)
 {
   BATT_CHECK_GE(key.size(), sizeof(usize));
   BATT_CHECK_OK(art.insert(key, TestIntInserter{.src = *((const usize*)(key.data()))}));
@@ -609,7 +613,7 @@ void run_benchmark_test()
   for (usize n_threads = 1; n_threads <= std::thread::hardware_concurrency(); ++n_threads) {
     std::atomic<int> round{-1};
     std::atomic<int> pending{0};
-    std::atomic<turtle_kv::ART<ValueT>*> p_index{nullptr};
+    std::atomic<ART<ValueT>*> p_index{nullptr};
     std::atomic<const std::string*> p_keys{nullptr};
     std::atomic<usize> n_keys{0};
     std::vector<std::thread> threads;
@@ -636,7 +640,7 @@ void run_benchmark_test()
           BATT_CHECK_EQ(r, round.load());
 
           VLOG(1) << "thread " << i << " starting round " << r;
-          turtle_kv::ART<ValueT>& index = *p_index.load();
+          ART<ValueT>& index = *p_index.load();
           const std::string* keys = p_keys.load();
           const usize n = n_keys.load();
 
@@ -706,7 +710,7 @@ void run_benchmark_test()
       // Run the benchmark repeatedly `n_rounds` times.
       //
       for (int r = 0; r < n_rounds; ++r) {
-        turtle_kv::ART<ValueT> index;
+        ART<ValueT> index;
 
         // Set `pending` and `p_index`; the threads will not start working until `round` is updated.
         //
@@ -811,8 +815,7 @@ void run_benchmark_test()
     }
   }
 
-  std::cerr << BATT_INSPECT(turtle_kv::ART<ValueT>::default_metrics().bytes_per_insert())
-            << std::endl;
+  std::cerr << BATT_INSPECT(ART<ValueT>::default_metrics().bytes_per_insert()) << std::endl;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -861,7 +864,7 @@ TEST(ArtTest, ValuePutGetScan)
     }
   }
 
-  turtle_kv::ART<std::string_view> art;
+  ART<std::string_view> art;
 
   const auto check_key_by_index = [&art, &keys](usize query_i, usize expected_i) {
     ASSERT_TRUE(art.contains(keys[query_i]));
