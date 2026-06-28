@@ -11,17 +11,17 @@ namespace {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-template <ARTBase::Synchronized kSynchronized>
-KeyView art_scanner_get_key(ART<void>::Scanner<kSynchronized>& scanner)
+template <artc::ARTBase::Synchronized kSynchronized>
+KeyView art_scanner_get_key(artc::ART<void>::Scanner<kSynchronized>& scanner)
 {
   return scanner.get_key();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-template <ARTBase::Synchronized kSynchronized>
-KeyView art_scanner_get_key(ART<MemTableValueEntry>::Scanner<kSynchronized,
-                                                             /*kValuesOnly=*/true>& scanner)
+template <artc::ARTBase::Synchronized kSynchronized>
+KeyView art_scanner_get_key(artc::ART<MemTableValueEntry>::Scanner<kSynchronized,
+                                                                   /*kValuesOnly=*/true>& scanner)
 {
   return scanner.get_value().key_view();
 }
@@ -138,12 +138,12 @@ Status KVStoreScanner::start()
 
         // Delta case : single ART index for keys and values
         //
-        auto& art_scanner =
-            *(new (p_mem) ART<MemTableValueEntry>::Scanner<ARTBase::Synchronized::kFalse,  //
-                                                           /*kValuesOnly=*/true>{
-                delta_mem_table.art_index(),
-                this->min_key_,
-            });
+        auto& art_scanner = *(new (
+            p_mem) artc::ART<MemTableValueEntry>::Scanner<artc::ARTBase::Synchronized::kFalse,  //
+                                                          /*kValuesOnly=*/true>{
+            delta_mem_table.art_index(),
+            this->min_key_,
+        });
         ++p_mem;
 
         if (!art_scanner.is_done()) {
@@ -525,10 +525,10 @@ Status KVStoreScanner::set_next_item()
 //
 /*explicit*/ KVStoreScanner::ScanLevel::ScanLevel(
     ActiveMemTableValueTag,
-    ART<MemTableValueEntry>::Scanner<ARTBase::Synchronized::kTrue, /*kValuesOnly=*/true>&
-        art_scanner) noexcept
+    artc::ART<MemTableValueEntry>::Scanner<artc::ARTBase::Synchronized::kTrue,
+                                           /*kValuesOnly=*/true>& art_scanner) noexcept
     : key{art_scanner_get_key(art_scanner)}
-    , state_impl{MemTableValueScanState<ARTBase::Synchronized::kTrue>{
+    , state_impl{MemTableValueScanState<artc::ARTBase::Synchronized::kTrue>{
           .art_scanner_ = &art_scanner,
       }}
 {
@@ -538,10 +538,10 @@ Status KVStoreScanner::set_next_item()
 //
 /*explicit*/ KVStoreScanner::ScanLevel::ScanLevel(
     DeltaMemTableValueTag,
-    ART<MemTableValueEntry>::Scanner<ARTBase::Synchronized::kFalse, /*kValuesOnly=*/true>&
-        art_scanner) noexcept
+    artc::ART<MemTableValueEntry>::Scanner<artc::ARTBase::Synchronized::kFalse,
+                                           /*kValuesOnly=*/true>& art_scanner) noexcept
     : key{art_scanner_get_key(art_scanner)}
-    , state_impl{MemTableValueScanState<ARTBase::Synchronized::kFalse>{
+    , state_impl{MemTableValueScanState<artc::ARTBase::Synchronized::kFalse>{
           .art_scanner_ = &art_scanner,
       }}
 {
@@ -566,11 +566,11 @@ EditView KVStoreScanner::ScanLevel::item() const
         BATT_PANIC() << "illegal state";
         BATT_UNREACHABLE();
       },
-      [](const MemTableValueScanState<ARTBase::Synchronized::kTrue>& state) -> EditView {
+      [](const MemTableValueScanState<artc::ARTBase::Synchronized::kTrue>& state) -> EditView {
         const MemTableValueEntry& entry = state.art_scanner_->get_value();
         return EditView{entry.key_view(), entry.value_view()};
       },
-      [](const MemTableValueScanState<ARTBase::Synchronized::kFalse>& state) -> EditView {
+      [](const MemTableValueScanState<artc::ARTBase::Synchronized::kFalse>& state) -> EditView {
         const MemTableValueEntry& entry = state.art_scanner_->get_value();
         return EditView{entry.key_view(), entry.value_view()};
       },
@@ -598,10 +598,10 @@ ValueView KVStoreScanner::ScanLevel::value() const
         BATT_PANIC() << "illegal state";
         BATT_UNREACHABLE();
       },
-      [](const MemTableValueScanState<ARTBase::Synchronized::kTrue>& state) -> ValueView {
+      [](const MemTableValueScanState<artc::ARTBase::Synchronized::kTrue>& state) -> ValueView {
         return state.art_scanner_->get_value().value_view();
       },
-      [](const MemTableValueScanState<ARTBase::Synchronized::kFalse>& state) -> ValueView {
+      [](const MemTableValueScanState<artc::ARTBase::Synchronized::kFalse>& state) -> ValueView {
         return state.art_scanner_->get_value().value_view();
       },
       [](const Slice<const EditView>& state) -> ValueView {
@@ -660,10 +660,10 @@ bool KVStoreScanner::ScanLevel::advance()
         BATT_PANIC() << "illegal state";
         BATT_UNREACHABLE();
       },
-      [this](MemTableValueScanState<ARTBase::Synchronized::kTrue>& state) -> bool {
+      [this](MemTableValueScanState<artc::ARTBase::Synchronized::kTrue>& state) -> bool {
         return scan_level_mem_table_advance_impl(this, state);
       },
-      [this](MemTableValueScanState<ARTBase::Synchronized::kFalse>& state) -> bool {
+      [this](MemTableValueScanState<artc::ARTBase::Synchronized::kFalse>& state) -> bool {
         return scan_level_mem_table_advance_impl(this, state);
       },
       [this](Slice<const EditView>& state) -> bool {

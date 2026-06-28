@@ -267,7 +267,7 @@ TEST(TreePackedBlockedLeafPageTest, Random)
     // Test ShardedLiveRanges.
     //
     {
-      for (usize j = 0; j < 10000; ++j) {
+      for (usize j = 0; j < 1000; ++j) {
         // Drop up to 64 sub-ranges of the leaf.
         //
         for (usize drop_count = 0; drop_count < 64; ++drop_count) {

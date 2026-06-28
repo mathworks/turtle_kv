@@ -474,7 +474,7 @@ KVStore::~KVStore() noexcept
     LOG_IF(INFO, show_metrics) << BATT_INSPECT(merge_compactor.average_bytes_per_compaction());
   }
   {
-    auto& art = ARTBase::default_metrics();
+    auto& art = artc::ARTBase::default_metrics();
     LOG_IF(INFO, show_metrics) << BATT_INSPECT(art.byte_alloc_count)
                                << BATT_INSPECT(art.construct_count)
                                << BATT_INSPECT(art.destruct_count)
@@ -727,7 +727,6 @@ StatusOr<EditOffset> KVStore::put(const KeyView& key,
 
   return Status{batt::StatusCode::kUnavailable};
 }
-
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
@@ -1351,10 +1350,10 @@ using CheckpointEvent = llfs::PackedVariant<turtle_kv::PackedCheckpoint>;
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status KVStore::sync(Optional<EditOffset> upper_bound, Optional<WriteOptions> write_options) noexcept
+Status KVStore::sync(Optional<EditOffset> upper_bound,
+                     Optional<WriteOptions> write_options) noexcept
 {
-  EditOffset target =
-      upper_bound ? *upper_bound : this->change_log_writer_->next_edit_offset();
+  EditOffset target = upper_bound ? *upper_bound : this->change_log_writer_->next_edit_offset();
 
   bool urgent = write_options && write_options->urgent_sync ? true : false;
 

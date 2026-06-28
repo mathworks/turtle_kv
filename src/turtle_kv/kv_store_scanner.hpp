@@ -26,8 +26,9 @@
 #include <turtle_kv/tree/sharded_level_scanner.hpp>
 #include <turtle_kv/tree/subtree.hpp>
 
-#include <turtle_kv/util/art.hpp>
 #include <turtle_kv/util/stack_merger.hpp>
+
+#include <artc/art.hpp>
 
 #include <llfs/page_loader.hpp>
 
@@ -102,17 +103,17 @@ class KVStoreScanner
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
   //
-  template <ARTBase::Synchronized kSync>
+  template <artc::ARTBase::Synchronized kSync>
   struct MemTableScanState {
     MemTable* mem_table_;
-    ART<void>::Scanner<kSync>* art_scanner_;
+    artc::ART<void>::Scanner<kSync>* art_scanner_;
   };
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
   //
-  template <ARTBase::Synchronized kSync>
+  template <artc::ARTBase::Synchronized kSync>
   struct MemTableValueScanState {
-    ART<MemTableValueEntry>::Scanner<kSync, /*kValuesOnly=*/true>* art_scanner_;
+    artc::ART<MemTableValueEntry>::Scanner<kSync, /*kValuesOnly=*/true>* art_scanner_;
   };
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -163,8 +164,8 @@ class KVStoreScanner
     KeyView key;
 
     std::variant<NoneType,
-                 MemTableValueScanState<ARTBase::Synchronized::kTrue>,
-                 MemTableValueScanState<ARTBase::Synchronized::kFalse>,
+                 MemTableValueScanState<artc::ARTBase::Synchronized::kTrue>,
+                 MemTableValueScanState<artc::ARTBase::Synchronized::kFalse>,
                  Slice<const EditView>,
                  TreeLevelScanState,
                  TreeLevelScanShardedState,
@@ -181,13 +182,13 @@ class KVStoreScanner
 
     explicit ScanLevel(
         ActiveMemTableValueTag,
-        ART<MemTableValueEntry>::Scanner<ARTBase::Synchronized::kTrue, /*kValuesOnly=*/true>&
-            art_scanner) noexcept;
+        artc::ART<MemTableValueEntry>::Scanner<artc::ARTBase::Synchronized::kTrue,
+                                               /*kValuesOnly=*/true>& art_scanner) noexcept;
 
     explicit ScanLevel(
         DeltaMemTableValueTag,
-        ART<MemTableValueEntry>::Scanner<ARTBase::Synchronized::kFalse, /*kValuesOnly=*/true>&
-            art_scanner) noexcept;
+        artc::ART<MemTableValueEntry>::Scanner<artc::ARTBase::Synchronized::kFalse,
+                                               /*kValuesOnly=*/true>& art_scanner) noexcept;
 
     explicit ScanLevel(const Slice<const EditView>& edit_view_slice) noexcept;
 
@@ -327,12 +328,14 @@ class KVStoreScanner
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   using DeltaMemTableScannerStorage = std::aligned_storage_t<
-      /*size=*/std::max(sizeof(ART<void>::Scanner<ARTBase::Synchronized::kFalse>),
-                        sizeof(ART<MemTableValueEntry>::Scanner<ARTBase::Synchronized::kFalse,
-                                                                /*kValuesOnly=*/true>)),
-      /*align=*/std::max(alignof(ART<void>::Scanner<ARTBase::Synchronized::kFalse>),
-                         alignof(ART<MemTableValueEntry>::Scanner<ARTBase::Synchronized::kFalse,
-                                                                  /*kValuesOnly=*/true>))>;
+      /*size=*/std::max(
+          sizeof(artc::ART<void>::Scanner<artc::ARTBase::Synchronized::kFalse>),
+          sizeof(artc::ART<MemTableValueEntry>::Scanner<artc::ARTBase::Synchronized::kFalse,
+                                                        /*kValuesOnly=*/true>)),
+      /*align=*/std::max(
+          alignof(artc::ART<void>::Scanner<artc::ARTBase::Synchronized::kFalse>),
+          alignof(artc::ART<MemTableValueEntry>::Scanner<artc::ARTBase::Synchronized::kFalse,
+                                                         /*kValuesOnly=*/true>))>;
 
   batt::Toggle<KVStore::State>::Reader state_reader_;
   llfs::PageLoader& page_loader_;
@@ -344,8 +347,9 @@ class KVStoreScanner
   bool needs_resume_;
   Optional<EditView> next_item_;
   Status status_;
-  Optional<ART<void>::Scanner<ARTBase::Synchronized::kTrue>> mem_table_scanner_;
-  Optional<ART<MemTableValueEntry>::Scanner<ARTBase::Synchronized::kTrue, /*kValuesOnly=*/true>>
+  Optional<artc::ART<void>::Scanner<artc::ARTBase::Synchronized::kTrue>> mem_table_scanner_;
+  Optional<artc::ART<MemTableValueEntry>::Scanner<artc::ARTBase::Synchronized::kTrue,
+                                                  /*kValuesOnly=*/true>>
       mem_table_value_scanner_;
   std::array<DeltaMemTableScannerStorage, 32> static_delta_storage_;
   DeltaMemTableScannerStorage* delta_storage_;

@@ -29,7 +29,6 @@
 #include <turtle_kv/core/merge_compactor.hpp>
 #include <turtle_kv/core/value_view.hpp>
 
-#include <turtle_kv/util/art.hpp>
 #include <turtle_kv/util/atomic.hpp>
 #include <turtle_kv/util/env_param.hpp>
 
@@ -38,6 +37,8 @@
 #include <turtle_kv/import/slice.hpp>
 #include <turtle_kv/import/small_fn.hpp>
 #include <turtle_kv/import/status.hpp>
+
+#include <artc/art.hpp>
 
 #include <llfs/page_cache.hpp>
 #include <llfs/page_cache_overcommit.hpp>
@@ -216,7 +217,7 @@ class BasicMemTable : public MemTableBase
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  ART<MemTableValueEntry>& art_index()
+  artc::ART<MemTableValueEntry>& art_index()
   {
     return this->art_index_;
   }
@@ -338,11 +339,11 @@ class BasicMemTable : public MemTableBase
 
   // Diagnostic metrics for `this->art_index_`.
   //
-  ARTBase::Metrics art_metrics_;
+  artc::ARTBase::Metrics art_metrics_;
 
   // In-memory index used for scans and point queries.
   //
-  ART<MemTableValueEntry> art_index_;
+  artc::ART<MemTableValueEntry> art_index_;
 
   // Tracks the maximum observed key-value pair size (in bytes); this is used to estimate the
   // worst-case space wasted in a future batch.
@@ -559,8 +560,8 @@ class BasicMemTable<StorageT, AllocationTrackerT>::BatchCompactor
  public:
   using Self = BatchCompactor;
 
-  using ARTScanner =
-      ART<MemTableValueEntry>::Scanner<ARTBase::Synchronized::kFalse, /*kValuesOnly=*/true>;
+  using ARTScanner = artc::ART<MemTableValueEntry>::Scanner<artc::ARTBase::Synchronized::kFalse,
+                                                            /*kValuesOnly=*/true>;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
