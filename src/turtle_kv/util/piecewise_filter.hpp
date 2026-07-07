@@ -9,6 +9,7 @@
 #pragma once
 #define TURTLE_KV_UTIL_PIECEWISE_FILTER_HPP
 
+#include "packed_piecewise_filter_view.hpp"
 #include "piecewise_filter_storage_model.concept.hpp"
 
 #include <turtle_kv/import/int_types.hpp>
@@ -62,7 +63,19 @@ class BasicPiecewiseFilter : private ModelT
   /** \brief Constructs a default instance of a PiecewiseFilter object, initialized with no item
    * range and filtered items.
    */
-  BasicPiecewiseFilter() noexcept;
+  BasicPiecewiseFilter() noexcept
+    requires PiecewiseFilterMutableStorageModel<ModelT, OffsetT>;
+
+  /** \brief Constructs a BasicPiecewiseFilter directly from a storage model instance.
+   */
+  explicit BasicPiecewiseFilter(const ModelT& model) noexcept;
+
+  /** \brief Constructs a BasicPiecewiseFilter by copying live intervals from a filter with a
+   * different storage model.
+   */
+  template <PiecewiseFilterStorageModel<OffsetT> OtherModelT>
+  explicit BasicPiecewiseFilter(const BasicPiecewiseFilter<OffsetT, OtherModelT>& other)
+    requires PiecewiseFilterMutableStorageModel<ModelT, OffsetT>;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -105,7 +118,8 @@ class BasicPiecewiseFilter : private ModelT
 
   /** \brief Returns a view of the live item intervals.
    */
-  Slice<const Interval<OffsetT>> live() const;
+  Slice<const Interval<OffsetT>> live() const
+    requires PiecewiseFilterMutableStorageModel<ModelT, OffsetT>;
 
   /** \brief Merges two filters in place, taking the union of the live intervals.
    */
@@ -116,6 +130,22 @@ class BasicPiecewiseFilter : private ModelT
    * of this filter.
    */
   LiveSubranges live_subranges_of(Interval<OffsetT> i) const;
+
+  /** \brief Returns an iterator to the first live interval.
+   */
+  ConstIterator begin() const;
+
+  /** \brief Returns an iterator past the last live interval.
+   */
+  ConstIterator end() const;
+
+  /** \brief Returns the number of live intervals.
+   */
+  usize size() const;
+
+  /** \brief Returns true iff there are no live intervals.
+   */
+  bool empty() const;
 
   /** \brief Validate the state of the live intervals.
    */
@@ -138,6 +168,8 @@ class BasicPiecewiseFilter : private ModelT
 
 template <typename OffsetT>
 using PiecewiseFilter = BasicPiecewiseFilter<OffsetT, SmallVec<Interval<OffsetT>, 64>>;
+
+using PackedPiecewiseFilter = BasicPiecewiseFilter<u32, PackedPiecewiseFilterStorage>;
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //

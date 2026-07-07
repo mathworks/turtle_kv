@@ -13,6 +13,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <turtle_kv/util/packed_piecewise_filter_view.hpp>
 #include <turtle_kv/util/piecewise_filter.ipp>
 #include <turtle_kv/util/piecewise_filter.live_subranges.hpp>
 #include <turtle_kv/util/piecewise_filter.test.hpp>
@@ -42,8 +43,14 @@ using turtle_kv::PiecewiseFilter;
 using turtle_kv::Slice;
 using turtle_kv::Status;
 using turtle_kv::StatusOr;
+using turtle_kv::testing::build_filter_with_random_drops;
 using turtle_kv::testing::drop_n_disjoint_intervals_from;
+using turtle_kv::testing::get_packed_filter_from_data;
+using turtle_kv::testing::PackedFilterData;
+using turtle_kv::testing::pack_in_memory_filter;
+using turtle_kv::testing::RandomDropResult;
 using turtle_kv::testing::RandomStringGenerator;
+using turtle_kv::testing::verify_filter_queries;
 
 using turtle_kv::drop_item_range;
 
@@ -51,6 +58,10 @@ using llfs::KeyRangeOrder;
 
 using batt::mask_from_interval;
 using batt::StableStringStore;
+
+using turtle_kv::PackedPiecewiseFilter;
+using turtle_kv::PackedPiecewiseFilterStorage;
+
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
@@ -84,89 +95,68 @@ TEST(PiecewiseFilterTest, InvalidFilterTest)
 //
 TEST(PiecewiseFilterTest, QueryTest)
 {
-  const usize num_items = 10000;
+  const u32 num_items = 10000;
 
-  for (usize seed = 0; seed < 100; ++seed) {
+  for (u32 seed = 0; seed < 100; ++seed) {
     std::default_random_engine rng{seed};
 
-    PiecewiseFilter<usize> filter;
-    EXPECT_TRUE(filter.check_invariants());
-
-    // All items start live.
-    //
-    std::set<usize> live_items;
-    for (usize i = 0; i < num_items; ++i) {
-      live_items.insert(i);
-    }
-
-    // Drop random intervals.
-    //
-    std::uniform_int_distribution<usize> pick_num_dropped{100, num_items / 2};
-    usize num_intervals_dropped = pick_num_dropped(rng);
-    for (usize i = 0; i < num_intervals_dropped; ++i) {
-      std::uniform_int_distribution<usize> pick_interval_start{0, num_items - 1};
-      usize start_i = pick_interval_start(rng);
-
-      std::uniform_int_distribution<usize> pick_interval_end{start_i, num_items};
-      usize end_i = pick_interval_end(rng);
-
-      for (usize j = start_i; j < end_i; ++j) {
-        live_items.erase(j);
-      }
-
-      Interval<usize> new_dropped = filter.drop_index_range(Interval<usize>{start_i, end_i});
-      EXPECT_LE(new_dropped.lower_bound, start_i) << BATT_INSPECT(seed);
-      EXPECT_GE(new_dropped.upper_bound, end_i) << BATT_INSPECT(seed);
-    }
+    auto [filter, live_items] = build_filter_with_random_drops(num_items, rng);
 
     EXPECT_TRUE(filter.check_invariants());
 
-    // Test live_at_index
+    verify_filter_queries(filter, live_items, num_items, seed, rng);
+  }
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+TEST(PiecewiseFilterTest, PackedQueryTest)
+{
+  const u32 num_items = 10000;
+
+  for (u32 seed = 0; seed < 100; ++seed) {
+    std::default_random_engine rng{seed};
+
+    auto [filter, live_items] = build_filter_with_random_drops(num_items, rng);
+
+    EXPECT_TRUE(filter.check_invariants());
+
+    // Pack the filter and construct a PackedPiecewiseFilter.
     //
-    for (usize i = 0; i < num_items; ++i) {
-      bool expected_live = live_items.count(i) > 0;
-      bool actual_live = filter.live_at_index(i);
-      EXPECT_EQ(actual_live, expected_live) << BATT_INSPECT(seed) << BATT_INSPECT(i);
-    }
+    PackedFilterData packed_data = pack_in_memory_filter(filter);
+    PackedPiecewiseFilter packed_filter = get_packed_filter_from_data(packed_data);
 
-    // Test live_lower_bound
+    // Verify the packed filter has the same number of live intervals.
     //
-    for (usize i = 0; i < num_items; ++i) {
-      auto iter = live_items.lower_bound(i);
-      usize expected = (iter != live_items.end()) ? *iter : num_items;
-      usize actual = filter.live_lower_bound(i);
-      EXPECT_EQ(actual, expected) << BATT_INSPECT(seed) << BATT_INSPECT(i);
-    }
+    EXPECT_EQ(packed_filter.size(), filter.size()) << BATT_INSPECT(seed);
 
-    // Test find_live_range
+    // Verify the packed filter produces identical intervals.
     //
-    for (usize i = 0; i < 100; ++i) {
-      std::uniform_int_distribution<usize> pick_interval_start{0, num_items - 1};
-      usize start_i = pick_interval_start(rng);
-
-      std::uniform_int_distribution<usize> pick_interval_end{start_i, num_items};
-      usize end_i = pick_interval_end(rng);
-
-      auto iter = live_items.lower_bound(start_i);
-      Interval<usize> expected_range;
-
-      if (iter == live_items.end() || *iter >= end_i) {
-        expected_range = Interval<usize>{end_i, end_i};
-      } else {
-        usize first = *iter;
-        usize last = first + 1;
-        auto next = std::next(iter);
-
-        while (next != live_items.end() && *next < end_i && *next == last) {
-          ++last;
-          ++next;
-        }
-
-        expected_range = Interval<usize>{first, last};
+    {
+      auto mutable_iter = filter.begin();
+      auto packed_iter = packed_filter.begin();
+      while (mutable_iter != filter.end() && packed_iter != packed_filter.end()) {
+        EXPECT_EQ(*mutable_iter, *packed_iter) << BATT_INSPECT(seed);
+        ++mutable_iter;
+        ++packed_iter;
       }
+      EXPECT_EQ(mutable_iter, filter.end()) << BATT_INSPECT(seed);
+      EXPECT_EQ(packed_iter, packed_filter.end()) << BATT_INSPECT(seed);
+    }
 
-      Interval<usize> actual_range = filter.find_live_range(Interval<usize>{start_i, end_i});
-      EXPECT_EQ(actual_range, expected_range) << BATT_INSPECT(seed);
+    // Verify queries produce the same results as the in-memory filter.
+    //
+    verify_filter_queries(packed_filter, live_items, num_items, seed, rng);
+
+    // Converting packed back to in-memory should produce identical filter.
+    //
+    PiecewiseFilter<u32> converted_filter{packed_filter};
+    EXPECT_TRUE(converted_filter.check_invariants());
+    Slice<const Interval<u32>> original_live = filter.live();
+    Slice<const Interval<u32>> converted_live = converted_filter.live();
+    ASSERT_EQ(original_live.size(), converted_live.size()) << BATT_INSPECT(seed);
+    for (usize i = 0; i < original_live.size(); ++i) {
+      EXPECT_EQ(original_live[i], converted_live[i]) << BATT_INSPECT(seed) << BATT_INSPECT(i);
     }
   }
 }
@@ -344,6 +334,20 @@ TEST(PiecewiseFilterTest, LiveSubranges)
         filter_state &= ~drop_mask;
       }
 
+      // Also test via PackedPiecewiseFilter.
+      //
+      PackedFilterData packed_data = pack_in_memory_filter(filter);
+      PackedPiecewiseFilter packed_filter = get_packed_filter_from_data(packed_data);
+
+      const auto packed_query_as_bits = [&](Interval<u32> query) {
+        u64 bits = 0;
+        packed_filter.live_subranges_of(query) |
+            batt::seq::for_each([&bits](const Interval<u32>& live) {
+              bits |= mask_from_interval(live);
+            });
+        return bits;
+      };
+
       for (usize j = 0; j < n_queries; ++j) {
         const Interval<u32> query_interval = pick_interval(rng);
         const u64 query_mask = mask_from_interval(query_interval);
@@ -353,6 +357,13 @@ TEST(PiecewiseFilterTest, LiveSubranges)
         ASSERT_EQ(std::bitset<64>{expected_bits}, std::bitset<64>{actual_bits})
             << BATT_INSPECT(seed_i) << BATT_INSPECT(query_interval)
             << BATT_INSPECT(query_interval.size()) << BATT_INSPECT(std::bitset<64>{query_mask});
+
+        const u64 packed_actual_bits = packed_query_as_bits(query_interval);
+
+        ASSERT_EQ(std::bitset<64>{expected_bits}, std::bitset<64>{packed_actual_bits})
+            << "PackedPiecewiseFilter mismatch: " << BATT_INSPECT(seed_i)
+            << BATT_INSPECT(query_interval) << BATT_INSPECT(query_interval.size())
+            << BATT_INSPECT(std::bitset<64>{query_mask});
       }
     }
   }
