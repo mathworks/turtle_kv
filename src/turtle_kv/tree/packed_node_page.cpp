@@ -222,9 +222,7 @@ StatusOr<ValueView> PackedNodePage::find_key(KeyQuery& query) const
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-PackedNodePage::UpdateBuffer::SegmentFilterData PackedNodePage::get_segment_filter_values(
-    usize level_i,
-    usize segment_i) const
+PackedPiecewiseFilter PackedNodePage::get_packed_filter(usize level_i, usize segment_i) const
 {
   const usize i = [&]() -> usize {
     if (this->is_size_tiered()) {
@@ -256,52 +254,9 @@ PackedNodePage::UpdateBuffer::SegmentFilterData PackedNodePage::get_segment_filt
 
   bool start_live = (segment.filter_start.value() & PackedNodePage::kSegmentStartsLive) != 0;
 
-  return PackedNodePage::UpdateBuffer::SegmentFilterData{
+  return PackedPiecewiseFilter{PackedPiecewiseFilterStorage{
       as_const_slice(packed_filters.data() + filter_start_i, packed_filters.data() + filter_end_i),
-      start_live};
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-StatusOr<PiecewiseFilter<u32>> PackedNodePage::create_piecewise_filter(usize level_i,
-                                                                       usize segment_i) const
-{
-  PackedNodePage::UpdateBuffer::SegmentFilterData filter_data =
-      this->get_segment_filter_values(level_i, segment_i);
-
-  SmallVec<Interval<u32>, 64> live_ranges;
-  u32 i = 0;
-
-  // If the first item at index 0 is live, add the corresponding interval first since the
-  // serialized version of the filter doesn't store index 0.
-  //
-  if (filter_data.start_is_live) {
-    if (filter_data.values.empty()) {
-      // Entire segment is live.
-      //
-      live_ranges.emplace_back(Interval<u32>{PiecewiseFilter<u32>::kMinLowerBound,
-                                             PiecewiseFilter<u32>::kMaxUpperBound});
-    } else {
-      live_ranges.emplace_back(
-          Interval<u32>{PiecewiseFilter<u32>::kMinLowerBound, filter_data.values[i].value()});
-      i++;
-    }
-  }
-
-  for (; i + 1 < filter_data.values.size(); i += 2) {
-    live_ranges.emplace_back(
-        Interval<u32>{filter_data.values[i].value(), filter_data.values[i + 1].value()});
-  }
-
-  // If there's one unpaired value left, it's a lower_bound whose upper_bound (kMaxUpperBound)
-  // was omitted.
-  //
-  if (i < filter_data.values.size()) {
-    live_ranges.emplace_back(
-        Interval<u32>{filter_data.values[i].value(), PiecewiseFilter<u32>::kMaxUpperBound});
-  }
-
-  return PiecewiseFilter<u32>::from_live(as_slice(live_ranges));
+      start_live}};
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -339,7 +294,11 @@ StatusOr<llfs::PinnedPage> PackedNodePage::UpdateBuffer::Segment::load_leaf_page
 bool PackedNodePage::UpdateBuffer::Segment::is_index_filtered(const SegmentedLevel& level,
                                                               u32 index) const
 {
-  return !(this->live_lower_bound(level, index) == index);
+  const usize segment_i = std::distance(level.segments_slice.begin(), this);
+  
+  PackedPiecewiseFilter filter = level.packed_node_->get_packed_filter(level.level_i_, segment_i);
+  
+  return !filter.live_at_index(index);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -348,34 +307,10 @@ u32 PackedNodePage::UpdateBuffer::Segment::live_lower_bound(const SegmentedLevel
                                                             u32 item_i) const
 {
   const usize segment_i = std::distance(level.segments_slice.begin(), this);
-  PackedNodePage::UpdateBuffer::SegmentFilterData filter_data =
-      level.packed_node_->get_segment_filter_values(level.level_i_, segment_i);
-
-  const Slice<const little_u32> filter_values = filter_data.values;
-
-  if (filter_data.values.empty()) {
-    BATT_CHECK(filter_data.start_is_live);
-    return item_i;
-  }
-
-  auto iter = std::upper_bound(filter_values.begin(), filter_values.end(), item_i);
-
-  usize previous_cut_points = std::distance(filter_data.values.begin(), iter);
-
-  bool is_live = (previous_cut_points % 2 == 0) == filter_data.start_is_live;
-
-  // If we're already in an unfiltered region, just return the index. Otherwise, our upper bound
-  // is the next unfiltered index.
-  //
-  if (is_live) {
-    return item_i;
-  }
-
-  if (iter != filter_values.end()) {
-    return iter->value();
-  }
-
-  return PiecewiseFilter<u32>::kMaxUpperBound;
+ 
+  PackedPiecewiseFilter filter = level.packed_node_->get_packed_filter(level.level_i_, segment_i);
+ 
+  return filter.live_lower_bound(item_i);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -384,48 +319,11 @@ Interval<u32> PackedNodePage::UpdateBuffer::Segment::get_live_item_range(
     const SegmentedLevel& level,
     Interval<u32> i) const
 {
-  u32 start_i = i.lower_bound;
-  u32 end_i = i.upper_bound;
-
-  BATT_CHECK_LT(start_i, end_i);
-
   const usize segment_i = std::distance(level.segments_slice.begin(), this);
-  PackedNodePage::UpdateBuffer::SegmentFilterData filter_data =
-      level.packed_node_->get_segment_filter_values(level.level_i_, segment_i);
-
-  const Slice<const little_u32> filter_values = filter_data.values;
-
-  if (filter_data.values.empty()) {
-    BATT_CHECK(filter_data.start_is_live);
-    return i;
-  }
-
-  auto iter = std::upper_bound(filter_values.begin(), filter_values.end(), start_i);
-
-  usize previous_cut_points = std::distance(filter_data.values.begin(), iter);
-
-  bool is_live = (previous_cut_points % 2 == 0) == filter_data.start_is_live;
-
-  if (!is_live) {
-    if (iter == filter_values.end()) {
-      return Interval<u32>{end_i, end_i};
-    }
-
-    start_i = iter->value();
-    if (start_i >= end_i) {
-      return Interval<u32>{end_i, end_i};
-    }
-
-    ++iter;
-  }
-
-  if (iter != filter_values.end()) {
-    end_i = std::min(end_i, iter->value());
-  }
-
-  BATT_CHECK_LT(start_i, end_i) << BATT_INSPECT(i);
-
-  return Interval<u32>{start_i, end_i};
+  
+  PackedPiecewiseFilter filter = level.packed_node_->get_packed_filter(level.level_i_, segment_i);
+  
+  return filter.find_live_range(i);
 }
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
