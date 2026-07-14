@@ -13,6 +13,8 @@
 namespace turtle_kv {
 namespace merge_set {
 
+struct MergeSet;
+
 struct InStorageMergeSet {
   std::shared_ptr<const FakeLeaf> leaf_;
   std::string key_upper_bound_;
@@ -20,8 +22,9 @@ struct InStorageMergeSet {
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  Interval<std::string_view> seek_impl(u64 byte_size,
-                                       const std::string_view& key_upper_bound) const noexcept
+  //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+  //
+  Interval<KeyView> seek_impl(u64 byte_size, const KeyView& key_upper_bound) const noexcept
   {
     const usize block_count = this->leaf_->block_count();
     const usize block_size = this->leaf_->block_size();
@@ -44,6 +47,11 @@ struct InStorageMergeSet {
         (block_i + 1 < block_count) ? this->leaf_->block_keys_[block_i + 1] : key_upper_bound,
     };
   }
+
+  //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+  //
+  std::tuple<MergeSet, MergeSet> split_impl(const MergeSet& m,
+                                            const KeyView& split_key) const noexcept;
 };
 
 }  // namespace merge_set

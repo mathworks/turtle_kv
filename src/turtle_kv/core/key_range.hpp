@@ -43,6 +43,8 @@ inline CInterval<KeyView> get_key_range(const T& has_key_view)
   };
 }
 
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+//
 struct ExtendedKeyRangeOrder : llfs::KeyRangeOrder {
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -71,6 +73,26 @@ struct ExtendedKeyRangeOrder : llfs::KeyRangeOrder {
   bool operator()(const L& l, const R& r) const
   {
     return this->less_than(get_key_range(l), get_key_range(r));
+  }
+};
+
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+//
+struct KeyLowerBoundOrder : KeyOrder {
+  template <typename L, typename R>
+  bool operator()(const L& l, const R& r) const
+  {
+    return KeyOrder::operator()(get_key_range(l).lower_bound, get_key_range(r).lower_bound);
+  }
+};
+
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+//
+struct KeyUpperBoundOrder : KeyOrder {
+  template <typename L, typename R>
+  bool operator()(const L& l, const R& r) const
+  {
+    return KeyOrder::operator()(get_key_range(l).upper_bound, get_key_range(r).upper_bound);
   }
 };
 

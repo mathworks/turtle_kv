@@ -13,15 +13,19 @@
 namespace turtle_kv {
 namespace merge_set {
 
+struct MergeSet;
+
 struct InMemoryMergeSet {
   std::shared_ptr<std::vector<FakeKeyValue>> storage_;
-  Interval<std::string_view> key_range_;
+  Interval<KeyView> key_range_;
   Interval<usize> index_range_;
   //----- --- -- -  -  -   -
   std::string key_upper_bound_;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+  //
   Slice<const FakeKeyValue> live_slice() const noexcept
   {
     return {
@@ -30,8 +34,9 @@ struct InMemoryMergeSet {
     };
   }
 
-  Interval<std::string_view> seek_impl(u64 byte_size,
-                                       const std::string_view& key_upper_bound) const noexcept
+  //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+  //
+  Interval<KeyView> seek_impl(u64 byte_size, const KeyView& key_upper_bound) const noexcept
   {
     usize total = 0;
     usize index = this->index_range_.lower_bound;
@@ -54,6 +59,11 @@ struct InMemoryMergeSet {
         get_key((*this->storage_)[index + 1]),
     };
   }
+
+  //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+  //
+  std::tuple<MergeSet, MergeSet> split_impl(const MergeSet& m,
+                                            const KeyView& split_key) const noexcept;
 };
 
 }  // namespace merge_set

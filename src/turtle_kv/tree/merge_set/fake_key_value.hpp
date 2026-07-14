@@ -1,6 +1,8 @@
 #pragma once
 #define TURTLE_KV_TREE_MERGE_SET_FAKE_KEY_VALUE_HPP
 
+#include <turtle_kv/core/key_view.hpp>
+
 #include <turtle_kv/import/int_types.hpp>
 
 #include <string>
@@ -14,7 +16,7 @@ struct FakeKeyValue {
   std::string value_;
 };
 
-inline std::string_view get_key(const FakeKeyValue& view) noexcept
+inline KeyView get_key(const FakeKeyValue& view) noexcept
 {
   return view.key_;
 }
