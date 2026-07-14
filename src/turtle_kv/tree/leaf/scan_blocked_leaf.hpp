@@ -130,12 +130,11 @@ class BlockedLeafScanSeq
 
     BATT_ASSIGN_OK_RESULT(
         llfs::PinnedPage pinned_shard,
-        this->page_loader_.load_page(
-            *shard_page_id,
-            llfs::PageLoadOptions{llfs::ShardedPageView::page_layout_id(),
-                                  this->pin_page_to_job_,
-                                  llfs::OkIfNotFound{false},
-                                  lru_priority}));
+        this->page_loader_.load_page(*shard_page_id,
+                                     llfs::PageLoadOptions{llfs::ShardedPageView::page_layout_id(),
+                                                           this->pin_page_to_job_,
+                                                           llfs::OkIfNotFound{false},
+                                                           lru_priority}));
 
     const void* raw_data = pinned_shard.raw_data();
     this->slice_storage_.insert_pinned_page(std::move(pinned_shard));
@@ -221,11 +220,13 @@ class BlockedLeafScanSeq
 
       if (this->min_key_ && !this->min_key_applied_) {
         this->min_key_applied_ = true;
-        slice_begin = std::lower_bound(
-            slice_begin, slice_end, *this->min_key_,
-            [](const auto& l, const auto& r) {
-              return batt::compare(get_key(l), get_key(r)) == batt::Order::Less;
-            });
+        slice_begin =
+            std::lower_bound(slice_begin,
+                             slice_end,
+                             *this->min_key_,
+                             [](const auto& l, const auto& r) {
+                               return batt::compare(get_key(l), get_key(r)) == batt::Order::Less;
+                             });
       }
 
       if (slice_begin == slice_end) {
@@ -274,9 +275,62 @@ BoxedSeq<PackedKeyValueSlotSlice> scan_blocked_leaf(
     llfs::PinPageToJob pin_page_to_job,
     Status& status) noexcept
 {
-  return BlockedLeafScanSeq<FilterModelT>{page_id, block_size, filter, min_key,
-                                          page_loader, slice_storage, pin_page_to_job, status}
-      | seq::boxed();
+  return BlockedLeafScanSeq<FilterModelT>{page_id,
+                                          block_size,
+                                          filter,
+                                          min_key,
+                                          page_loader,
+                                          slice_storage,
+                                          pin_page_to_job,
+                                          status} |
+         seq::boxed();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <PiecewiseFilterStorageModel<u32> FilterModelT, typename BlockLoaderT>
+/*BoxedSeq<PackedKeyValueSlotSlice>*/
+auto scan_blocked_leaf(const PackedBlockedLeafPage* packed_leaf,
+                       BlockLoaderT* block_loader,
+                       const BasicPiecewiseFilter<u32, FilterModelT>& filter,
+                       const Interval<KeyView>& key_range) noexcept
+{
+  const Interval<u32> index_range =
+      packed_leaf->get_block_aligned_index_range_for_key_range(key_range);
+
+  return packed_leaf->sharded_live_ranges(filter, index_range)  //
+         | batt::seq::filter_map([block_loader](const std::pair<u32, Interval<u32>>& params)
+                                     -> Optional<StatusOr<PackedKeyValueSlotSlice>> {
+             // Stage 1: filter
+             //
+             const Interval<u32>& live_item_range = params.second;
+             if (live_item_range.empty()) {
+               return None;
+             }
+
+             // Stage 2: map
+             //
+             const u32 block_index = params.first;
+             StatusOr<PackedLeafBlock*> block = block_loader->load_block(block_index);
+             if (!block.ok()) {
+               return block.status();
+             }
+
+             // Convert index range -> slot slice
+             //
+             PackedKeyValueSlotSlice slice =
+                 packed_leaf->get_slice_within_block(block_index, block, live_item_range);
+
+             // Stage 3
+             // Trim the slice down to `key_range`.
+             //
+             if ("this is the first or last block in the sequence") {
+               // trim the slice
+             }
+
+             return slice;
+           })  //
+      ;
 }
 
 }  // namespace turtle_kv
