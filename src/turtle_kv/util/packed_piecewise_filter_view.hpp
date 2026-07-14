@@ -16,6 +16,7 @@
 #include <turtle_kv/import/slice.hpp>
 
 #include <batteries/assert.hpp>
+#include <batteries/checked_cast.hpp>
 
 #include <boost/iterator/iterator_facade.hpp>
 
@@ -50,7 +51,7 @@ namespace turtle_kv {
  * Live Intervals: {[10, 20), [30, 40), [50, +inf)}
  * Packed: start_is_live=0, {10, 20, 30, 40, 50}
  */
-class PackedPiecewiseFilterView
+class PackedPiecewiseFilterStorage
 {
  public:
   //----- --- -- -  -  -   -
@@ -73,35 +74,35 @@ class PackedPiecewiseFilterView
 
   // Forward-declaration; defined below.
   //
-  friend const Slice<const little_u32>& as_const_slice(const PackedPiecewiseFilterView& view);
+  friend const Slice<const little_u32>& as_const_slice(const PackedPiecewiseFilterStorage& view);
 
   //----- --- -- -  -  -   -
 
-  /** \brief Constructs an PackedPiecewiseFilterView representing the live interval [0, +inf).
+  /** \brief Constructs an PackedPiecewiseFilterStorage representing the live interval [0, +inf).
    */
-  PackedPiecewiseFilterView() = default;
+  PackedPiecewiseFilterStorage() = default;
 
-  /** \brief Destructs the PackedPiecewiseFilterView.
+  /** \brief Destructs the PackedPiecewiseFilterStorage.
    */
-  ~PackedPiecewiseFilterView() = default;
+  ~PackedPiecewiseFilterStorage() = default;
 
-  /** \brief PackedPiecewiseFilterView is copy constructible.
+  /** \brief PackedPiecewiseFilterStorage is copy constructible.
    */
-  PackedPiecewiseFilterView(const PackedPiecewiseFilterView&) = default;
+  PackedPiecewiseFilterStorage(const PackedPiecewiseFilterStorage&) = default;
 
-  /** \brief PackedPiecewiseFilterView is copy assignable.
+  /** \brief PackedPiecewiseFilterStorage is copy assignable.
    */
-  PackedPiecewiseFilterView& operator=(const PackedPiecewiseFilterView&) = default;
+  PackedPiecewiseFilterStorage& operator=(const PackedPiecewiseFilterStorage&) = default;
 
-  /** \brief Constructs PackedPiecewiseFilterView from the packed data in the arguments.
+  /** \brief Constructs PackedPiecewiseFilterStorage from the packed data in the arguments.
    *
    * See the class-level description for details on what `values` and `start_is_live` represent.
    */
-  explicit PackedPiecewiseFilterView(const Slice<const little_u32>& values,
+  explicit PackedPiecewiseFilterStorage(const Slice<const little_u32>& values,
                                      bool start_is_live) noexcept
       : values_{values}
       , implicit_first_{start_is_live ? 1 : 0}
-      , size_{(this->implicit_first_ + this->values_.size() + 1) & ~i32{1}}
+      , size_{(this->implicit_first_ + BATT_CHECKED_CAST(i32, this->values_.size()) + 1) / 2}
   {
   }
 
@@ -148,7 +149,7 @@ class PackedPiecewiseFilterView
 //
 /** \brief Returns a const reference to the stored values referenced by `view`.
  */
-inline const Slice<const little_u32>& as_const_slice(const PackedPiecewiseFilterView& view)
+inline const Slice<const little_u32>& as_const_slice(const PackedPiecewiseFilterStorage& view)
 {
   return view.values_;
 }
@@ -157,9 +158,9 @@ inline const Slice<const little_u32>& as_const_slice(const PackedPiecewiseFilter
 //
 /** \brief Read-only, random access iterator over the live intervals of a packed piecewise filter.
  */
-class PackedPiecewiseFilterView::const_iterator
+class PackedPiecewiseFilterStorage::const_iterator
     : public boost::iterator_facade<                  //
-          PackedPiecewiseFilterView::const_iterator,  // <- Derived
+          PackedPiecewiseFilterStorage::const_iterator,  // <- Derived
           Interval<u32>,                              // <- Value
           std::random_access_iterator_tag,            // <- CategoryOrTraversal
           Interval<u32>,                              // <- Reference
@@ -184,7 +185,7 @@ class PackedPiecewiseFilterView::const_iterator
    *
    * `view` must remain in-scope while this object exists.
    */
-  const_iterator(const PackedPiecewiseFilterView* view, isize pos) noexcept : view_{view}, pos_{pos}
+  const_iterator(const PackedPiecewiseFilterStorage* view, isize pos) noexcept : view_{view}, pos_{pos}
   {
   }
 
@@ -239,7 +240,7 @@ class PackedPiecewiseFilterView::const_iterator
  private:
   /** \brief Pointer to the filter view over which we are iterating.
    */
-  const PackedPiecewiseFilterView* view_;
+  const PackedPiecewiseFilterStorage* view_;
 
   /** \brief The (logical) position of this iterator within `view_`.
    */
@@ -248,35 +249,35 @@ class PackedPiecewiseFilterView::const_iterator
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-inline auto PackedPiecewiseFilterView::begin() const noexcept -> const_iterator
+inline auto PackedPiecewiseFilterStorage::begin() const noexcept -> const_iterator
 {
   return const_iterator{this, 0};
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-inline auto PackedPiecewiseFilterView::end() const noexcept -> const_iterator
+inline auto PackedPiecewiseFilterStorage::end() const noexcept -> const_iterator
 {
   return const_iterator{this, static_cast<isize>(this->size())};
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-inline usize PackedPiecewiseFilterView::size() const noexcept
+inline usize PackedPiecewiseFilterStorage::size() const noexcept
 {
   return this->size_;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-inline bool PackedPiecewiseFilterView::empty() const noexcept
+inline bool PackedPiecewiseFilterStorage::empty() const noexcept
 {
   return this->size_ == 0;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-inline Interval<u32> PackedPiecewiseFilterView::operator[](isize i) const noexcept
+inline Interval<u32> PackedPiecewiseFilterStorage::operator[](isize i) const noexcept
 {
   // Cached for brevity below.
   //
@@ -300,6 +301,6 @@ inline Interval<u32> PackedPiecewiseFilterView::operator[](isize i) const noexce
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 
-static_assert(PiecewiseFilterStorageModel<PackedPiecewiseFilterView, u32>);
+static_assert(PiecewiseFilterStorageModel<PackedPiecewiseFilterStorage, u32>);
 
 }  // namespace turtle_kv

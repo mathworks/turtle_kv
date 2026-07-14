@@ -22,7 +22,7 @@ template <typename OffsetT, PiecewiseFilterStorageModel<OffsetT> ModelT>
 class BasicPiecewiseFilter<OffsetT, ModelT>::LiveSubranges
 {
  public:
-  using Iterator = PiecewiseFilter<OffsetT>::ConstIterator;
+  using Iterator = typename BasicPiecewiseFilter<OffsetT, ModelT>::ConstIterator;
   using Item = Interval<OffsetT>;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -

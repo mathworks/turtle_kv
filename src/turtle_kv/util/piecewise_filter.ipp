@@ -36,8 +36,33 @@ BasicPiecewiseFilter<OffsetT, ModelT>::from_live(const Slice<const Interval<Offs
 //
 template <typename OffsetT, PiecewiseFilterStorageModel<OffsetT> ModelT>
 BasicPiecewiseFilter<OffsetT, ModelT>::BasicPiecewiseFilter() noexcept
+  requires PiecewiseFilterMutableStorageModel<ModelT, OffsetT>
     : ModelT{{Interval<OffsetT>{Self::kMinLowerBound, Self::kMaxUpperBound}}}
 {
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <typename OffsetT, PiecewiseFilterStorageModel<OffsetT> ModelT>
+BasicPiecewiseFilter<OffsetT, ModelT>::BasicPiecewiseFilter(const ModelT& model) noexcept
+    : ModelT{model}
+{
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <typename OffsetT, PiecewiseFilterStorageModel<OffsetT> ModelT>
+template <PiecewiseFilterStorageModel<OffsetT> OtherModelT>
+BasicPiecewiseFilter<OffsetT, ModelT>::BasicPiecewiseFilter(
+    const BasicPiecewiseFilter<OffsetT, OtherModelT>& other)
+  requires PiecewiseFilterMutableStorageModel<ModelT, OffsetT>
+    : ModelT{}
+{
+  this->live_().clear();
+
+  for (auto iter = other.begin(); iter != other.end(); ++iter) {
+    this->live_().insert(this->live_().end(), *iter);
+  }
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -204,8 +229,41 @@ Interval<OffsetT> BasicPiecewiseFilter<OffsetT, ModelT>::drop_index_range(Interv
 //
 template <typename OffsetT, PiecewiseFilterStorageModel<OffsetT> ModelT>
 Slice<const Interval<OffsetT>> BasicPiecewiseFilter<OffsetT, ModelT>::live() const
+  requires PiecewiseFilterMutableStorageModel<ModelT, OffsetT>
 {
   return as_const_slice(this->live_());
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <typename OffsetT, PiecewiseFilterStorageModel<OffsetT> ModelT>
+auto BasicPiecewiseFilter<OffsetT, ModelT>::begin() const -> ConstIterator
+{
+  return this->live_().begin();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <typename OffsetT, PiecewiseFilterStorageModel<OffsetT> ModelT>
+auto BasicPiecewiseFilter<OffsetT, ModelT>::end() const -> ConstIterator
+{
+  return this->live_().end();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <typename OffsetT, PiecewiseFilterStorageModel<OffsetT> ModelT>
+usize BasicPiecewiseFilter<OffsetT, ModelT>::size() const
+{
+  return this->live_().size();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <typename OffsetT, PiecewiseFilterStorageModel<OffsetT> ModelT>
+bool BasicPiecewiseFilter<OffsetT, ModelT>::empty() const
+{
+  return this->live_().empty();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
