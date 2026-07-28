@@ -35,7 +35,10 @@ inline auto PackedBlockedLeafPage::ShardedLiveRanges<FilterModelT>::peek() -> Op
   if (this->current_range_.empty()) {
     return None;
   }
-  return std::make_pair(this->block_index_, this->current_range_);
+  return Item{BATT_CHECKED_CAST(u32, this->block_index_),
+              this->current_range_,
+              this->is_first_,
+              /*is_last=*/false};
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -46,7 +49,8 @@ inline auto PackedBlockedLeafPage::ShardedLiveRanges<FilterModelT>::next() -> Op
   Optional<Item> item = this->peek();
   if (item) {
     this->advance();
-    // std::cerr << ".. " << BATT_INSPECT(this->current_range_) << std::endl;
+    item->is_last = this->current_range_.empty();
+    this->is_first_ = false;
   }
   return item;
 }

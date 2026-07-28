@@ -24,41 +24,12 @@ namespace turtle_kv {
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename ItemRangeT>
-StatusOr<PackedBlockedLeafPage*> pack_blocked_leaf_page(const usize block_size,
-                                                        const ItemRangeT& src_items,
-                                                        const MutableBuffer& dst_buffer) noexcept
+StatusOr<PackedLeafResult> pack_blocked_leaf_page(const usize block_size,
+                                                  const ItemRangeT& src_items,
+                                                  const MutableBuffer& dst_buffer) noexcept
 {
-  const usize item_count = std::size(src_items);
-
   //+++++++++++-+-+--+----- --- -- -  -  -   -
-  // Calculate the number of blocks needed and how many items in each one.
-  //
-  SmallVec<PackedLeafBlockStats, 256> block_stats;
-  {
-    auto src_iter = std::begin(src_items);
-    const auto src_end = std::end(src_items);
-    usize blocks_size_remaining = dst_buffer.size() - block_size;
-    for (;;) {
-      if (src_iter == src_end) {
-        break;
-      }
-      BATT_CHECK_LT(src_iter, src_end);
-
-      if (blocks_size_remaining < block_size) {
-        return {batt::StatusCode::kResourceExhausted};
-      }
-
-      auto& stats = block_stats.emplace_back(
-          PackedLeafBlockStats::from(std::ranges::subrange(src_iter, src_end), block_size));
-
-      blocks_size_remaining -= block_size;
-      src_iter = std::next(src_iter, stats.item_count);
-    }
-  }
-  const usize block_count = block_stats.size();
-
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-  // Initialize the leaf header.
+  // Reserve space for the fixed header.
   //
   MutableBuffer dst_remaining = dst_buffer;
   dst_remaining += sizeof(llfs::PackedPageHeader);
@@ -68,12 +39,138 @@ StatusOr<PackedBlockedLeafPage*> pack_blocked_leaf_page(const usize block_size,
   {
     leaf_header->magic = PackedBlockedLeafPage::kMagic;
     leaf_header->total_packed_size = 0;
-    leaf_header->blocks_per_art_key = 0;
+    leaf_header->blocks_per_art_key = 1;
     leaf_header->block_size_bytes = BATT_CHECKED_CAST(u32, block_size);
     leaf_header->block0.offset = 0;
     leaf_header->block_starting_item.offset = 0;
     leaf_header->art_block_index.offset = 0;
   }
+
+  const usize space_after_header = dst_remaining.size();
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+  // Pack as many blocks as fit considering only block_starting_item array overhead.
+  //
+  SmallVec<PackedLeafBlockStats, 256> block_stats;
+  usize items_packed = 0;
+  SmallVec<usize, 256> cumulative_item_count;
+  {
+    auto src_iter = std::begin(src_items);
+    const auto src_end = std::end(src_items);
+
+    // The block_starting_item array has block_count + 1 total elements. In fixed_array_overhead,
+    // we account for the size of the packed array header and the size of the sentinel element
+    // in the array.
+    //
+    const usize fixed_array_overhead = sizeof(llfs::PackedArray<little_u32>) + sizeof(little_u32);
+
+    for (;;) {
+      if (src_iter == src_end) {
+        break;
+      }
+      BATT_CHECK_LT(src_iter, src_end);
+
+      cumulative_item_count.emplace_back(items_packed);
+
+      // n is the number of blocks if we add one more block to our current total.
+      //
+      const usize n = block_stats.size() + 1;
+      
+      // array_size is the precomputed fixed_array_overhead + the size of n total block entries.
+      //
+      const usize array_size = fixed_array_overhead + n * sizeof(little_u32);
+      
+      const usize blocks_data_size = n * block_size;
+      const usize alignment_waste = block_size - 1;
+
+      if (array_size + alignment_waste + blocks_data_size > space_after_header) {
+        break;
+      }
+
+      auto& stats = block_stats.emplace_back(
+          PackedLeafBlockStats::from(std::ranges::subrange(src_iter, src_end), block_size));
+
+      items_packed += stats.item_count;
+      src_iter = std::next(src_iter, stats.item_count);
+    }
+  }
+
+  cumulative_item_count.emplace_back(items_packed);
+
+  if (block_stats.empty()) {
+    return {batt::StatusCode::kResourceExhausted};
+  }
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+  // Shrink blocks until the ART fits.
+  //
+  // Compute separator keys and build the ART. If it doesn't fit in the space between
+  // block_starting_item and the block data region, pop the last block and retry.
+  //
+  using artc::packed::PackedARTBuilder;
+
+  const auto items_begin = std::begin(src_items);
+  const auto key_at = [&items_begin](usize i) {
+    return get_key(*(items_begin + i));
+  };
+
+  SmallVec<KeyView, 4096> art_keys;
+  usize art_packed_size = 0;
+
+  for (;;) {
+    const usize block_count = block_stats.size();
+
+    art_keys.clear();
+    for (usize block_i = 1; block_i < block_count; ++block_i) {
+      BATT_CHECK_LT(block_i, cumulative_item_count.size());
+      const usize item_i = cumulative_item_count[block_i];
+      BATT_CHECK_GT(item_i, 0);
+      BATT_CHECK_LT(item_i, items_packed);
+
+      KeyView k0 = key_at(item_i - 1);
+      KeyView k1 = key_at(item_i);
+      KeyView common_prefix = llfs::find_common_prefix(0, k0, k1);
+      KeyView min_k1{k1.data(), common_prefix.size() + 1};
+
+      art_keys.emplace_back(min_k1);
+    }
+
+    // Build the ART to determine its packed size.
+    //
+    batt::StableStringStore string_store;
+
+    BATT_ASSIGN_OK_RESULT(auto art_builder,
+                          PackedARTBuilder::from_items(art_keys.begin(),
+                                                       art_keys.end(),
+                                                       BATT_OVERLOADS_OF(get_key),
+                                                       string_store));
+
+    art_packed_size = art_builder.get_packed_size();
+
+    // Check whether everything fits. Total size is the size of the block_starting_item + ART size
+    // + boundary alignment padding + block data size.
+    //
+    const usize array_size =
+        sizeof(llfs::PackedArray<little_u32>) + sizeof(little_u32) * (block_count + 1);
+    const usize total_needed =
+        array_size + art_packed_size + (block_size - 1) + block_count * block_size;
+
+    if (total_needed <= space_after_header) {
+      break;
+    }
+
+    // Doesn't fit, so pop the last block and retry.
+    //
+    items_packed -= block_stats.back().item_count;
+    block_stats.pop_back();
+    cumulative_item_count.pop_back();
+
+    if (block_stats.empty()) {
+      return {batt::StatusCode::kResourceExhausted};
+    }
+  }
+
+  const usize block_count = block_stats.size();
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
   // Pack `block_starting_item` array.
@@ -94,45 +191,16 @@ StatusOr<PackedBlockedLeafPage*> pack_blocked_leaf_page(const usize block_size,
       item_i += stats.item_count;
       ++block_start;
     }
-    *block_start = item_count;
+    *block_start = items_packed;
 
     leaf_header->block_starting_item.reset_unsafe(block_starting_item);
   }
-  const llfs::PackedArray<little_u32>& block_starting_item = *(leaf_header->block_starting_item);
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
-  // Calculate blocks_per_art_key based on available space.
+  // Pack the ART.
   //
-  const usize space_for_art = dst_remaining.size() - block_size * block_count;
-  SmallVec<KeyView, 4096> art_keys;
-  usize blocks_per_art_key = 1;
-  //----- --- -- -  -  -   -
-  const auto items = std::begin(src_items);
-  const auto key_at = [&items](usize i) {
-    return get_key(*(items + i));
-  };
-  //----- --- -- -  -  -   -
-  for (;;) {
-    art_keys.clear();
-    for (usize block_i = blocks_per_art_key; block_i < block_count; block_i += blocks_per_art_key) {
-      const usize item_i = block_starting_item[block_i];
-      BATT_CHECK_LT(item_i, item_count);
-      BATT_CHECK_GT(item_i, 0);
-
-      KeyView k0 = key_at(item_i - 1);
-      KeyView k1 = key_at(item_i);
-      KeyView common_prefix = llfs::find_common_prefix(0, k0, k1);
-      KeyView min_k1{k1.data(), common_prefix.size() + 1};
-
-      art_keys.emplace_back(min_k1);
-    }
-
-    using artc::packed::PackedARTBuilder;
-
+  {
     batt::StableStringStore string_store;
-
-    BATT_DEBUG_INFO(BATT_INSPECT_RANGE(art_keys)
-                    << BATT_INSPECT(block_count) << BATT_INSPECT(blocks_per_art_key));
 
     BATT_ASSIGN_OK_RESULT(auto art_builder,
                           PackedARTBuilder::from_items(art_keys.begin(),
@@ -140,20 +208,12 @@ StatusOr<PackedBlockedLeafPage*> pack_blocked_leaf_page(const usize block_size,
                                                        BATT_OVERLOADS_OF(get_key),
                                                        string_store));
 
-    if (art_builder.get_packed_size() > space_for_art) {
-      ++blocks_per_art_key;
-      continue;
-    }
-
     MutableBuffer art_buffer{dst_remaining.data(), art_builder.get_packed_size()};
     dst_remaining += art_buffer.size();
-    BATT_CHECK_GE(dst_remaining.size(), block_size * block_count);
 
     BATT_ASSIGN_OK_RESULT(const artc::packed::NodeBase* art_root, art_builder.build(art_buffer));
 
     leaf_header->art_block_index.reset_unsafe(art_root);
-    leaf_header->blocks_per_art_key = BATT_CHECKED_CAST(u32, blocks_per_art_key);
-    break;
   }
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -196,10 +256,7 @@ StatusOr<PackedBlockedLeafPage*> pack_blocked_leaf_page(const usize block_size,
   //
   leaf_header->total_packed_size = BATT_CHECKED_CAST(u32, dst_buffer.size() - dst_remaining.size());
 
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-  // Success!  (nothing succeeds like it)
-  //
-  return leaf_header;
+  return PackedLeafResult{leaf_header, items_packed};
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -298,6 +355,41 @@ inline PackedBlockedLeafPage::ItemIterator PackedBlockedLeafPage::lower_bound(
   }
 
   return ItemIterator{block_iter, p_slot};
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+inline Interval<u32> PackedBlockedLeafPage::get_block_aligned_index_range_for_key_range(
+    const Interval<KeyView>& key_range) const noexcept
+{
+  const usize first_block = this->find_block_index_containing_key(key_range.lower_bound);
+  const usize last_block = this->find_block_index_containing_key(key_range.upper_bound);
+
+  BATT_CHECK_LE(first_block, last_block);
+
+  const u32 range_begin = (*this->block_starting_item)[first_block].value();
+  const u32 range_end = (*this->block_starting_item)[last_block + 1].value();
+
+  return Interval<u32>{range_begin, range_end};
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+inline PackedKeyValueSlotSlice PackedBlockedLeafPage::get_slice_within_block(
+    u32 block_index,
+    const PackedLeafBlock* block,
+    const Interval<u32>& live_item_range) const noexcept
+{
+  BATT_CHECK_LT(block_index, this->block_count());
+
+  const u32 block_start = (*this->block_starting_item)[block_index].value();
+  const usize local_begin = live_item_range.lower_bound - block_start;
+  const usize local_end = live_item_range.upper_bound - block_start;
+
+  BATT_CHECK_LE(local_end, block->item_count());
+
+  return PackedKeyValueSlotSlice{as_slice(block->items_begin() + local_begin,
+                                          block->items_begin() + local_end)};
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

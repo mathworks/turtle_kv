@@ -21,7 +21,12 @@ template <PiecewiseFilterStorageModel<u32> FilterModelT>
 class PackedBlockedLeafPage::ShardedLiveRanges
 {
  public:
-  using Item = std::pair<u32 /*block_index*/, Interval<u32> /*live_item_range*/>;
+  struct Item {
+    u32 block_index;
+    Interval<u32> live_item_range;
+    bool is_first;
+    bool is_last;
+  };
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -51,6 +56,7 @@ class PackedBlockedLeafPage::ShardedLiveRanges
   usize block_index_;
   BasicPiecewiseFilter<u32, FilterModelT>::LiveSubranges filter_live_ranges_;
   Interval<u32> current_range_;
+  bool is_first_ = true;
 };
 
 }  // namespace turtle_kv

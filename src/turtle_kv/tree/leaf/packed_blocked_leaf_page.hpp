@@ -45,13 +45,20 @@ struct PackedBlockedLeafPage;
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+struct PackedLeafResult {
+  PackedBlockedLeafPage* leaf;
+  usize items_packed;
+};
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 /** \brief Packs a blocked leaf page with the passed block size, containing the passed key/value
- * pairs, into the passed buffer.
+ * pairs, into the passed buffer.  Packs as many items as will fit; returns the number packed.
  */
 template <typename ItemRangeT>
-StatusOr<PackedBlockedLeafPage*> pack_blocked_leaf_page(const usize block_size,
-                                                        const ItemRangeT& src_items,
-                                                        const MutableBuffer& dst_buffer) noexcept;
+StatusOr<PackedLeafResult> pack_blocked_leaf_page(const usize block_size,
+                                                  const ItemRangeT& src_items,
+                                                  const MutableBuffer& dst_buffer) noexcept;
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 //
@@ -286,6 +293,13 @@ struct PackedBlockedLeafPage  //
   ShardedLiveRanges<FilterModelT> sharded_live_ranges(
       const BasicPiecewiseFilter<u32, FilterModelT>& filter,
       const Interval<u32>& subrange) const noexcept;
+
+  Interval<u32> get_block_aligned_index_range_for_key_range(
+      const Interval<KeyView>& key_range) const noexcept;
+
+  PackedKeyValueSlotSlice get_slice_within_block(u32 block_index,
+                                                 const PackedLeafBlock* block,
+                                                 const Interval<u32>& live_item_range) const noexcept;
 };
 
 static_assert(sizeof(PackedBlockedLeafPage) == 32);

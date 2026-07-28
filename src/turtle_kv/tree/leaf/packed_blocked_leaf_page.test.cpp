@@ -15,6 +15,7 @@
 
 #include <turtle_kv/tree/leaf/packed_blocked_leaf_page.ipp>
 #include <turtle_kv/tree/leaf/packed_blocked_leaf_page.item_iterator.hpp>
+#include <turtle_kv/tree/leaf/scan_blocked_leaf.hpp>
 #include <turtle_kv/tree/leaf/packed_blocked_leaf_page.sharded_live_ranges.hpp>
 #include <turtle_kv/tree/leaf/packed_blocked_leaf_page.sharded_live_ranges.ipp>
 #include <turtle_kv/tree/random_str.hpp>
@@ -173,14 +174,15 @@ TEST(TreePackedBlockedLeafPageTest, Random)
 
     MutableBuffer leaf_buffer{leaf_storage.data(), kLeafPageSize};
 
-    StatusOr<PackedBlockedLeafPage*> status_or_packed_leaf =
+    StatusOr<turtle_kv::PackedLeafResult> status_or_packed_leaf =
         pack_blocked_leaf_page(kBlockSize, edits, leaf_buffer);
 
     ASSERT_TRUE(status_or_packed_leaf.ok()) << BATT_INSPECT(status_or_packed_leaf.status());
+    ASSERT_EQ(status_or_packed_leaf->items_packed, edits.size());
 
     const PackedBlockedLeafPage& packed_leaf = PackedBlockedLeafPage::view_of(leaf_buffer);
 
-    ASSERT_EQ(&packed_leaf, *status_or_packed_leaf);
+    ASSERT_EQ(&packed_leaf, status_or_packed_leaf->leaf);
     ASSERT_EQ(packed_leaf.min_key(), get_key(edits.front()));
     ASSERT_EQ(packed_leaf.max_key(), get_key(edits.back()));
 
@@ -298,8 +300,9 @@ TEST(TreePackedBlockedLeafPageTest, Random)
           u32 next_possible_block = 0;
 
           packed_leaf.sharded_live_ranges(leaf_filter, Interval<u32>{0, item_count}) |
-              batt::seq::for_each([&](const std::pair<u32, Interval<u32>>& live_pair) {
-                const auto [block_index, live_range] = live_pair;
+              batt::seq::for_each([&](const auto& item) {
+                const auto& block_index = item.block_index;
+                const auto& live_range = item.live_item_range;
 
                 BATT_CHECK_GE(block_index, next_possible_block);
                 BATT_CHECK_LT(block_index, packed_leaf.block_count());
