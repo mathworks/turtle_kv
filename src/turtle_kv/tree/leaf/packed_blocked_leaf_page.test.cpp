@@ -59,6 +59,8 @@ using turtle_kv::ValueView;
 class PackedBlockedLeafPageTest : public ::testing::Test
 {
  public:
+  using StorageUnit = std::aligned_storage_t<4096, 4096>;
+
   static constexpr usize kLeafPageSize = 1 * kMiB;
   static constexpr usize kNumPrefixes = 1000;
   static constexpr usize kMinPrefixSize = 0;
@@ -149,7 +151,6 @@ class PackedBlockedLeafPageTest : public ::testing::Test
 
   StatusOr<const PackedBlockedLeafPage*> pack_leaf()
   {
-    using StorageUnit = std::aligned_storage_t<4096, 4096>;
     this->leaf_storage_.resize(kLeafPageSize / sizeof(StorageUnit));
     BATT_CHECK_EQ(sizeof(StorageUnit) * this->leaf_storage_.size(), kLeafPageSize);
 
@@ -176,7 +177,6 @@ class PackedBlockedLeafPageTest : public ::testing::Test
   std::vector<EditView> edits_;
 
  private:
-  using StorageUnit = std::aligned_storage_t<4096, 4096>;
   std::vector<StorageUnit> leaf_storage_;
 };
 
