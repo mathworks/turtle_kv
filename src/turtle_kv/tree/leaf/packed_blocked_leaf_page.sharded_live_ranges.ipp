@@ -18,11 +18,13 @@ namespace turtle_kv {
 template <PiecewiseFilterStorageModel<u32> FilterModelT>
 inline /*explicit*/ PackedBlockedLeafPage::ShardedLiveRanges<FilterModelT>::ShardedLiveRanges(
     const llfs::PackedArray<little_u32>* block_starts,
-    BasicPiecewiseFilter<u32, FilterModelT>::LiveSubranges&& filter_live_ranges) noexcept
+    BasicPiecewiseFilter<u32, FilterModelT>::LiveSubranges&& filter_live_ranges,
+    const Interval<u32>& subrange) noexcept
     : block_starts_{block_starts}
     , block_index_{0}
     , filter_live_ranges_{std::move(filter_live_ranges)}
     , current_range_{0, 0}
+    , subrange_{subrange}
 {
   this->advance();
 }
@@ -37,8 +39,8 @@ inline auto PackedBlockedLeafPage::ShardedLiveRanges<FilterModelT>::peek() -> Op
   }
   return Item{BATT_CHECKED_CAST(u32, this->block_index_),
               this->current_range_,
-              this->is_first_,
-              /*is_last=*/false};
+              (*this->block_starts_)[this->block_index_] == this->subrange_.lower_bound,
+              (*this->block_starts_)[this->block_index_ + 1] == this->subrange_.upper_bound};
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -49,8 +51,6 @@ inline auto PackedBlockedLeafPage::ShardedLiveRanges<FilterModelT>::next() -> Op
   Optional<Item> item = this->peek();
   if (item) {
     this->advance();
-    item->is_last = this->current_range_.empty();
-    this->is_first_ = false;
   }
   return item;
 }

@@ -31,6 +31,8 @@ auto scan_blocked_leaf(const PackedBlockedLeafPage* packed_leaf,
                        const BasicPiecewiseFilter<u32, FilterModelT>& filter,
                        const Interval<KeyView>& key_range) noexcept
 {
+  BATT_CHECK_NOT_NULLPTR(packed_leaf);
+
   const Interval<u32> index_range =
       packed_leaf->get_block_aligned_index_range_for_key_range(key_range);
 

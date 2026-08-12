@@ -19,6 +19,7 @@
 #include <turtle_kv/tree/leaf/packed_blocked_leaf_page.sharded_live_ranges.hpp>
 #include <turtle_kv/tree/leaf/packed_blocked_leaf_page.sharded_live_ranges.ipp>
 #include <turtle_kv/tree/random_str.hpp>
+#include <turtle_kv/tree/testing/in_memory_block_loader.hpp>
 
 #include <turtle_kv/util/piecewise_filter.ipp>
 #include <turtle_kv/util/piecewise_filter.test.hpp>
@@ -53,56 +54,45 @@ using turtle_kv::PiecewiseFilter;
 using turtle_kv::random_str;
 using turtle_kv::ValueView;
 
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-// Plan:
-//  1. For different random seeds:
-//     - generate random set of prefixes (~10% of total keys)
-//     - generate keys using prefixes, with random values
-//     - sort
-//     - pack leaf; verify:
-//       a. all packed keys present and have right values
-//       b. any unpacked keys at end missing
-//       c. randomly generated non-present keys not found
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 //
-TEST(TreePackedBlockedLeafPageTest, Random)
+class PackedBlockedLeafPageTest : public ::testing::Test
 {
-  const usize kFirstSeed = 0;
-  const usize kNumSeeds = 250;
-  const usize kLastSeed = kFirstSeed + kNumSeeds;
-  const usize kLeafPageSize = 1 * kMiB;
-  const usize kNumPrefixes = 1000;
-  const usize kMinPrefixSize = 0;
-  const usize kMaxPrefixSize = 8;
-  const usize kMinKeySize = 4;
-  const usize kMaxKeySize = 48;
-  const usize kMinValueSize = 0;
-  const usize kMaxValueSize = 200;
-  const usize kBlockSize = 8192;
+ public:
+  static constexpr usize kLeafPageSize = 1 * kMiB;
+  static constexpr usize kNumPrefixes = 1000;
+  static constexpr usize kMinPrefixSize = 0;
+  static constexpr usize kMaxPrefixSize = 8;
+  static constexpr usize kMinKeySize = 4;
+  static constexpr usize kMaxKeySize = 48;
+  static constexpr usize kMinValueSize = 0;
+  static constexpr usize kMaxValueSize = 200;
+  static constexpr usize kBlockSize = 8192;
 
-  BATT_CHECK_EQ(batt::bit_count(kLeafPageSize), 1);
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  std::uniform_int_distribution<i32> pick_pct{0, 99};
-  std::geometric_distribution<usize> pick_prefix_size{0.5};
-  std::uniform_int_distribution<usize> pick_prefix{0, kNumPrefixes - 1};
-  std::geometric_distribution<usize> pick_key_size{0.7};
-  std::uniform_int_distribution<usize> pick_value_size{0, kMaxValueSize - kMinValueSize};
+  void set_seed(usize seed)
+  {
+    this->rng_.seed(seed);
+    this->edits_.clear();
+    this->leaf_storage_.clear();
+  }
 
-  for (usize seed = kFirstSeed; seed < kLastSeed; ++seed) {
-    LOG_EVERY_N(INFO, 25) << BATT_INSPECT(seed);
+  void generate_edits(StableStringStore& strings)
+  {
+    BATT_CHECK_EQ(batt::bit_count(kLeafPageSize), 1);
 
-    std::default_random_engine rng{seed};
+    std::geometric_distribution<usize> pick_prefix_size{0.5};
+    std::uniform_int_distribution<usize> pick_prefix{0, kNumPrefixes - 1};
+    std::geometric_distribution<usize> pick_key_size{0.7};
+    std::uniform_int_distribution<usize> pick_value_size{0, kMaxValueSize - kMinValueSize};
 
-    StableStringStore strings;
-
-    //+++++++++++-+-+--+----- --- -- -  -  -   -
-    // Generate prefixes
-    //
     std::vector<std::string_view> prefixes;
     {
       std::unordered_set<std::string_view> used_prefixes;
       while (prefixes.size() < kNumPrefixes) {
         std::string_view prefix =
-            random_str(rng, pick_prefix_size, kMinPrefixSize, kMaxPrefixSize, strings);
+            random_str(this->rng_, pick_prefix_size, kMinPrefixSize, kMaxPrefixSize, strings);
 
         if (used_prefixes.count(prefix)) {
           continue;
@@ -111,10 +101,6 @@ TEST(TreePackedBlockedLeafPageTest, Random)
       }
     }
 
-    //+++++++++++-+-+--+----- --- -- -  -  -   -
-    // Generate edits.
-    //
-    std::vector<EditView> edits;
     {
       usize max_edit_size = 0;
       usize max_key_size = 0;
@@ -122,10 +108,10 @@ TEST(TreePackedBlockedLeafPageTest, Random)
 
       std::unordered_set<std::string_view> used_keys;
       for (;;) {
-        std::string_view prefix = prefixes[pick_prefix(rng)];
+        std::string_view prefix = prefixes[pick_prefix(this->rng_)];
 
         std::string_view key =
-            random_str(rng, pick_key_size, kMinKeySize, kMaxKeySize, strings, prefix);
+            random_str(this->rng_, pick_key_size, kMinKeySize, kMaxKeySize, strings, prefix);
 
         if (used_keys.count(key)) {
           continue;
@@ -133,7 +119,7 @@ TEST(TreePackedBlockedLeafPageTest, Random)
         used_keys.insert(key);
 
         std::string_view value =
-            random_str(rng, pick_value_size, kMinValueSize, kMaxValueSize, strings);
+            random_str(this->rng_, pick_value_size, kMinValueSize, kMaxValueSize, strings);
 
         EditView edit{key, ValueView::from_str(value)};
 
@@ -147,42 +133,76 @@ TEST(TreePackedBlockedLeafPageTest, Random)
                                                                                new_max_key_size,
                                                                                new_max_edit_size);
 
-        // Stop as soon as adding the next key would exceed the estimated space.
-        //
         if (edit_size + total_edits_size > space_available) {
           break;
         }
 
-        edits.push_back(edit);
+        this->edits_.push_back(edit);
         total_edits_size += edit_size;
         max_edit_size = new_max_edit_size;
         max_key_size = new_max_key_size;
       }
     }
 
-    //+++++++++++-+-+--+----- --- -- -  -  -   -
-    // Sort edits by key.
-    //
-    std::sort(edits.begin(), edits.end(), KeyOrder{});
+    std::sort(this->edits_.begin(), this->edits_.end(), KeyOrder{});
+  }
 
-    //+++++++++++-+-+--+----- --- -- -  -  -   -
-    // Pack a blocked leaf page.
-    //
+  StatusOr<const PackedBlockedLeafPage*> pack_leaf()
+  {
     using StorageUnit = std::aligned_storage_t<4096, 4096>;
-    std::vector<StorageUnit> leaf_storage(kLeafPageSize / sizeof(StorageUnit));
-    ASSERT_EQ(sizeof(StorageUnit) * leaf_storage.size(), kLeafPageSize);
+    this->leaf_storage_.resize(kLeafPageSize / sizeof(StorageUnit));
+    BATT_CHECK_EQ(sizeof(StorageUnit) * this->leaf_storage_.size(), kLeafPageSize);
 
-    MutableBuffer leaf_buffer{leaf_storage.data(), kLeafPageSize};
+    MutableBuffer leaf_buffer{this->leaf_storage_.data(), kLeafPageSize};
 
-    StatusOr<turtle_kv::PackedLeafResult> status_or_packed_leaf =
-        pack_blocked_leaf_page(kBlockSize, edits, leaf_buffer);
+    BATT_ASSIGN_OK_RESULT(auto result, pack_blocked_leaf_page(kBlockSize, this->edits_, leaf_buffer));
 
-    ASSERT_TRUE(status_or_packed_leaf.ok()) << BATT_INSPECT(status_or_packed_leaf.status());
-    ASSERT_EQ(status_or_packed_leaf->items_packed, edits.size());
+    if (result.items_packed != this->edits_.size()) {
+      return {batt::StatusCode::kInternal};
+    }
 
-    const PackedBlockedLeafPage& packed_leaf = PackedBlockedLeafPage::view_of(leaf_buffer);
+    return &PackedBlockedLeafPage::view_of(leaf_buffer);
+  }
 
-    ASSERT_EQ(&packed_leaf, status_or_packed_leaf->leaf);
+  MutableBuffer leaf_buffer() const
+  {
+    return MutableBuffer{const_cast<void*>(static_cast<const void*>(this->leaf_storage_.data())),
+                         kLeafPageSize};
+  }
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  std::default_random_engine rng_;
+  std::vector<EditView> edits_;
+
+ private:
+  using StorageUnit = std::aligned_storage_t<4096, 4096>;
+  std::vector<StorageUnit> leaf_storage_;
+};
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+TEST_F(PackedBlockedLeafPageTest, Random)
+{
+  const usize kFirstSeed = 0;
+  const usize kNumSeeds = 250;
+  const usize kLastSeed = kFirstSeed + kNumSeeds;
+
+  std::uniform_int_distribution<i32> pick_pct{0, 99};
+
+  for (usize seed = kFirstSeed; seed < kLastSeed; ++seed) {
+    LOG_EVERY_N(INFO, 25) << BATT_INSPECT(seed);
+
+    StableStringStore strings;
+    this->set_seed(seed);
+    this->generate_edits(strings);
+
+    StatusOr<const PackedBlockedLeafPage*> status_or_leaf = this->pack_leaf();
+    ASSERT_TRUE(status_or_leaf.ok()) << BATT_INSPECT(status_or_leaf.status());
+
+    const PackedBlockedLeafPage& packed_leaf = **status_or_leaf;
+    const auto& edits = this->edits_;
+
     ASSERT_EQ(packed_leaf.min_key(), get_key(edits.front()));
     ASSERT_EQ(packed_leaf.max_key(), get_key(edits.back()));
 
@@ -240,7 +260,7 @@ TEST(TreePackedBlockedLeafPageTest, Random)
         ASSERT_LT(item_iter, items_end);
         ASSERT_EQ(std::distance(packed_leaf.items_begin(), item_iter), position);
 
-        if (pick_pct(rng) < 1) {
+        if (pick_pct(this->rng_) < 1) {
           past_items.push_back(std::make_pair(item_iter, position));
         }
 
@@ -283,7 +303,7 @@ TEST(TreePackedBlockedLeafPageTest, Random)
               turtle_kv::testing::drop_n_disjoint_intervals_from(&leaf_filter,
                                                                  drop_count,
                                                                  Interval<u32>{0, item_count},
-                                                                 rng);
+                                                                 this->rng_);
 
           // Verify the number of expected live items.
           //
@@ -327,6 +347,103 @@ TEST(TreePackedBlockedLeafPageTest, Random)
           ASSERT_EQ(actual_live_count, expected_live_count)
               << BATT_INSPECT(j) << BATT_INSPECT(drop_count);
         }
+      }
+    }
+  }
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+TEST_F(PackedBlockedLeafPageTest, ScanBlockedLeaf)
+{
+  using turtle_kv::testing::InMemoryBlockLoader;
+  using turtle_kv::scan_blocked_leaf;
+  using turtle_kv::PackedKeyValueSlotSlice;
+
+  const usize kFirstSeed = 0;
+  const usize kNumSeeds = 250;
+  const usize kLastSeed = kFirstSeed + kNumSeeds;
+  const usize kTrialsPerSeed = 100;
+  const usize kMaxDropCount = 500;
+
+  for (usize seed = kFirstSeed; seed < kLastSeed; ++seed) {
+    LOG_EVERY_N(INFO, 25) << BATT_INSPECT(seed);
+
+    StableStringStore strings;
+    this->set_seed(seed);
+    this->generate_edits(strings);
+
+    StatusOr<const PackedBlockedLeafPage*> status_or_leaf = this->pack_leaf();
+    ASSERT_TRUE(status_or_leaf.ok()) << BATT_INSPECT(status_or_leaf.status());
+
+    const PackedBlockedLeafPage& packed_leaf = **status_or_leaf;
+    const auto& edits = this->edits_;
+    const u32 item_count = packed_leaf.item_count();
+
+    InMemoryBlockLoader block_loader{&packed_leaf};
+
+    std::uniform_int_distribution<usize> pick_edit{0, edits.size() - 1};
+
+    for (usize trial = 0; trial < kTrialsPerSeed; ++trial) {
+      // Pick a random half-open key range [lower_key, upper_key).
+      //
+      usize lo_i = pick_edit(this->rng_);
+      usize hi_i = pick_edit(this->rng_);
+      if (lo_i > hi_i) {
+        std::swap(lo_i, hi_i);
+      }
+      if (lo_i == hi_i && hi_i + 1 < edits.size()) {
+        ++hi_i;
+      }
+
+      KeyView lower_key = get_key(edits[lo_i]);
+      KeyView upper_key = get_key(edits[hi_i]);
+      Interval<KeyView> key_range{lower_key, upper_key};
+
+      // Build a random filter with drops.
+      //
+      const usize drop_count = std::uniform_int_distribution<usize>{0, kMaxDropCount}(this->rng_);
+      PiecewiseFilter<u32> leaf_filter;
+
+      turtle_kv::testing::drop_n_disjoint_intervals_from(&leaf_filter,
+                                                         drop_count,
+                                                         Interval<u32>{0, item_count},
+                                                         this->rng_);
+
+      // Compute expected results: edits in [lo_i, hi_i) that are live.
+      //
+      std::vector<std::pair<KeyView, ValueView>> expected;
+      for (usize i = lo_i; i < hi_i; ++i) {
+        if (leaf_filter.live_at_index(i)) {
+          expected.emplace_back(get_key(edits[i]), get_value(edits[i]));
+        }
+      }
+
+      // Run scan_blocked_leaf and collect results.
+      //
+      std::vector<std::pair<KeyView, ValueView>> actual;
+
+      scan_blocked_leaf(&packed_leaf, &block_loader, leaf_filter, key_range)  //
+          | batt::seq::for_each([&](const StatusOr<PackedKeyValueSlotSlice>& status_or_slice) {
+              ASSERT_TRUE(status_or_slice.ok()) << BATT_INSPECT(status_or_slice.status());
+              std::visit(
+                  [&](const auto& s) {
+                    for (const auto& slot : s) {
+                      actual.emplace_back(get_key(slot), get_value(slot));
+                    }
+                  },
+                  *status_or_slice);
+            });
+
+      ASSERT_EQ(actual.size(), expected.size())
+          << BATT_INSPECT(seed) << BATT_INSPECT(trial) << BATT_INSPECT(drop_count)
+          << BATT_INSPECT(lower_key) << BATT_INSPECT(upper_key);
+
+      for (usize i = 0; i < expected.size(); ++i) {
+        ASSERT_EQ(actual[i].first, expected[i].first)
+            << BATT_INSPECT(seed) << BATT_INSPECT(trial) << BATT_INSPECT(i);
+        ASSERT_EQ(actual[i].second, expected[i].second)
+            << BATT_INSPECT(seed) << BATT_INSPECT(trial) << BATT_INSPECT(i);
       }
     }
   }

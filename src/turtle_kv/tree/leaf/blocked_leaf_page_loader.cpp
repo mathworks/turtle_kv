@@ -35,31 +35,36 @@ StatusOr<const PackedBlockedLeafPage*> BlockedLeafPageLoader::set_page(
   this->leaf_ = nullptr;
   this->cache_.clear();
 
-  // Load the first shard to access the fixed header fields.
+  PageSliceReader slice_reader{this->page_loader_, page_id,
+                               llfs::PageSize{BATT_CHECKED_CAST(i32, this->block_size_)}};
+
+  // Load the first shard to read the fixed header fields.
   //
   BATT_ASSIGN_OK_RESULT(
       ConstBuffer header_buffer,
-      this->load_shard(Interval<usize>{0, this->block_size_},
-                       llfs::LruPriority{kTrieIndexLruPriority}));
+      slice_reader.read_slice(Interval<usize>{0, this->block_size_},
+                              this->slice_storage_,
+                              this->pin_page_to_job_,
+                              llfs::LruPriority{kTrieIndexLruPriority}));
 
   this->leaf_ = &PackedBlockedLeafPage::view_of(header_buffer);
 
-  // Load additional shards until the full header metadata is covered.
+  // Load the full header (block_starting_item + ART) as a contiguous buffer.
   //
   const usize header_size = this->leaf_->min_header_shard_size();
-  usize loaded = this->block_size_;
 
-  while (loaded < header_size) {
-    const usize next_end = std::min(loaded + this->block_size_, header_size);
+  if (header_size > this->block_size_) {
     BATT_ASSIGN_OK_RESULT(
-        ConstBuffer shard_buffer,
-        this->load_shard(Interval<usize>{loaded, next_end},
-                         llfs::LruPriority{kTrieIndexLruPriority}));
-    loaded = next_end;
-    (void)shard_buffer;
+        header_buffer,
+        slice_reader.read_slice(Interval<usize>{0, header_size},
+                                this->slice_storage_,
+                                this->pin_page_to_job_,
+                                llfs::LruPriority{kTrieIndexLruPriority}));
+
+    this->leaf_ = &PackedBlockedLeafPage::view_of(header_buffer);
   }
 
-  this->cache_.resize(this->leaf_->block_count(), None);
+  this->cache_.assign(this->leaf_->block_count(), ConstBuffer{});
 
   return this->leaf_;
 }
@@ -71,53 +76,37 @@ StatusOr<const PackedLeafBlock*> BlockedLeafPageLoader::load_block(u32 block_ind
   BATT_CHECK_NE(this->leaf_, nullptr);
   BATT_CHECK_LT(block_index, this->cache_.size());
 
-  if (this->cache_[block_index]) {
-    return &PackedLeafBlock::view_of(*this->cache_[block_index]);
+  if (this->cache_[block_index].data()) {
+    return &PackedLeafBlock::view_of(this->cache_[block_index]);
   }
 
-  const usize block_offset = this->leaf_->block_page_offset(block_index);
-  BATT_ASSIGN_OK_RESULT(
-      ConstBuffer block_buffer,
-      this->load_shard(Interval<usize>{block_offset, block_offset + this->block_size_},
-                       llfs::LruPriority{kLeafLruPriority}));
-
-  this->cache_[block_index] = block_buffer;
-
-  return &PackedLeafBlock::view_of(block_buffer);
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-StatusOr<ConstBuffer> BlockedLeafPageLoader::load_shard(
-    const Interval<usize>& shard_interval,
-    llfs::LruPriority lru_priority) noexcept
-{
   llfs::PageCache& page_cache = *this->page_loader_.page_cache();
 
   Optional<llfs::PageId> shard_page_id =
-      page_cache.page_shard_id_for(this->page_id_, shard_interval);
+      this->leaf_->page_shard_id_for_block(page_cache, block_index, this->page_id_);
 
   if (!shard_page_id) {
     return {batt::StatusCode::kUnavailable};
   }
 
   const llfs::PinnedPage* existing = this->slice_storage_.find_pinned_page(*shard_page_id);
-  if (existing) {
-    return ConstBuffer{existing->raw_data(), (usize)shard_interval.size()};
+  if (!existing) {
+    BATT_ASSIGN_OK_RESULT(
+        llfs::PinnedPage pinned_shard,
+        this->page_loader_.load_page(*shard_page_id,
+                                     llfs::PageLoadOptions{llfs::ShardedPageView::page_layout_id(),
+                                                           this->pin_page_to_job_,
+                                                           llfs::OkIfNotFound{false},
+                                                           llfs::LruPriority{kLeafLruPriority}}));
+
+    this->slice_storage_.insert_pinned_page(std::move(pinned_shard));
+    existing = this->slice_storage_.find_pinned_page(*shard_page_id);
   }
 
-  BATT_ASSIGN_OK_RESULT(
-      llfs::PinnedPage pinned_shard,
-      this->page_loader_.load_page(*shard_page_id,
-                                   llfs::PageLoadOptions{llfs::ShardedPageView::page_layout_id(),
-                                                         this->pin_page_to_job_,
-                                                         llfs::OkIfNotFound{false},
-                                                         lru_priority}));
+  ConstBuffer block_buffer{existing->raw_data(), this->block_size_};
+  this->cache_[block_index] = block_buffer;
 
-  const void* raw_data = pinned_shard.raw_data();
-  this->slice_storage_.insert_pinned_page(std::move(pinned_shard));
-
-  return ConstBuffer{raw_data, (usize)shard_interval.size()};
+  return &PackedLeafBlock::view_of(block_buffer);
 }
 
 }  // namespace turtle_kv

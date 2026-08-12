@@ -17,7 +17,6 @@
 
 #include <turtle_kv/import/buffer.hpp>
 #include <turtle_kv/import/int_types.hpp>
-#include <turtle_kv/import/optional.hpp>
 #include <turtle_kv/import/small_vec.hpp>
 #include <turtle_kv/import/status.hpp>
 
@@ -54,8 +53,6 @@ class BlockedLeafPageLoader
   StatusOr<const PackedLeafBlock*> load_block(u32 block_index) noexcept;
 
  private:
-  StatusOr<ConstBuffer> load_shard(const Interval<usize>& shard_interval,
-                                   llfs::LruPriority lru_priority) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -66,7 +63,7 @@ class BlockedLeafPageLoader
 
   llfs::PageId page_id_;
   const PackedBlockedLeafPage* leaf_ = nullptr;
-  SmallVec<Optional<ConstBuffer>, 256> cache_;
+  SmallVec<ConstBuffer, 256> cache_;
 };
 
 }  // namespace turtle_kv

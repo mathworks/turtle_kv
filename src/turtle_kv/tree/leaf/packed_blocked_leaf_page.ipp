@@ -106,6 +106,8 @@ StatusOr<PackedLeafResult> pack_blocked_leaf_page(const usize block_size,
   //
   // Compute separator keys and build the ART. If it doesn't fit in the space between
   // block_starting_item and the block data region, pop the last block and retry.
+  // When the ART successfully fits, pack both the block_starting_item array and ART before
+  // breaking out of the retry loop.
   //
   using artc::packed::PackedARTBuilder;
 
@@ -115,25 +117,22 @@ StatusOr<PackedLeafResult> pack_blocked_leaf_page(const usize block_size,
   };
 
   SmallVec<KeyView, 4096> art_keys;
-  usize art_packed_size = 0;
+  for (usize block_i = 1; block_i < block_stats.size(); ++block_i) {
+    BATT_CHECK_LT(block_i, cumulative_item_count.size());
+    const usize item_i = cumulative_item_count[block_i];
+    BATT_CHECK_GT(item_i, 0);
+    BATT_CHECK_LT(item_i, items_packed);
+
+    KeyView k0 = key_at(item_i - 1);
+    KeyView k1 = key_at(item_i);
+    KeyView common_prefix = llfs::find_common_prefix(0, k0, k1);
+    KeyView min_k1{k1.data(), common_prefix.size() + 1};
+
+    art_keys.emplace_back(min_k1);
+  }
 
   for (;;) {
     const usize block_count = block_stats.size();
-
-    art_keys.clear();
-    for (usize block_i = 1; block_i < block_count; ++block_i) {
-      BATT_CHECK_LT(block_i, cumulative_item_count.size());
-      const usize item_i = cumulative_item_count[block_i];
-      BATT_CHECK_GT(item_i, 0);
-      BATT_CHECK_LT(item_i, items_packed);
-
-      KeyView k0 = key_at(item_i - 1);
-      KeyView k1 = key_at(item_i);
-      KeyView common_prefix = llfs::find_common_prefix(0, k0, k1);
-      KeyView min_k1{k1.data(), common_prefix.size() + 1};
-
-      art_keys.emplace_back(min_k1);
-    }
 
     // Build the ART to determine its packed size.
     //
@@ -145,7 +144,7 @@ StatusOr<PackedLeafResult> pack_blocked_leaf_page(const usize block_size,
                                                        BATT_OVERLOADS_OF(get_key),
                                                        string_store));
 
-    art_packed_size = art_builder.get_packed_size();
+    const usize art_packed_size = art_builder.get_packed_size();
 
     // Check whether everything fits. Total size is the size of the block_starting_item + ART size
     // + boundary alignment padding + block data size.
@@ -155,66 +154,60 @@ StatusOr<PackedLeafResult> pack_blocked_leaf_page(const usize block_size,
     const usize total_needed =
         array_size + art_packed_size + (block_size - 1) + block_count * block_size;
 
-    if (total_needed <= space_after_header) {
-      break;
-    }
-
-    // Doesn't fit, so pop the last block and retry.
+    // ART doesn't fit, so pop a block and retry the loop.
     //
-    items_packed -= block_stats.back().item_count;
-    block_stats.pop_back();
-    cumulative_item_count.pop_back();
+    if (total_needed > space_after_header) {
+      items_packed -= block_stats.back().item_count;
+      block_stats.pop_back();
+      cumulative_item_count.pop_back();
+      art_keys.pop_back();
 
-    if (block_stats.empty()) {
-      return {batt::StatusCode::kResourceExhausted};
+      if (block_stats.empty()) {
+        return {batt::StatusCode::kResourceExhausted};
+      }
+      continue;
     }
+
+    // Pack `block_starting_item` array.
+    //
+    {
+      const usize block_starting_item_array_size =
+          sizeof(llfs::PackedArray<little_u32>) + sizeof(little_u32) * (block_count + 1);
+
+      auto* block_starting_item =
+          static_cast<llfs::PackedArray<little_u32>*>(dst_remaining.data());
+      dst_remaining += block_starting_item_array_size;
+
+      block_starting_item->initialize(block_count + 1);
+
+      little_u32* block_start = block_starting_item->data();
+      u32 item_i = 0;
+      for (const PackedLeafBlockStats& stats : block_stats) {
+        *block_start = item_i;
+        item_i += stats.item_count;
+        ++block_start;
+      }
+      *block_start = items_packed;
+
+      leaf_header->block_starting_item.reset_unsafe(block_starting_item);
+    }
+
+    // Pack the ART.
+    //
+    {
+      MutableBuffer art_buffer{dst_remaining.data(), art_builder.get_packed_size()};
+      dst_remaining += art_buffer.size();
+
+      BATT_ASSIGN_OK_RESULT(const artc::packed::NodeBase* art_root,
+                            art_builder.build(art_buffer));
+
+      leaf_header->art_block_index.reset_unsafe(art_root);
+    }
+
+    break;
   }
 
   const usize block_count = block_stats.size();
-
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-  // Pack `block_starting_item` array.
-  //
-  {
-    const usize block_starting_item_array_size =
-        sizeof(llfs::PackedArray<little_u32>) + sizeof(little_u32) * (block_count + 1);
-
-    auto* block_starting_item = static_cast<llfs::PackedArray<little_u32>*>(dst_remaining.data());
-    dst_remaining += block_starting_item_array_size;
-
-    block_starting_item->initialize(block_count + 1);
-
-    little_u32* block_start = block_starting_item->data();
-    u32 item_i = 0;
-    for (const PackedLeafBlockStats& stats : block_stats) {
-      *block_start = item_i;
-      item_i += stats.item_count;
-      ++block_start;
-    }
-    *block_start = items_packed;
-
-    leaf_header->block_starting_item.reset_unsafe(block_starting_item);
-  }
-
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-  // Pack the ART.
-  //
-  {
-    batt::StableStringStore string_store;
-
-    BATT_ASSIGN_OK_RESULT(auto art_builder,
-                          PackedARTBuilder::from_items(art_keys.begin(),
-                                                       art_keys.end(),
-                                                       BATT_OVERLOADS_OF(get_key),
-                                                       string_store));
-
-    MutableBuffer art_buffer{dst_remaining.data(), art_builder.get_packed_size()};
-    dst_remaining += art_buffer.size();
-
-    BATT_ASSIGN_OK_RESULT(const artc::packed::NodeBase* art_root, art_builder.build(art_buffer));
-
-    leaf_header->art_block_index.reset_unsafe(art_root);
-  }
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
   // Shift the remaining buffer forward so it aligns with the nearest block boundary.
@@ -402,6 +395,7 @@ PackedBlockedLeafPage::sharded_live_ranges(const BasicPiecewiseFilter<u32, Filte
   return ShardedLiveRanges<FilterModelT>{
       this->block_starting_item.get(),
       filter.live_subranges_of(subrange),
+      subrange,
   };
 }
 

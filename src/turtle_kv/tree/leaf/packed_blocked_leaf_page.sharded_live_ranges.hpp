@@ -32,7 +32,8 @@ class PackedBlockedLeafPage::ShardedLiveRanges
 
   explicit ShardedLiveRanges(
       const llfs::PackedArray<little_u32>* block_starts,
-      BasicPiecewiseFilter<u32, FilterModelT>::LiveSubranges&& filter_live_ranges) noexcept;
+      BasicPiecewiseFilter<u32, FilterModelT>::LiveSubranges&& filter_live_ranges,
+      const Interval<u32>& subrange) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -56,7 +57,7 @@ class PackedBlockedLeafPage::ShardedLiveRanges
   usize block_index_;
   BasicPiecewiseFilter<u32, FilterModelT>::LiveSubranges filter_live_ranges_;
   Interval<u32> current_range_;
-  bool is_first_ = true;
+  Interval<u32> subrange_;
 };
 
 }  // namespace turtle_kv
