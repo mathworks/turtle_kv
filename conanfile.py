@@ -97,10 +97,6 @@ class TurtleKvRecipe(ConanFile):
         self.requires("yaml-cpp/[>=0.9.0 <1]")
         self.requires("zlib/1.3.1", **OVERRIDE)
 
-        # boost/1.88.0 and ninja/1.13.2 depend (exactly) on libbacktrace/cci.20210118
-        #
-        self.requires("libbacktrace/[>=cci.20240730]", **OVERRIDE)
-
         if platform.system() == "Linux":
             if self.options.with_keyvcr:
                 self.requires("keyvcr/[>=0.2.2 <1]", **VISIBLE)
