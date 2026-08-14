@@ -59,8 +59,6 @@ using turtle_kv::ValueView;
 class PackedBlockedLeafPageTest : public ::testing::Test
 {
  public:
-  using StorageUnit = std::aligned_storage_t<4096, 4096>;
-
   static constexpr usize kLeafPageSize = 1 * kMiB;
   static constexpr usize kNumPrefixes = 1000;
   static constexpr usize kMinPrefixSize = 0;
@@ -151,6 +149,7 @@ class PackedBlockedLeafPageTest : public ::testing::Test
 
   StatusOr<const PackedBlockedLeafPage*> pack_leaf()
   {
+    using StorageUnit = std::aligned_storage_t<4096, 4096>;
     this->leaf_storage_.resize(kLeafPageSize / sizeof(StorageUnit));
     BATT_CHECK_EQ(sizeof(StorageUnit) * this->leaf_storage_.size(), kLeafPageSize);
 
@@ -177,6 +176,7 @@ class PackedBlockedLeafPageTest : public ::testing::Test
   std::vector<EditView> edits_;
 
  private:
+  using StorageUnit = std::aligned_storage_t<4096, 4096>;
   std::vector<StorageUnit> leaf_storage_;
 };
 
@@ -358,7 +358,6 @@ TEST_F(PackedBlockedLeafPageTest, ScanBlockedLeaf)
 {
   using turtle_kv::testing::InMemoryBlockLoader;
   using turtle_kv::scan_blocked_leaf;
-  using turtle_kv::PackedKeyValueSlotSlice;
 
   const usize kFirstSeed = 0;
   const usize kNumSeeds = 250;
@@ -419,32 +418,34 @@ TEST_F(PackedBlockedLeafPageTest, ScanBlockedLeaf)
         }
       }
 
-      // Run scan_blocked_leaf and collect results.
+      // Run scan_blocked_leaf and verify results.
       //
-      std::vector<std::pair<KeyView, ValueView>> actual;
+      usize actual_i = 0;
 
-      scan_blocked_leaf(&packed_leaf, &block_loader, leaf_filter, key_range)  //
-          | batt::seq::for_each([&](const StatusOr<PackedKeyValueSlotSlice>& status_or_slice) {
-              ASSERT_TRUE(status_or_slice.ok()) << BATT_INSPECT(status_or_slice.status());
-              std::visit(
-                  [&](const auto& s) {
-                    for (const auto& slot : s) {
-                      actual.emplace_back(get_key(slot), get_value(slot));
-                    }
-                  },
-                  *status_or_slice);
-            });
+      auto scan_seq = scan_blocked_leaf(&packed_leaf, &block_loader, leaf_filter, key_range)
+                    | batt::seq::status_ok();
 
-      ASSERT_EQ(actual.size(), expected.size())
+      for (;;) {
+        auto slice = scan_seq.next();
+        if (!slice) {
+          break;
+        }
+        for (const auto& slot : *slice) {
+          ASSERT_LT(actual_i, expected.size())
+              << BATT_INSPECT(seed) << BATT_INSPECT(trial);
+          ASSERT_EQ(get_key(slot), expected[actual_i].first)
+              << BATT_INSPECT(seed) << BATT_INSPECT(trial) << BATT_INSPECT(actual_i);
+          ASSERT_EQ(get_value(slot), expected[actual_i].second)
+              << BATT_INSPECT(seed) << BATT_INSPECT(trial) << BATT_INSPECT(actual_i);
+          ++actual_i;
+        }
+      }
+
+      ASSERT_TRUE(scan_seq.status().ok()) << BATT_INSPECT(scan_seq.status());
+
+      ASSERT_EQ(actual_i, expected.size())
           << BATT_INSPECT(seed) << BATT_INSPECT(trial) << BATT_INSPECT(drop_count)
           << BATT_INSPECT(lower_key) << BATT_INSPECT(upper_key);
-
-      for (usize i = 0; i < expected.size(); ++i) {
-        ASSERT_EQ(actual[i].first, expected[i].first)
-            << BATT_INSPECT(seed) << BATT_INSPECT(trial) << BATT_INSPECT(i);
-        ASSERT_EQ(actual[i].second, expected[i].second)
-            << BATT_INSPECT(seed) << BATT_INSPECT(trial) << BATT_INSPECT(i);
-      }
     }
   }
 }

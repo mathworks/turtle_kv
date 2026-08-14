@@ -14,7 +14,7 @@
 #include "packed_blocked_leaf_page.sharded_live_ranges.ipp"
 
 #include <turtle_kv/config.hpp>
-#include <turtle_kv/core/packed_key_value_slot_slice.hpp>
+#include <turtle_kv/core/packed_key_value_slot.hpp>
 #include <turtle_kv/util/page_slice_reader.hpp>
 #include <turtle_kv/util/piecewise_filter.hpp>
 
@@ -25,7 +25,6 @@ namespace turtle_kv {
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <PiecewiseFilterStorageModel<u32> FilterModelT, typename BlockLoaderT>
-/*BoxedSeq<PackedKeyValueSlotSlice>*/
 auto scan_blocked_leaf(const PackedBlockedLeafPage* packed_leaf,
                        BlockLoaderT* block_loader,
                        const BasicPiecewiseFilter<u32, FilterModelT>& filter,
@@ -41,7 +40,7 @@ auto scan_blocked_leaf(const PackedBlockedLeafPage* packed_leaf,
          batt::seq::filter_map(
              [packed_leaf, block_loader, key_range](
                  const typename PackedBlockedLeafPage::ShardedLiveRanges<FilterModelT>::Item& item)
-                 -> Optional<StatusOr<PackedKeyValueSlotSlice>> {
+                 -> Optional<StatusOr<Slice<const PackedKeyValueSlotPtr>>> {
                if (item.live_item_range.empty()) {
                  return None;
                }
@@ -51,15 +50,14 @@ auto scan_blocked_leaf(const PackedBlockedLeafPage* packed_leaf,
                  return block.status();
                }
 
-               PackedKeyValueSlotSlice slice =
+               Slice<const PackedKeyValueSlotPtr> slice = std::get<Slice<const PackedKeyValueSlotPtr>>(
                    packed_leaf->get_slice_within_block(item.block_index,
                                                        *block,
-                                                       item.live_item_range);
+                                                       item.live_item_range));
 
                if (item.is_first || item.is_last) {
-                 auto& ptr_slice = std::get<Slice<const PackedKeyValueSlotPtr>>(slice);
-                 const auto* begin = ptr_slice.begin();
-                 const auto* end = ptr_slice.end();
+                 const auto* begin = slice.begin();
+                 const auto* end = slice.end();
 
                  if (item.is_first) {
                    begin =
@@ -83,7 +81,7 @@ auto scan_blocked_leaf(const PackedBlockedLeafPage* packed_leaf,
                  if (begin == end) {
                    return None;
                  }
-                 slice = PackedKeyValueSlotSlice{as_slice(begin, end)};
+                 slice = as_slice(begin, end);
                }
 
                return slice;
