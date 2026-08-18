@@ -490,7 +490,7 @@ class BasicMemTable<StorageT, AllocationTrackerT>::PerOpStorageContext
 
       // One thread will acquire a lock, others will block at this point.
       //
-      absl::MutexLock lock{&this->mem_table_.block_list_mutex_};
+      absl::MutexLock lock{this->mem_table_.block_list_mutex_};
 
       // If there are no block buffers attached to the MemTable, then we may just have to wait until
       // the checkpoint update pipeline catches up.  If there are block buffers attached, then its

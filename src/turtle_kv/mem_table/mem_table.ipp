@@ -395,7 +395,7 @@ void BasicMemTable<StorageT, AllocationTrackerT>::handle_external_cache_alloc(i6
         this->allocation_tracker_.allocate_external(cache_alloc_delta, overcommit);
 
     {
-      absl::MutexLock lock{&this->block_list_mutex_};
+      absl::MutexLock lock{this->block_list_mutex_};
       BATT_CHECK(this->cache_alloc_in_progress_);
       this->total_cache_alloc_.subsume(std::move(alloc));
       this->cache_alloc_in_progress_ = false;
@@ -417,7 +417,7 @@ void BasicMemTable<StorageT, AllocationTrackerT>::handle_external_cache_alloc(i6
   } else if (cache_alloc_delta < 0) {
     StatusOr<typename AllocationTracker::ExternalAllocation> alloc_to_release;
     {
-      absl::MutexLock lock{&this->block_list_mutex_};
+      absl::MutexLock lock{this->block_list_mutex_};
       BATT_CHECK(this->cache_alloc_in_progress_);
       alloc_to_release = this->total_cache_alloc_.split(-cache_alloc_delta);
       this->cache_alloc_in_progress_ = false;

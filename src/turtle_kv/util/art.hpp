@@ -948,7 +948,7 @@ class ARTBase
     ~MemoryContext() noexcept
     {
       if (this->art_) {
-        absl::MutexLock lock{&this->art_->mutex_};
+        absl::MutexLock lock{this->art_->mutex_};
         for (auto& p_ex : this->thread_extents_) {
           this->art_->extents_.emplace_back(std::move(p_ex));
         }
