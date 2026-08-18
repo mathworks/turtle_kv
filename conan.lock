@@ -2,7 +2,6 @@
     "version": "0.5",
     "requires": [
         "abseil/20260107.1",
-        "artc/0.2.1",
         "batteries/0.72.0",
         "boost/1.88.0",
         "bzip2/1.0.8",

@@ -34,7 +34,6 @@ endif ()
 target_link_libraries(
   turtle_kv
   PUBLIC
-  artc::artc
   abseil::abseil
   batteries::batteries
   boost::boost
