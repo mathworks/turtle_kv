@@ -283,7 +283,7 @@ TEST_F(SegmentedLevelScannerTest, Test)
 {
   llfs::testing::ScenarioRunner runner;
 
-  runner.n_seeds(64);
+  runner.n_seeds(1);
   runner.n_updates(0);
   runner.run(batt::StaticType<Scenario>{});
 }

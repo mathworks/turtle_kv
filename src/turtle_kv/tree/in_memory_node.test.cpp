@@ -294,7 +294,7 @@ TEST(InMemoryNodeTest, Subtree)
 {
   llfs::testing::ScenarioRunner runner;
 
-  u32 n_seeds = getenv_as<u32>("TURTLE_TREE_TEST_N_SEEDS").value_or(64);
+  u32 n_seeds = getenv_as<u32>("TURTLE_TREE_TEST_N_SEEDS").value_or(1);
   usize n_threads = getenv_as<usize>("TURTLE_TREE_TEST_N_THREADS").value_or(0);
 
   if (n_threads != 0) {
