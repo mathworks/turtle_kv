@@ -28,8 +28,6 @@
 #include <turtle_kv/tree/sharded_level_scanner.hpp>
 #include <turtle_kv/tree/storage_config.hpp>
 
-#include <turtle_kv/util/memory_stats.hpp>
-
 #include <turtle_kv/import/constants.hpp>
 #include <turtle_kv/import/env.hpp>
 
@@ -423,7 +421,7 @@ u64 query_page_loader_reset_every_n()
       this->tree_options_,
       this->page_cache(),
       batt::make_copy(this->filter_page_write_state_),
-      batt::Toggle<State>::Reader{this->state_}->base_checkpoint_->clone(),
+      batt::Toggle<State>::Reader { this->state_ } -> base_checkpoint_->clone(),
       *this->checkpoint_volume_);
 
   this->tree_options_.set_trie_index_reserve_size(this->tree_options_.trie_index_reserve_size());
@@ -727,7 +725,6 @@ StatusOr<EditOffset> KVStore::put(const KeyView& key,
 
   return Status{batt::StatusCode::kUnavailable};
 }
-
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
@@ -1351,10 +1348,10 @@ using CheckpointEvent = llfs::PackedVariant<turtle_kv::PackedCheckpoint>;
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status KVStore::sync(Optional<EditOffset> upper_bound, Optional<WriteOptions> write_options) noexcept
+Status KVStore::sync(Optional<EditOffset> upper_bound,
+                     Optional<WriteOptions> write_options) noexcept
 {
-  EditOffset target =
-      upper_bound ? *upper_bound : this->change_log_writer_->next_edit_offset();
+  EditOffset target = upper_bound ? *upper_bound : this->change_log_writer_->next_edit_offset();
 
   bool urgent = write_options && write_options->urgent_sync ? true : false;
 
@@ -1400,9 +1397,9 @@ void KVStore::mem_table_batch_scanner_thread_main()
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename Fn>
-  requires std::invocable<Fn, std::unique_ptr<DeltaBatch>>
-Status KVStore::scan_mem_table_to_build_batches(boost::intrusive_ptr<MemTable>&& mem_table,
-                                                Fn&& consume_fn)
+requires std::invocable<Fn, std::unique_ptr<DeltaBatch>> Status
+KVStore::scan_mem_table_to_build_batches(boost::intrusive_ptr<MemTable>&& mem_table,
+                                         Fn&& consume_fn)
 {
   MemTable::BatchCompactor batch_compactor{*mem_table,
                                            /*byte_size_limit=*/this->tree_options_.flush_size()};
