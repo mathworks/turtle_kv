@@ -270,8 +270,8 @@ StatusOr<PiecewiseFilter<u32>> PackedNodePage::create_piecewise_filter(usize lev
     if (filter_data.values.empty()) {
       // Entire segment is live.
       //
-      live_ranges.emplace_back(
-          Interval<u32>{PiecewiseFilter<u32>::kMinLowerBound, PiecewiseFilter<u32>::kMaxUpperBound});
+      live_ranges.emplace_back(Interval<u32>{PiecewiseFilter<u32>::kMinLowerBound,
+                                             PiecewiseFilter<u32>::kMaxUpperBound});
     } else {
       live_ranges.emplace_back(
           Interval<u32>{PiecewiseFilter<u32>::kMinLowerBound, filter_data.values[i].value()});

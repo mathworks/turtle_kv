@@ -5,7 +5,7 @@
 
 namespace turtle_kv {
 
-TURTLE_KV_ENV_PARAM(bool, turtlekv_use_sharded_leaf_scanner, false);
+TURTLE_KV_ENV_PARAM(bool, turtlekv_use_sharded_leaf_scanner, true);
 
 namespace {
 
