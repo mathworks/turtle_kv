@@ -75,11 +75,11 @@ StatusOr<PackedLeafResult> pack_blocked_leaf_page(const usize block_size,
       // n is the number of blocks if we add one more block to our current total.
       //
       const usize n = block_stats.size() + 1;
-      
+
       // array_size is the precomputed fixed_array_overhead + the size of n total block entries.
       //
       const usize array_size = fixed_array_overhead + n * sizeof(little_u32);
-      
+
       const usize blocks_data_size = n * block_size;
       const usize alignment_waste = block_size - 1;
 
@@ -174,8 +174,7 @@ StatusOr<PackedLeafResult> pack_blocked_leaf_page(const usize block_size,
       const usize block_starting_item_array_size =
           sizeof(llfs::PackedArray<little_u32>) + sizeof(little_u32) * (block_count + 1);
 
-      auto* block_starting_item =
-          static_cast<llfs::PackedArray<little_u32>*>(dst_remaining.data());
+      auto* block_starting_item = static_cast<llfs::PackedArray<little_u32>*>(dst_remaining.data());
       dst_remaining += block_starting_item_array_size;
 
       block_starting_item->initialize(block_count + 1);
@@ -198,8 +197,7 @@ StatusOr<PackedLeafResult> pack_blocked_leaf_page(const usize block_size,
       MutableBuffer art_buffer{dst_remaining.data(), art_builder.get_packed_size()};
       dst_remaining += art_buffer.size();
 
-      BATT_ASSIGN_OK_RESULT(const artc::packed::NodeBase* art_root,
-                            art_builder.build(art_buffer));
+      BATT_ASSIGN_OK_RESULT(const artc::packed::NodeBase* art_root, art_builder.build(art_buffer));
 
       leaf_header->art_block_index.reset_unsafe(art_root);
     }
@@ -352,7 +350,7 @@ inline PackedBlockedLeafPage::ItemIterator PackedBlockedLeafPage::lower_bound(
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-inline Interval<u32> PackedBlockedLeafPage::get_block_aligned_index_range_for_key_range(
+inline Interval<LeafItemIndex> PackedBlockedLeafPage::get_block_aligned_index_range_for_key_range(
     const Interval<KeyView>& key_range) const noexcept
 {
   const usize first_block = this->find_block_index_containing_key(key_range.lower_bound);
@@ -360,18 +358,18 @@ inline Interval<u32> PackedBlockedLeafPage::get_block_aligned_index_range_for_ke
 
   BATT_CHECK_LE(first_block, last_block);
 
-  const u32 range_begin = (*this->block_starting_item)[first_block].value();
-  const u32 range_end = (*this->block_starting_item)[last_block + 1].value();
+  const LeafItemIndex range_begin{(*this->block_starting_item)[first_block].value()};
+  const LeafItemIndex range_end{(*this->block_starting_item)[last_block + 1].value()};
 
-  return Interval<u32>{range_begin, range_end};
+  return Interval<LeafItemIndex>{range_begin, range_end};
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-inline PackedKeyValueSlotSlice PackedBlockedLeafPage::get_slice_within_block(
+inline Slice<const PackedKeyValueSlotPtr> PackedBlockedLeafPage::get_slice_within_block(
     u32 block_index,
     const PackedLeafBlock* block,
-    const Interval<u32>& live_item_range) const noexcept
+    const Interval<LeafItemIndex>& live_item_range) const noexcept
 {
   BATT_CHECK_LT(block_index, this->block_count());
 
@@ -381,8 +379,7 @@ inline PackedKeyValueSlotSlice PackedBlockedLeafPage::get_slice_within_block(
 
   BATT_CHECK_LE(local_end, block->item_count());
 
-  return PackedKeyValueSlotSlice{as_slice(block->items_begin() + local_begin,
-                                          block->items_begin() + local_end)};
+  return as_slice(block->items_begin() + local_begin, block->items_begin() + local_end);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -390,11 +387,12 @@ inline PackedKeyValueSlotSlice PackedBlockedLeafPage::get_slice_within_block(
 template <PiecewiseFilterStorageModel<u32> FilterModelT>
 inline PackedBlockedLeafPage::ShardedLiveRanges<FilterModelT>
 PackedBlockedLeafPage::sharded_live_ranges(const BasicPiecewiseFilter<u32, FilterModelT>& filter,
-                                           const Interval<u32>& subrange) const noexcept
+                                           const Interval<LeafItemIndex>& subrange) const noexcept
 {
   return ShardedLiveRanges<FilterModelT>{
       this->block_starting_item.get(),
-      filter.live_subranges_of(subrange),
+      filter.live_subranges_of(
+          Interval<u32>{subrange.lower_bound.value(), subrange.upper_bound.value()}),
       subrange,
   };
 }

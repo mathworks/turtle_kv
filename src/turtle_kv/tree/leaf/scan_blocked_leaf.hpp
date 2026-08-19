@@ -32,10 +32,10 @@ auto scan_blocked_leaf(const PackedBlockedLeafPage* packed_leaf,
 {
   BATT_CHECK_NOT_NULLPTR(packed_leaf);
 
-  const Interval<u32> index_range =
+  const Interval<LeafItemIndex> aligned_index_range =
       packed_leaf->get_block_aligned_index_range_for_key_range(key_range);
 
-  return packed_leaf->sharded_live_ranges(filter, index_range)  //
+  return packed_leaf->sharded_live_ranges(filter, aligned_index_range)  //
          |
          batt::seq::filter_map(
              [packed_leaf, block_loader, key_range](
@@ -50,32 +50,20 @@ auto scan_blocked_leaf(const PackedBlockedLeafPage* packed_leaf,
                  return block.status();
                }
 
-               Slice<const PackedKeyValueSlotPtr> slice = std::get<Slice<const PackedKeyValueSlotPtr>>(
+               Slice<const PackedKeyValueSlotPtr> slice =
                    packed_leaf->get_slice_within_block(item.block_index,
                                                        *block,
-                                                       item.live_item_range));
+                                                       item.live_item_range);
 
-               if (item.is_first || item.is_last) {
+               if (item.is_first_block || item.is_last_block) {
                  const auto* begin = slice.begin();
                  const auto* end = slice.end();
 
-                 if (item.is_first) {
-                   begin =
-                       std::lower_bound(begin,
-                                        end,
-                                        key_range.lower_bound,
-                                        [](const PackedKeyValueSlotPtr& slot, const KeyView& key) {
-                                          return get_key(slot) < key;
-                                        });
+                 if (item.is_first_block) {
+                   begin = std::lower_bound(begin, end, key_range.lower_bound, llfs::KeyOrder{});
                  }
-                 if (item.is_last) {
-                   end =
-                       std::lower_bound(begin,
-                                        end,
-                                        key_range.upper_bound,
-                                        [](const PackedKeyValueSlotPtr& slot, const KeyView& key) {
-                                          return get_key(slot) < key;
-                                        });
+                 if (item.is_last_block) {
+                   end = std::lower_bound(begin, end, key_range.upper_bound, llfs::KeyOrder{});
                  }
 
                  if (begin == end) {

@@ -53,6 +53,12 @@ class BlockedLeafPageLoader
   StatusOr<const PackedLeafBlock*> load_block(u32 block_index) noexcept;
 
  private:
+  static constexpr usize kCacheSlots = 256;
+
+  struct CacheSlot {
+    u32 tag;
+    ConstBuffer buffer;
+  };
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -63,7 +69,7 @@ class BlockedLeafPageLoader
 
   llfs::PageId page_id_;
   const PackedBlockedLeafPage* leaf_ = nullptr;
-  SmallVec<ConstBuffer, 256> cache_;
+  SmallVec<CacheSlot, kCacheSlots> cache_;
 };
 
 }  // namespace turtle_kv

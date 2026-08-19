@@ -15,9 +15,9 @@
 
 #include <turtle_kv/tree/leaf/packed_blocked_leaf_page.ipp>
 #include <turtle_kv/tree/leaf/packed_blocked_leaf_page.item_iterator.hpp>
-#include <turtle_kv/tree/leaf/scan_blocked_leaf.hpp>
 #include <turtle_kv/tree/leaf/packed_blocked_leaf_page.sharded_live_ranges.hpp>
 #include <turtle_kv/tree/leaf/packed_blocked_leaf_page.sharded_live_ranges.ipp>
+#include <turtle_kv/tree/leaf/scan_blocked_leaf.hpp>
 #include <turtle_kv/tree/random_str.hpp>
 #include <turtle_kv/tree/testing/in_memory_block_loader.hpp>
 
@@ -46,6 +46,7 @@ using turtle_kv::EditView;
 using turtle_kv::Interval;
 using turtle_kv::KeyOrder;
 using turtle_kv::KeyView;
+using turtle_kv::LeafItemIndex;
 using turtle_kv::Optional;
 using turtle_kv::pack_blocked_leaf_page;
 using turtle_kv::PackedBlockedLeafPage;
@@ -155,7 +156,8 @@ class PackedBlockedLeafPageTest : public ::testing::Test
 
     MutableBuffer leaf_buffer{this->leaf_storage_.data(), kLeafPageSize};
 
-    BATT_ASSIGN_OK_RESULT(auto result, pack_blocked_leaf_page(kBlockSize, this->edits_, leaf_buffer));
+    BATT_ASSIGN_OK_RESULT(auto result,
+                          pack_blocked_leaf_page(kBlockSize, this->edits_, leaf_buffer));
 
     if (result.items_packed != this->edits_.size()) {
       return {batt::StatusCode::kInternal};
@@ -319,7 +321,8 @@ TEST_F(PackedBlockedLeafPageTest, Random)
           u32 next_possible_live = 0;
           u32 next_possible_block = 0;
 
-          packed_leaf.sharded_live_ranges(leaf_filter, Interval<u32>{0, item_count}) |
+          packed_leaf.sharded_live_ranges(leaf_filter,
+                                          Interval<LeafItemIndex>{LeafItemIndex{0}, LeafItemIndex{item_count}}) |
               batt::seq::for_each([&](const auto& item) {
                 const auto& block_index = item.block_index;
                 const auto& live_range = item.live_item_range;
@@ -356,8 +359,8 @@ TEST_F(PackedBlockedLeafPageTest, Random)
 //
 TEST_F(PackedBlockedLeafPageTest, ScanBlockedLeaf)
 {
-  using turtle_kv::testing::InMemoryBlockLoader;
   using turtle_kv::scan_blocked_leaf;
+  using turtle_kv::testing::InMemoryBlockLoader;
 
   const usize kFirstSeed = 0;
   const usize kNumSeeds = 250;
@@ -422,8 +425,8 @@ TEST_F(PackedBlockedLeafPageTest, ScanBlockedLeaf)
       //
       usize actual_i = 0;
 
-      auto scan_seq = scan_blocked_leaf(&packed_leaf, &block_loader, leaf_filter, key_range)
-                    | batt::seq::status_ok();
+      auto scan_seq = scan_blocked_leaf(&packed_leaf, &block_loader, leaf_filter, key_range) |
+                      batt::seq::status_ok();
 
       for (;;) {
         auto slice = scan_seq.next();
@@ -431,11 +434,10 @@ TEST_F(PackedBlockedLeafPageTest, ScanBlockedLeaf)
           break;
         }
         for (const auto& slot : *slice) {
-          ASSERT_LT(actual_i, expected.size())
-              << BATT_INSPECT(seed) << BATT_INSPECT(trial);
-          ASSERT_EQ(get_key(slot), expected[actual_i].first)
+          ASSERT_LT(actual_i, expected.size()) << BATT_INSPECT(seed) << BATT_INSPECT(trial);
+          ASSERT_EQ(turtle_kv::get_key(slot), expected[actual_i].first)
               << BATT_INSPECT(seed) << BATT_INSPECT(trial) << BATT_INSPECT(actual_i);
-          ASSERT_EQ(get_value(slot), expected[actual_i].second)
+          ASSERT_EQ(turtle_kv::get_value(slot), expected[actual_i].second)
               << BATT_INSPECT(seed) << BATT_INSPECT(trial) << BATT_INSPECT(actual_i);
           ++actual_i;
         }

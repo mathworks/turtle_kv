@@ -23,9 +23,9 @@ class PackedBlockedLeafPage::ShardedLiveRanges
  public:
   struct Item {
     u32 block_index;
-    Interval<u32> live_item_range;
-    bool is_first;
-    bool is_last;
+    Interval<LeafItemIndex> live_item_range;
+    bool is_first_block;
+    bool is_last_block;
   };
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -33,7 +33,7 @@ class PackedBlockedLeafPage::ShardedLiveRanges
   explicit ShardedLiveRanges(
       const llfs::PackedArray<little_u32>* block_starts,
       BasicPiecewiseFilter<u32, FilterModelT>::LiveSubranges&& filter_live_ranges,
-      const Interval<u32>& subrange) noexcept;
+      const Interval<LeafItemIndex>& subrange) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -57,7 +57,7 @@ class PackedBlockedLeafPage::ShardedLiveRanges
   usize block_index_;
   BasicPiecewiseFilter<u32, FilterModelT>::LiveSubranges filter_live_ranges_;
   Interval<u32> current_range_;
-  Interval<u32> subrange_;
+  Interval<LeafItemIndex> subrange_;
 };
 
 }  // namespace turtle_kv

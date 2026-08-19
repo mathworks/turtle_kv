@@ -19,7 +19,7 @@ template <PiecewiseFilterStorageModel<u32> FilterModelT>
 inline /*explicit*/ PackedBlockedLeafPage::ShardedLiveRanges<FilterModelT>::ShardedLiveRanges(
     const llfs::PackedArray<little_u32>* block_starts,
     BasicPiecewiseFilter<u32, FilterModelT>::LiveSubranges&& filter_live_ranges,
-    const Interval<u32>& subrange) noexcept
+    const Interval<LeafItemIndex>& subrange) noexcept
     : block_starts_{block_starts}
     , block_index_{0}
     , filter_live_ranges_{std::move(filter_live_ranges)}
@@ -38,9 +38,10 @@ inline auto PackedBlockedLeafPage::ShardedLiveRanges<FilterModelT>::peek() -> Op
     return None;
   }
   return Item{BATT_CHECKED_CAST(u32, this->block_index_),
-              this->current_range_,
-              (*this->block_starts_)[this->block_index_] == this->subrange_.lower_bound,
-              (*this->block_starts_)[this->block_index_ + 1] == this->subrange_.upper_bound};
+              Interval<LeafItemIndex>{LeafItemIndex{this->current_range_.lower_bound},
+                                     LeafItemIndex{this->current_range_.upper_bound}},
+              (*this->block_starts_)[this->block_index_].value() == this->subrange_.lower_bound.value(),
+              (*this->block_starts_)[this->block_index_ + 1].value() == this->subrange_.upper_bound.value()};
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

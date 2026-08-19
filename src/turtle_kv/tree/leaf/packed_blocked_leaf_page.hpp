@@ -32,12 +32,15 @@
 #include <batteries/bit_ops/bit_count.hpp>
 #include <batteries/seq/flatten.hpp>
 #include <batteries/seq/map.hpp>
+#include <batteries/strong_typedef.hpp>
 
 #include <boost/range/irange.hpp>
 
 #include <ranges>
 
 namespace turtle_kv {
+
+BATT_STRONG_TYPEDEF(u32, LeafItemIndex);
 
 // Forward-declaration.
 //
@@ -292,14 +295,15 @@ struct PackedBlockedLeafPage  //
   template <PiecewiseFilterStorageModel<u32> FilterModelT>
   ShardedLiveRanges<FilterModelT> sharded_live_ranges(
       const BasicPiecewiseFilter<u32, FilterModelT>& filter,
-      const Interval<u32>& subrange) const noexcept;
+      const Interval<LeafItemIndex>& subrange) const noexcept;
 
-  Interval<u32> get_block_aligned_index_range_for_key_range(
+  Interval<LeafItemIndex> get_block_aligned_index_range_for_key_range(
       const Interval<KeyView>& key_range) const noexcept;
 
-  PackedKeyValueSlotSlice get_slice_within_block(u32 block_index,
-                                                 const PackedLeafBlock* block,
-                                                 const Interval<u32>& live_item_range) const noexcept;
+  Slice<const PackedKeyValueSlotPtr> get_slice_within_block(
+      u32 block_index,
+      const PackedLeafBlock* block,
+      const Interval<LeafItemIndex>& live_item_range) const noexcept;
 };
 
 static_assert(sizeof(PackedBlockedLeafPage) == 32);

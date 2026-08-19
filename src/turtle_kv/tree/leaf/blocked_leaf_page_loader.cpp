@@ -35,17 +35,17 @@ StatusOr<const PackedBlockedLeafPage*> BlockedLeafPageLoader::set_page(
   this->leaf_ = nullptr;
   this->cache_.clear();
 
-  PageSliceReader slice_reader{this->page_loader_, page_id,
+  PageSliceReader slice_reader{this->page_loader_,
+                               page_id,
                                llfs::PageSize{BATT_CHECKED_CAST(i32, this->block_size_)}};
 
   // Load the first shard to read the fixed header fields.
   //
-  BATT_ASSIGN_OK_RESULT(
-      ConstBuffer header_buffer,
-      slice_reader.read_slice(Interval<usize>{0, this->block_size_},
-                              this->slice_storage_,
-                              this->pin_page_to_job_,
-                              llfs::LruPriority{kTrieIndexLruPriority}));
+  BATT_ASSIGN_OK_RESULT(ConstBuffer header_buffer,
+                        slice_reader.read_slice(Interval<usize>{0, this->block_size_},
+                                                this->slice_storage_,
+                                                this->pin_page_to_job_,
+                                                llfs::LruPriority{kTrieIndexLruPriority}));
 
   this->leaf_ = &PackedBlockedLeafPage::view_of(header_buffer);
 
@@ -54,17 +54,16 @@ StatusOr<const PackedBlockedLeafPage*> BlockedLeafPageLoader::set_page(
   const usize header_size = this->leaf_->min_header_shard_size();
 
   if (header_size > this->block_size_) {
-    BATT_ASSIGN_OK_RESULT(
-        header_buffer,
-        slice_reader.read_slice(Interval<usize>{0, header_size},
-                                this->slice_storage_,
-                                this->pin_page_to_job_,
-                                llfs::LruPriority{kTrieIndexLruPriority}));
+    BATT_ASSIGN_OK_RESULT(header_buffer,
+                          slice_reader.read_slice(Interval<usize>{0, header_size},
+                                                  this->slice_storage_,
+                                                  this->pin_page_to_job_,
+                                                  llfs::LruPriority{kTrieIndexLruPriority}));
 
     this->leaf_ = &PackedBlockedLeafPage::view_of(header_buffer);
   }
 
-  this->cache_.assign(this->leaf_->block_count(), ConstBuffer{});
+  this->cache_.assign(kCacheSlots, CacheSlot{0, ConstBuffer{}});
 
   return this->leaf_;
 }
@@ -74,10 +73,13 @@ StatusOr<const PackedBlockedLeafPage*> BlockedLeafPageLoader::set_page(
 StatusOr<const PackedLeafBlock*> BlockedLeafPageLoader::load_block(u32 block_index) noexcept
 {
   BATT_CHECK_NE(this->leaf_, nullptr);
-  BATT_CHECK_LT(block_index, this->cache_.size());
+  BATT_CHECK_LT(block_index, this->leaf_->block_count());
 
-  if (this->cache_[block_index].data()) {
-    return &PackedLeafBlock::view_of(this->cache_[block_index]);
+  const u32 slot = block_index % kCacheSlots;
+  const u32 tag = block_index / kCacheSlots;
+
+  if (this->cache_[slot].buffer.data() && this->cache_[slot].tag == tag) {
+    return &PackedLeafBlock::view_of(this->cache_[slot].buffer);
   }
 
   llfs::PageCache& page_cache = *this->page_loader_.page_cache();
@@ -104,7 +106,7 @@ StatusOr<const PackedLeafBlock*> BlockedLeafPageLoader::load_block(u32 block_ind
   }
 
   ConstBuffer block_buffer{existing->raw_data(), this->block_size_};
-  this->cache_[block_index] = block_buffer;
+  this->cache_[slot] = CacheSlot{tag, block_buffer};
 
   return &PackedLeafBlock::view_of(block_buffer);
 }
