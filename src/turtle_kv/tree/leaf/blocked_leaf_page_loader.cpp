@@ -10,6 +10,10 @@
 
 #include "packed_leaf_block.ipp"
 
+#include <turtle_kv/import/buffer.hpp>
+
+#include <llfs/packed_page_header.hpp>
+
 namespace turtle_kv {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -47,7 +51,9 @@ StatusOr<const PackedBlockedLeafPage*> BlockedLeafPageLoader::set_page(
                                                 this->pin_page_to_job_,
                                                 llfs::LruPriority{kTrieIndexLruPriority}));
 
-  this->leaf_ = &PackedBlockedLeafPage::view_of(header_buffer);
+  this->leaf_ = static_cast<const PackedBlockedLeafPage*>(
+      advance_pointer(header_buffer.data(), sizeof(llfs::PackedPageHeader)));
+  BATT_CHECK_EQ(this->leaf_->magic, PackedBlockedLeafPage::kMagic);
 
   // Load the full header (block_starting_item + ART) as a contiguous buffer.
   //
@@ -60,7 +66,9 @@ StatusOr<const PackedBlockedLeafPage*> BlockedLeafPageLoader::set_page(
                                                   this->pin_page_to_job_,
                                                   llfs::LruPriority{kTrieIndexLruPriority}));
 
-    this->leaf_ = &PackedBlockedLeafPage::view_of(header_buffer);
+    this->leaf_ = static_cast<const PackedBlockedLeafPage*>(
+        advance_pointer(header_buffer.data(), sizeof(llfs::PackedPageHeader)));
+    BATT_CHECK_EQ(this->leaf_->magic, PackedBlockedLeafPage::kMagic);
   }
 
   this->cache_.assign(kCacheSlots, CacheSlot{0, ConstBuffer{}});

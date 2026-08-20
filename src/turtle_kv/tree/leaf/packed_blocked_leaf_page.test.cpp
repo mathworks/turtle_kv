@@ -19,11 +19,12 @@
 #include <turtle_kv/tree/leaf/packed_blocked_leaf_page.sharded_live_ranges.ipp>
 #include <turtle_kv/tree/leaf/scan_blocked_leaf.hpp>
 #include <turtle_kv/tree/random_str.hpp>
-#include <turtle_kv/tree/testing/in_memory_block_loader.hpp>
+#include <turtle_kv/tree/testing/fake_blocked_leaf_page_loader.hpp>
 
 #include <turtle_kv/util/piecewise_filter.ipp>
 #include <turtle_kv/util/piecewise_filter.test.hpp>
 
+#include <turtle_kv/import/buffer.hpp>
 #include <turtle_kv/import/constants.hpp>
 
 #include <batteries/bit_ops/bit_count.hpp>
@@ -42,6 +43,7 @@ using batt::MutableBuffer;
 using batt::StableStringStore;
 using batt::StatusOr;
 
+using turtle_kv::advance_pointer;
 using turtle_kv::EditView;
 using turtle_kv::Interval;
 using turtle_kv::KeyOrder;
@@ -163,7 +165,8 @@ class PackedBlockedLeafPageTest : public ::testing::Test
       return {batt::StatusCode::kInternal};
     }
 
-    return &PackedBlockedLeafPage::view_of(leaf_buffer);
+    return static_cast<const PackedBlockedLeafPage*>(
+        advance_pointer(leaf_buffer.data(), sizeof(llfs::PackedPageHeader)));
   }
 
   MutableBuffer leaf_buffer() const
@@ -360,7 +363,7 @@ TEST_F(PackedBlockedLeafPageTest, Random)
 TEST_F(PackedBlockedLeafPageTest, ScanBlockedLeaf)
 {
   using turtle_kv::scan_blocked_leaf;
-  using turtle_kv::testing::InMemoryBlockLoader;
+  using turtle_kv::testing::FakeBlockedLeafPageLoader;
 
   const usize kFirstSeed = 0;
   const usize kNumSeeds = 250;
@@ -382,7 +385,7 @@ TEST_F(PackedBlockedLeafPageTest, ScanBlockedLeaf)
     const auto& edits = this->edits_;
     const u32 item_count = packed_leaf.item_count();
 
-    InMemoryBlockLoader block_loader{&packed_leaf};
+    FakeBlockedLeafPageLoader block_loader{&packed_leaf};
 
     std::uniform_int_distribution<usize> pick_edit{0, edits.size() - 1};
 

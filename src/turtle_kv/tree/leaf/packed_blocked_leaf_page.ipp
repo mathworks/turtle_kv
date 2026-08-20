@@ -250,20 +250,6 @@ StatusOr<PackedLeafResult> pack_blocked_leaf_page(const usize block_size,
   return PackedLeafResult{leaf_header, items_packed};
 }
 
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-/*static*/ const PackedBlockedLeafPage& PackedBlockedLeafPage::view_of(
-    const ConstBuffer& buffer) noexcept
-{
-  BATT_CHECK_GT(buffer.size(), sizeof(PackedBlockedLeafPage) + sizeof(llfs::PackedPageHeader));
-
-  auto* packed = static_cast<const PackedBlockedLeafPage*>(
-      advance_pointer(buffer.data(), sizeof(llfs::PackedPageHeader)));
-
-  BATT_CHECK_EQ(packed->magic, PackedBlockedLeafPage::kMagic);
-
-  return *packed;
-}
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //

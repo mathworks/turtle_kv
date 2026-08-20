@@ -21,6 +21,8 @@
 
 #include <turtle_kv/import/int_types.hpp>
 
+#include <turtle_kv/util/page_buffers.hpp>
+
 #include <llfs/packed_array.hpp>
 #include <llfs/packed_page_header.hpp>
 #include <llfs/packed_pointer.hpp>
@@ -117,10 +119,19 @@ struct PackedBlockedLeafPage  //
                                  usize max_key_size,
                                  usize max_edit_size) noexcept;
 
-  /** \brief Returns the passed buffer's memory region, validated as a PackedBlockedLeafPage and
-   * cast to `const PackedBlockedLeafPage &`.
+  /** \brief Returns the passed object's payload region, validated as a PackedBlockedLeafPage.
    */
-  static const PackedBlockedLeafPage& view_of(const ConstBuffer& buffer) noexcept;
+  template <typename T>
+  static const PackedBlockedLeafPage* view_of(T&& t) noexcept
+  {
+    const ConstBuffer buffer = get_page_const_payload(BATT_FORWARD(t));
+    BATT_CHECK_GE(buffer.size(), sizeof(PackedBlockedLeafPage));
+
+    auto* packed = static_cast<const PackedBlockedLeafPage*>(buffer.data());
+    BATT_CHECK_EQ(packed->magic, kMagic);
+
+    return packed;
+  }
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -321,10 +332,12 @@ class PackedBlockedLeafPage::HeaderShardView
 
   static Self view_of(const ConstBuffer& buffer) noexcept
   {
-    const PackedBlockedLeafPage& leaf = PackedBlockedLeafPage::view_of(buffer);
-    BATT_CHECK_GE(buffer.size(), leaf.min_header_shard_size());
+    auto* leaf = static_cast<const PackedBlockedLeafPage*>(
+        advance_pointer(buffer.data(), sizeof(llfs::PackedPageHeader)));
+    BATT_CHECK_EQ(leaf->magic, PackedBlockedLeafPage::kMagic);
+    BATT_CHECK_GE(buffer.size(), leaf->min_header_shard_size());
 
-    return Self{leaf, buffer.size()};
+    return Self{*leaf, buffer.size()};
   }
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
