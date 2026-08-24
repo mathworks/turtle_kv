@@ -309,7 +309,7 @@ struct PackedBlockedLeafPage  //
       const Interval<LeafItemIndex>& subrange) const noexcept;
 
   Interval<LeafItemIndex> get_block_aligned_index_range_for_key_range(
-      const Interval<KeyView>& key_range) const noexcept;
+      KeyView lower_bound, Optional<KeyView> upper_bound = None) const noexcept;
 
   Slice<const PackedKeyValueSlotPtr> get_slice_within_block(
       u32 block_index,

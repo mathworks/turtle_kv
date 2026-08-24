@@ -428,7 +428,8 @@ TEST_F(PackedBlockedLeafPageTest, ScanBlockedLeaf)
       //
       usize actual_i = 0;
 
-      auto scan_seq = scan_blocked_leaf(&packed_leaf, &block_loader, leaf_filter, key_range) |
+      auto scan_seq = scan_blocked_leaf(&packed_leaf, &block_loader, leaf_filter,
+                                        key_range.lower_bound, key_range.upper_bound) |
                       batt::seq::status_ok();
 
       for (;;) {

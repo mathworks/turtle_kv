@@ -337,10 +337,12 @@ inline PackedBlockedLeafPage::ItemIterator PackedBlockedLeafPage::lower_bound(
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 inline Interval<LeafItemIndex> PackedBlockedLeafPage::get_block_aligned_index_range_for_key_range(
-    const Interval<KeyView>& key_range) const noexcept
+    KeyView lower_bound, Optional<KeyView> upper_bound) const noexcept
 {
-  const usize first_block = this->find_block_index_containing_key(key_range.lower_bound);
-  const usize last_block = this->find_block_index_containing_key(key_range.upper_bound);
+  const usize first_block = this->find_block_index_containing_key(lower_bound);
+  const usize last_block = upper_bound
+      ? this->find_block_index_containing_key(*upper_bound)
+      : this->block_count() - 1;
 
   BATT_CHECK_LE(first_block, last_block);
 
