@@ -85,4 +85,13 @@ inline usize packed_key_data_size(const KeyView& key)
   return key.size();
 }
 
+template <typename T>
+concept HasKeyView = requires(const T& obj) {
+  { get_key(obj) } -> std::convertible_to<const KeyView&>;
+};
+
+static_assert(HasKeyView<KeyView>);
+static_assert(HasKeyView<const char*>);
+static_assert(HasKeyView<std::string>);
+
 }  // namespace turtle_kv

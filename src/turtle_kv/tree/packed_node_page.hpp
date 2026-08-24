@@ -121,11 +121,6 @@ struct PackedNodePage {
   struct UpdateBuffer {
     struct SegmentedLevel;
 
-    struct SegmentFilterData {
-      Slice<const little_u32> values;
-      bool start_is_live;
-    };
-
     struct Segment {
       llfs::PackedPageId leaf_page_id;        // +8 -> 8
       PackedActivePivotsSet64 active_pivots;  // +8 -> 16
@@ -387,9 +382,7 @@ struct PackedNodePage {
 
   StatusOr<ValueView> find_key_in_level(usize level_i, KeyQuery& query, i32 key_pivot_i) const;
 
-  UpdateBuffer::SegmentFilterData get_segment_filter_values(usize level_i, usize segment_i) const;
-
-  StatusOr<PiecewiseFilter<u32>> create_piecewise_filter(usize level_i, usize segment_i) const;
+  PackedPiecewiseFilter get_packed_filter(usize level_i, usize segment_i) const;
 
   //----- --- -- -  -  -   -
 

@@ -404,4 +404,14 @@ inline bool decays_to_item(const ValueView& value)
   return false;
 }
 
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+
+template <typename T>
+concept HasValueView = requires(const T& obj) {
+  { get_value(obj) } -> std::convertible_to<const ValueView&>;
+};
+
+static_assert(HasValueView<ValueView>);
+
 }  // namespace turtle_kv

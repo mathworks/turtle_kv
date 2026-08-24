@@ -15,6 +15,8 @@
 #include <turtle_kv/core/key_view_range.hpp>
 #include <turtle_kv/core/value_view.hpp>
 
+#include <turtle_kv/util/piecewise_filter.ipp>
+
 #include <batteries/case_of.hpp>
 #include <batteries/require.hpp>
 
@@ -116,8 +118,8 @@ using PackedSegment = PackedUpdateBuffer::Segment;
         segment.page_id_slot = llfs::PageIdSlot::from_page_id(packed_segment.leaf_page_id.unpack());
         segment.active_pivots = packed_segment.active_pivots.unpack();
 
-        BATT_ASSIGN_OK_RESULT(segment.filter,
-                              packed_node.create_piecewise_filter(level_i, segment_i));
+        segment.filter =
+            PiecewiseFilter<u32>{packed_node.get_packed_filter(level_i, segment_i)};
 
         segment.check_invariants(__FILE__, __LINE__);
       }
