@@ -240,15 +240,19 @@ StatusOr<std::unique_ptr<CheckpointJob>> CheckpointGenerator::finalize_checkpoin
   checkpoint_job->edit_offset_upper_bound = edit_offset_upper_bound;
   checkpoint_job->batch_count = batch_count;
 
+  ActiveCheckpoints active_checkpoints{};
+  active_checkpoints.num_active_checkpoints = 1;
+  active_checkpoints.checkpoints[0] = PackedCheckpoint{
+      .edit_offset_upper_bound = this->base_checkpoint_.edit_offset_upper_bound().value(),
+      .new_tree_root = llfs::PackedPageId::from(this->base_checkpoint_.root_id()),
+  };
+
   checkpoint_job->packed_checkpoint.emplace(
-      llfs::PackAsVariant<CheckpointLogEvent, PackedCheckpoint>{
-          PackedCheckpoint{
-              .edit_offset_upper_bound = this->base_checkpoint_.edit_offset_upper_bound().value(),
-              .new_tree_root = llfs::PackedPageId::from(this->base_checkpoint_.root_id()),
-          },
+      llfs::PackAsVariant<CheckpointLogEvent, ActiveCheckpoints>{
+          active_checkpoints,
       });
 
-  // Package the job up with a PackedCheckpoint event record so we can append it to the Volume.
+  // Package the job up with an ActiveCheckpoints event record so we can append it to the Volume.
   //
   StatusOr<llfs::AppendableJob> appendable_job =
       llfs::make_appendable_job(std::move(this->job_),

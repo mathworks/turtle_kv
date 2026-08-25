@@ -1297,7 +1297,7 @@ Status KVStore::wait_for_recovery() const noexcept
   }
 }
 
-using CheckpointEvent = llfs::PackedVariant<turtle_kv::PackedCheckpoint>;
+using CheckpointEvent = llfs::PackedVariant<turtle_kv::ActiveCheckpoints>;
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
@@ -1314,20 +1314,17 @@ using CheckpointEvent = llfs::PackedVariant<turtle_kv::PackedCheckpoint>;
 
   BATT_REQUIRE_OK(reader);
 
-  std::pair<llfs::SlotParse, turtle_kv::PackedCheckpoint> prev_checkpoint;
-  prev_checkpoint.second.edit_offset_upper_bound = 0;
+  std::pair<llfs::SlotParse, turtle_kv::ActiveCheckpoints> prev_active;
+  prev_active.second.num_active_checkpoints = 0;
 
   for (;;) {
     llfs::StatusOr<usize> n_slots_visited = reader->visit_typed_next(
         batt::WaitForResource::kFalse,
-        [&prev_checkpoint](const llfs::SlotParse& slot,
-                           const turtle_kv::PackedCheckpoint& packed_checkpoint) {
-          // Validate that the checkpoints are in ascending order based on batch_upper_bound
-          //
-          BATT_CHECK_GE(EditOffset{packed_checkpoint.edit_offset_upper_bound},
-                        EditOffset{prev_checkpoint.second.edit_offset_upper_bound});
-          prev_checkpoint =
-              std::pair<llfs::SlotParse, turtle_kv::PackedCheckpoint>{slot, packed_checkpoint};
+        [&prev_active](const llfs::SlotParse& slot,
+                       const turtle_kv::ActiveCheckpoints& active_checkpoints) {
+          BATT_CHECK_GT(active_checkpoints.num_active_checkpoints.value(), 0u);
+          prev_active =
+              std::pair<llfs::SlotParse, turtle_kv::ActiveCheckpoints>{slot, active_checkpoints};
           return llfs::OkStatus();
         });
 
@@ -1340,13 +1337,18 @@ using CheckpointEvent = llfs::PackedVariant<turtle_kv::PackedCheckpoint>;
 
   // Return empty checkpoint if no checkpoints are found
   //
-  if (prev_checkpoint.second.edit_offset_upper_bound == 0) {
+  if (prev_active.second.num_active_checkpoints == 0) {
     return Checkpoint::make_empty();
   }
 
+  // Recover from the most recent checkpoint in the active set.
+  //
+  const u8 latest_index = prev_active.second.num_active_checkpoints - 1;
+  const turtle_kv::PackedCheckpoint& latest = prev_active.second.checkpoints[latest_index];
+
   return turtle_kv::Checkpoint::recover(checkpoint_volume,
-                                        prev_checkpoint.first,
-                                        prev_checkpoint.second);
+                                        prev_active.first,
+                                        latest);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

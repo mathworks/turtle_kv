@@ -24,10 +24,12 @@ std::ostream& operator<<(std::ostream& out, const PackedCheckpoint& t);
 
 llfs::BoxedSeq<llfs::PageId> trace_refs(const PackedCheckpoint& checkpoint);
 
+//+++++++++++-+-+--+----- --- -- -  -  -   -
+
 const u8 MAX_ACTIVE_CHECKPOINTS = 8;
 
 struct ActiveCheckpoints {
-  PackedCheckpoint checkpoints[MAX_ACTIVE_CHECKPOINTS];
+  std::array<PackedCheckpoint, MAX_ACTIVE_CHECKPOINTS> checkpoints;
   little_u8 num_active_checkpoints;
 };
 
