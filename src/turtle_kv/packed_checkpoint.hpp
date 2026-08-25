@@ -24,4 +24,16 @@ std::ostream& operator<<(std::ostream& out, const PackedCheckpoint& t);
 
 llfs::BoxedSeq<llfs::PageId> trace_refs(const PackedCheckpoint& checkpoint);
 
+const u8 MAX_ACTIVE_CHECKPOINTS = 8;
+
+struct ActiveCheckpoints {
+  PackedCheckpoint checkpoints[MAX_ACTIVE_CHECKPOINTS];
+  little_u8 num_active_checkpoints;
+};
+
+BATT_STATIC_ASSERT_EQ(sizeof(ActiveCheckpoints),
+                      sizeof(PackedCheckpoint) * MAX_ACTIVE_CHECKPOINTS + sizeof(little_u8));
+
+LLFS_SIMPLE_PACKED_TYPE(ActiveCheckpoints);
+
 }  // namespace turtle_kv
