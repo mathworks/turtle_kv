@@ -47,6 +47,7 @@
 #include <filesystem>
 #include <memory>
 #include <thread>
+#include <utility>
 
 namespace turtle_kv {
 
@@ -177,6 +178,11 @@ class KVStore : public Table
   /** \brief Registers all required page layouts.  Must be done once per page cache instance.
    */
   static Status register_page_layouts(llfs::PageCache& page_cache);
+
+  /** \brief Returns the most recent ActiveCheckpoints record from the checkpoint volume.
+   */
+  static StatusOr<ActiveCheckpoints> recover_active_checkpoints(
+      llfs::Volume& checkpoint_volume);
 
   /** \brief Returns the latest checkpoint recovered from the passed volume.
    */
@@ -314,7 +320,8 @@ class KVStore : public Table
                    const TreeOptions& tree_options,
                    const RuntimeOptions& runtime_options,
                    std::unique_ptr<llfs::Volume>&& checkpoint_volume,
-                   Checkpoint&& latest_recovered_checkpoint) noexcept;
+                   Checkpoint&& latest_recovered_checkpoint,
+                   const ActiveCheckpoints& recovered_active_checkpoints) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 

@@ -56,7 +56,8 @@ class CheckpointGenerator
                                llfs::PageCache& cache,
                                boost::intrusive_ptr<FilterPageWriteState>&& filter_page_write_state,
                                Checkpoint&& base_checkpoint,
-                               llfs::Volume& checkpoint_volume) noexcept;
+                               llfs::Volume& checkpoint_volume,
+                               const ActiveCheckpoints& recovered_active_checkpoints) noexcept;
 
   CheckpointGenerator(const CheckpointGenerator&) = delete;
   CheckpointGenerator& operator=(const CheckpointGenerator&) = delete;
@@ -201,6 +202,11 @@ class CheckpointGenerator
   // Used to allocate grants directly from checkpoint_volume.
   //
   llfs::Volume& checkpoint_volume_;
+
+  // The set of currently active (retained) checkpoints, in sorted order by
+  // edit_offset_upper_bound.
+  //
+  ActiveCheckpoints active_checkpoints_{};
 
   // Used to cancel pending checkpoint updates on halt().
   //

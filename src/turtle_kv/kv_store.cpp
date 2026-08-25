@@ -289,10 +289,13 @@ u64 query_page_loader_reset_every_n()
                         open_checkpoint_log(storage_context,  //
                                             dir_path / checkpoint_log_file_name()));
 
-  // Recover the lastest checkpoint.
+  // Recover the latest checkpoint and the full set of active checkpoints.
   //
   BATT_ASSIGN_OK_RESULT(Checkpoint latest_checkpoint,
                         KVStore::recover_latest_checkpoint(*checkpoint_volume));
+
+  BATT_ASSIGN_OK_RESULT(ActiveCheckpoints recovered_active_checkpoints,
+                        KVStore::recover_active_checkpoints(*checkpoint_volume));
 
   std::unique_ptr<KVStore> kv_store{new KVStore{
       task_scheduler,
@@ -303,6 +306,7 @@ u64 query_page_loader_reset_every_n()
       *runtime_options,
       std::move(checkpoint_volume),
       std::move(latest_checkpoint),
+      recovered_active_checkpoints,
   }};
 
   const std::filesystem::path change_log_file_path = dir_path / change_log_file_name();
@@ -384,7 +388,8 @@ u64 query_page_loader_reset_every_n()
                               const TreeOptions& tree_options,
                               const RuntimeOptions& runtime_options,
                               std::unique_ptr<llfs::Volume>&& checkpoint_volume,
-                              Checkpoint&& latest_recovered_checkpoint) noexcept
+                              Checkpoint&& latest_recovered_checkpoint,
+                              const ActiveCheckpoints& recovered_active_checkpoints) noexcept
     : metrics_{}
     , task_scheduler_{task_scheduler}
     , worker_pool_{worker_pool}
@@ -424,7 +429,8 @@ u64 query_page_loader_reset_every_n()
       this->page_cache(),
       batt::make_copy(this->filter_page_write_state_),
       batt::Toggle<State>::Reader{this->state_}->base_checkpoint_->clone(),
-      *this->checkpoint_volume_);
+      *this->checkpoint_volume_,
+      recovered_active_checkpoints);
 
   this->tree_options_.set_trie_index_reserve_size(this->tree_options_.trie_index_reserve_size());
 
@@ -727,7 +733,6 @@ StatusOr<EditOffset> KVStore::put(const KeyView& key,
 
   return Status{batt::StatusCode::kUnavailable};
 }
-
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
@@ -1299,6 +1304,49 @@ Status KVStore::wait_for_recovery() const noexcept
 
 using CheckpointEvent = llfs::PackedVariant<turtle_kv::ActiveCheckpoints>;
 
+// TODO: [Gabe Bornstein 8/25/26] Consider moving outside of KVStore. Likely needs to return vector
+// of Checkpoints that needs to be properly tracked and updated in memory to mirror the on
+// disk/llfs::Volume representation.
+//
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+/*static*/ batt::StatusOr<turtle_kv::ActiveCheckpoints> KVStore::recover_active_checkpoints(
+    llfs::Volume& checkpoint_volume)
+{
+  llfs::StatusOr<llfs::TypedVolumeReader<CheckpointEvent>> reader =
+      checkpoint_volume.typed_reader<CheckpointEvent>(
+          llfs::SlotRangeSpec{
+              .lower_bound = llfs::None,
+              .upper_bound = llfs::None,
+          },
+          llfs::LogReadMode::kDurable);
+
+  BATT_REQUIRE_OK(reader);
+
+  turtle_kv::ActiveCheckpoints active{};
+
+  for (;;) {
+    llfs::StatusOr<usize> n_slots_visited = reader->visit_typed_next(
+        batt::WaitForResource::kFalse,
+        [&active](const llfs::SlotParse& /*slot*/,
+                  const turtle_kv::ActiveCheckpoints& active_checkpoints) {
+          BATT_CHECK_GT(active_checkpoints.num_active_checkpoints.value(), 0u);
+          active = active_checkpoints;
+          return llfs::OkStatus();
+        });
+
+    BATT_REQUIRE_OK(n_slots_visited);
+    VLOG(2) << "Visited n_slots_visited= " << *n_slots_visited << " checkpoints";
+    if (*n_slots_visited == 0) {
+      break;
+    }
+  }
+
+  return active;
+}
+
+// TODO: [Gabe Bornstein 8/25/26] Consider moving outside of KVStore.
+//
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 /*static*/ batt::StatusOr<turtle_kv::Checkpoint> KVStore::recover_latest_checkpoint(
@@ -1314,17 +1362,17 @@ using CheckpointEvent = llfs::PackedVariant<turtle_kv::ActiveCheckpoints>;
 
   BATT_REQUIRE_OK(reader);
 
-  std::pair<llfs::SlotParse, turtle_kv::ActiveCheckpoints> prev_active;
-  prev_active.second.num_active_checkpoints = 0;
+  turtle_kv::ActiveCheckpoints active{};
+  llfs::SlotParse slot{};
 
   for (;;) {
     llfs::StatusOr<usize> n_slots_visited = reader->visit_typed_next(
         batt::WaitForResource::kFalse,
-        [&prev_active](const llfs::SlotParse& slot,
-                       const turtle_kv::ActiveCheckpoints& active_checkpoints) {
+        [&active, &slot](const llfs::SlotParse& s,
+                         const turtle_kv::ActiveCheckpoints& active_checkpoints) {
           BATT_CHECK_GT(active_checkpoints.num_active_checkpoints.value(), 0u);
-          prev_active =
-              std::pair<llfs::SlotParse, turtle_kv::ActiveCheckpoints>{slot, active_checkpoints};
+          active = active_checkpoints;
+          slot = s;
           return llfs::OkStatus();
         });
 
@@ -1335,28 +1383,22 @@ using CheckpointEvent = llfs::PackedVariant<turtle_kv::ActiveCheckpoints>;
     }
   }
 
-  // Return empty checkpoint if no checkpoints are found
-  //
-  if (prev_active.second.num_active_checkpoints == 0) {
+  if (active.num_active_checkpoints == 0) {
     return Checkpoint::make_empty();
   }
 
-  // Recover from the most recent checkpoint in the active set.
-  //
-  const u8 latest_index = prev_active.second.num_active_checkpoints - 1;
-  const turtle_kv::PackedCheckpoint& latest = prev_active.second.checkpoints[latest_index];
+  const u8 latest_index = active.num_active_checkpoints - 1;
+  const turtle_kv::PackedCheckpoint& latest = active.checkpoints[latest_index];
 
-  return turtle_kv::Checkpoint::recover(checkpoint_volume,
-                                        prev_active.first,
-                                        latest);
+  return turtle_kv::Checkpoint::recover(checkpoint_volume, slot, latest);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status KVStore::sync(Optional<EditOffset> upper_bound, Optional<WriteOptions> write_options) noexcept
+Status KVStore::sync(Optional<EditOffset> upper_bound,
+                     Optional<WriteOptions> write_options) noexcept
 {
-  EditOffset target =
-      upper_bound ? *upper_bound : this->change_log_writer_->next_edit_offset();
+  EditOffset target = upper_bound ? *upper_bound : this->change_log_writer_->next_edit_offset();
 
   bool urgent = write_options && write_options->urgent_sync ? true : false;
 
@@ -1402,9 +1444,9 @@ void KVStore::mem_table_batch_scanner_thread_main()
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename Fn>
-  requires std::invocable<Fn, std::unique_ptr<DeltaBatch>>
-Status KVStore::scan_mem_table_to_build_batches(boost::intrusive_ptr<MemTable>&& mem_table,
-                                                Fn&& consume_fn)
+requires std::invocable<Fn, std::unique_ptr<DeltaBatch>> Status
+KVStore::scan_mem_table_to_build_batches(boost::intrusive_ptr<MemTable>&& mem_table,
+                                         Fn&& consume_fn)
 {
   MemTable::BatchCompactor batch_compactor{*mem_table,
                                            /*byte_size_limit=*/this->tree_options_.flush_size()};
@@ -1633,11 +1675,19 @@ Status KVStore::commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_jo
                                                      .offset = checkpoint_slot_range->upper_bound,
                                                  }));
 
-  // Trim the change log.  IMPORTANT: this must come before we enter the Writer critical section
-  // below; otherwise we could deadlock! (this thread waits for reader to exit which is waiting for
-  // change log grant to be released which can't happen until this thread calls trim)
+  // Trim the change log to the oldest retained checkpoint's edit offset. IMPORTANT: this must come
+  // before we enter the Writer critical section below; otherwise we could deadlock! (this thread
+  // waits for reader to exit which is waiting for change log grant to be released which can't
+  // happen until this thread calls trim)
   //
-  BATT_REQUIRE_OK(this->change_log_writer_->trim(checkpoint_job->edit_offset_upper_bound));
+  // TODO: [Gabe Bornstein 8/25/26] Doesn't this unconditionally trim the oldest checkpoint? We
+  // should only trim if num_active_checkpoints == 8.
+  //
+  const auto& packed = *checkpoint_job->packed_checkpoint;
+  const ActiveCheckpoints& active = packed.object;
+  BATT_CHECK_GT(active.num_active_checkpoints.value(), 0u);
+  const EditOffset oldest_retained_offset{active.checkpoints[0].edit_offset_upper_bound};
+  BATT_REQUIRE_OK(this->change_log_writer_->trim(oldest_retained_offset));
 
   // Update the base checkpoint and clear deltas.
   //
