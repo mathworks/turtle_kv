@@ -423,12 +423,17 @@ u64 query_page_loader_reset_every_n()
 {
   this->initialize_state(std::move(latest_recovered_checkpoint));
 
+  StatusOr<std::map<EditOffset, Checkpoint>> all_checkpoints =
+      KVStore::recover_all_checkpoints(*this->checkpoint_volume_);
+  BATT_CHECK_OK(all_checkpoints);
+  this->active_checkpoints_ = std::move(*all_checkpoints);
+
   this->checkpoint_generator_.emplace(
       this->worker_pool_,
       this->tree_options_,
       this->page_cache(),
       batt::make_copy(this->filter_page_write_state_),
-      batt::Toggle<State>::Reader{this->state_}->base_checkpoint_->clone(),
+      batt::Toggle<State>::Reader { this->state_ } -> base_checkpoint_->clone(),
       *this->checkpoint_volume_,
       recovered_active_checkpoints);
 
@@ -1304,93 +1309,84 @@ Status KVStore::wait_for_recovery() const noexcept
 
 using CheckpointEvent = llfs::PackedVariant<turtle_kv::ActiveCheckpoints>;
 
-// TODO: [Gabe Bornstein 8/25/26] Consider moving outside of KVStore. Likely needs to return vector
-// of Checkpoints that needs to be properly tracked and updated in memory to mirror the on
-// disk/llfs::Volume representation.
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+/*static*/ batt::StatusOr<KVStore::RecoveredCheckpointState> KVStore::read_checkpoint_volume(
+    llfs::Volume& checkpoint_volume)
+{
+  llfs::StatusOr<llfs::TypedVolumeReader<CheckpointEvent>> reader =
+      checkpoint_volume.typed_reader<CheckpointEvent>(
+          llfs::SlotRangeSpec{
+              .lower_bound = llfs::None,
+              .upper_bound = llfs::None,
+          },
+          llfs::LogReadMode::kDurable);
+
+  BATT_REQUIRE_OK(reader);
+
+  RecoveredCheckpointState state{};
+
+  for (;;) {
+    llfs::StatusOr<usize> n_slots_visited = reader->visit_typed_next(
+        batt::WaitForResource::kFalse,
+        [&state](const llfs::SlotParse& s, const turtle_kv::ActiveCheckpoints& active_checkpoints) {
+          BATT_CHECK_GT(active_checkpoints.num_active_checkpoints.value(), 0u);
+          state.active = active_checkpoints;
+          state.slot = s;
+          return llfs::OkStatus();
+        });
+
+    BATT_REQUIRE_OK(n_slots_visited);
+    VLOG(2) << "Visited n_slots_visited= " << *n_slots_visited << " checkpoints";
+    if (*n_slots_visited == 0) {
+      break;
+    }
+  }
+
+  return state;
+}
+
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 /*static*/ batt::StatusOr<turtle_kv::ActiveCheckpoints> KVStore::recover_active_checkpoints(
     llfs::Volume& checkpoint_volume)
 {
-  llfs::StatusOr<llfs::TypedVolumeReader<CheckpointEvent>> reader =
-      checkpoint_volume.typed_reader<CheckpointEvent>(
-          llfs::SlotRangeSpec{
-              .lower_bound = llfs::None,
-              .upper_bound = llfs::None,
-          },
-          llfs::LogReadMode::kDurable);
-
-  BATT_REQUIRE_OK(reader);
-
-  turtle_kv::ActiveCheckpoints active{};
-
-  for (;;) {
-    llfs::StatusOr<usize> n_slots_visited = reader->visit_typed_next(
-        batt::WaitForResource::kFalse,
-        [&active](const llfs::SlotParse& /*slot*/,
-                  const turtle_kv::ActiveCheckpoints& active_checkpoints) {
-          BATT_CHECK_GT(active_checkpoints.num_active_checkpoints.value(), 0u);
-          active = active_checkpoints;
-          return llfs::OkStatus();
-        });
-
-    BATT_REQUIRE_OK(n_slots_visited);
-    VLOG(2) << "Visited n_slots_visited= " << *n_slots_visited << " checkpoints";
-    if (*n_slots_visited == 0) {
-      break;
-    }
-  }
-
-  return active;
+  BATT_ASSIGN_OK_RESULT(RecoveredCheckpointState state, read_checkpoint_volume(checkpoint_volume));
+  return state.active;
 }
 
-// TODO: [Gabe Bornstein 8/25/26] Consider moving outside of KVStore.
-//
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 /*static*/ batt::StatusOr<turtle_kv::Checkpoint> KVStore::recover_latest_checkpoint(
     llfs::Volume& checkpoint_volume)
 {
-  llfs::StatusOr<llfs::TypedVolumeReader<CheckpointEvent>> reader =
-      checkpoint_volume.typed_reader<CheckpointEvent>(
-          llfs::SlotRangeSpec{
-              .lower_bound = llfs::None,
-              .upper_bound = llfs::None,
-          },
-          llfs::LogReadMode::kDurable);
+  BATT_ASSIGN_OK_RESULT(RecoveredCheckpointState state, read_checkpoint_volume(checkpoint_volume));
 
-  BATT_REQUIRE_OK(reader);
-
-  turtle_kv::ActiveCheckpoints active{};
-  llfs::SlotParse slot{};
-
-  for (;;) {
-    llfs::StatusOr<usize> n_slots_visited = reader->visit_typed_next(
-        batt::WaitForResource::kFalse,
-        [&active, &slot](const llfs::SlotParse& s,
-                         const turtle_kv::ActiveCheckpoints& active_checkpoints) {
-          BATT_CHECK_GT(active_checkpoints.num_active_checkpoints.value(), 0u);
-          active = active_checkpoints;
-          slot = s;
-          return llfs::OkStatus();
-        });
-
-    BATT_REQUIRE_OK(n_slots_visited);
-    VLOG(2) << "Visited n_slots_visited= " << *n_slots_visited << " checkpoints";
-    if (*n_slots_visited == 0) {
-      break;
-    }
-  }
-
-  if (active.num_active_checkpoints == 0) {
+  if (state.active.num_active_checkpoints == 0) {
     return Checkpoint::make_empty();
   }
+  const PackedCheckpoint& latest = state.active.newest();
 
-  const u8 latest_index = active.num_active_checkpoints - 1;
-  const turtle_kv::PackedCheckpoint& latest = active.checkpoints[latest_index];
+  return Checkpoint::recover(checkpoint_volume, state.slot, latest);
+}
 
-  return turtle_kv::Checkpoint::recover(checkpoint_volume, slot, latest);
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+/*static*/ batt::StatusOr<std::map<EditOffset, turtle_kv::Checkpoint>>
+KVStore::recover_all_checkpoints(llfs::Volume& checkpoint_volume)
+{
+  BATT_ASSIGN_OK_RESULT(RecoveredCheckpointState state, read_checkpoint_volume(checkpoint_volume));
+
+  std::map<EditOffset, Checkpoint> result;
+
+  for (u8 i = 0; i < state.active.num_active_checkpoints; ++i) {
+    const PackedCheckpoint& packed = state.active.checkpoints[i];
+    BATT_ASSIGN_OK_RESULT(Checkpoint checkpoint,
+                          Checkpoint::recover(checkpoint_volume, state.slot, packed));
+    result.emplace(checkpoint.edit_offset_upper_bound(), std::move(checkpoint));
+  }
+
+  return result;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -1734,6 +1730,18 @@ Status KVStore::commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_jo
     this->deltas_size_->set_value(new_state.deltas_.size());
 
   }  // ~Writer() swaps the new state into the active status.
+
+  // Update the active checkpoints map: add the new checkpoint and remove any that were evicted.
+  //
+  {
+    const EditOffset new_offset{checkpoint_job->edit_offset_upper_bound};
+    this->active_checkpoints_.emplace(
+        new_offset,
+        batt::Toggle<State>::Reader{this->state_}->base_checkpoint_->clone());
+
+    this->active_checkpoints_.erase(this->active_checkpoints_.begin(),
+                                    this->active_checkpoints_.lower_bound(oldest_retained_offset));
+  }
 
   // Trim the checkpoint volume to free old pages.
   //

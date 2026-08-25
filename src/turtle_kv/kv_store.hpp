@@ -45,6 +45,7 @@
 #include <boost/intrusive_ptr.hpp>
 
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <thread>
 #include <utility>
@@ -181,12 +182,27 @@ class KVStore : public Table
 
   /** \brief Returns the most recent ActiveCheckpoints record from the checkpoint volume.
    */
-  static StatusOr<ActiveCheckpoints> recover_active_checkpoints(
-      llfs::Volume& checkpoint_volume);
+  static StatusOr<ActiveCheckpoints> recover_active_checkpoints(llfs::Volume& checkpoint_volume);
 
   /** \brief Returns the latest checkpoint recovered from the passed volume.
    */
   static StatusOr<Checkpoint> recover_latest_checkpoint(llfs::Volume& checkpoint_volume);
+
+  /** \brief Recovers all active checkpoints from the checkpoint volume, returning them as a map
+   * from EditOffset to Checkpoint.
+   */
+  static StatusOr<std::map<EditOffset, Checkpoint>> recover_all_checkpoints(
+      llfs::Volume& checkpoint_volume);
+
+  struct RecoveredCheckpointState {
+    ActiveCheckpoints active;
+    llfs::SlotParse slot;
+  };
+
+  /** \brief Reads the checkpoint volume and returns the most recent ActiveCheckpoints record along
+   * with its slot parse. All other recover_* methods delegate to this.
+   */
+  static StatusOr<RecoveredCheckpointState> read_checkpoint_volume(llfs::Volume& checkpoint_volume);
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -389,9 +405,8 @@ class KVStore : public Table
    * checkpoint generator (depending on whether the threaded checkpoint pipeline is enabled).
    */
   template <typename Fn>
-    requires std::invocable<Fn, std::unique_ptr<DeltaBatch>>
-  Status scan_mem_table_to_build_batches(boost::intrusive_ptr<MemTable>&& mem_table,
-                                         Fn&& consume_fn);
+  requires std::invocable<Fn, std::unique_ptr<DeltaBatch>> Status
+  scan_mem_table_to_build_batches(boost::intrusive_ptr<MemTable>&& mem_table, Fn&& consume_fn);
 
   /** \brief Entry point for the MemTable::BatchCompactor thread.
    */
@@ -459,6 +474,8 @@ class KVStore : public Table
   std::atomic<usize> checkpoint_distance_;
 
   std::unique_ptr<llfs::Volume> checkpoint_volume_;
+
+  std::map<EditOffset, Checkpoint> active_checkpoints_;
 
   boost::intrusive_ptr<FilterPageWriteState> filter_page_write_state_;
 
