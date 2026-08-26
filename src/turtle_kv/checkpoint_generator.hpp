@@ -100,6 +100,12 @@ class CheckpointGenerator
       std::shared_ptr<batt::Grant::Issuer>&& token_issuer,
       llfs::PageCacheOvercommit& overcommit) noexcept;
 
+  /** \brief Adds root page IDs to be removed from the job's root set during the next
+   * finalize_checkpoint or periodic serialization. Use this to schedule removal of roots belonging
+   * to checkpoints that have been evicted from the active set.
+   */
+  void add_roots_to_remove(batt::SmallVec<llfs::PageId, 8>&& roots) noexcept;
+
   llfs::PageCacheJob& page_cache_job() const
   {
     return *this->job_;

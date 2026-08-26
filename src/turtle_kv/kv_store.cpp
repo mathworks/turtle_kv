@@ -423,10 +423,8 @@ u64 query_page_loader_reset_every_n()
 {
   this->initialize_state(std::move(latest_recovered_checkpoint));
 
-  StatusOr<std::map<EditOffset, Checkpoint>> all_checkpoints =
-      KVStore::recover_all_checkpoints(*this->checkpoint_volume_);
-  BATT_CHECK_OK(all_checkpoints);
-  this->active_checkpoints_ = std::move(*all_checkpoints);
+  // TODO: Initialize active_checkpoints_ from recovered_active_checkpoints without re-reading the
+  // volume.
 
   this->checkpoint_generator_.emplace(
       this->worker_pool_,
@@ -838,6 +836,7 @@ Status KVStore::wait_for_checkpoint(EditOffset target) noexcept
 {
   bool warned = false;
 
+  LOG(INFO) << "wait_for_checkpoint 1";
   for (;;) {
     // Observe the current state; if there are no deltas below the target bound, then we are done;
     // otherwise, save the state's seq number so we can wait for change notification.
@@ -846,6 +845,7 @@ Status KVStore::wait_for_checkpoint(EditOffset target) noexcept
     {
       batt::Toggle<State>::Reader state_reader{this->state_};
 
+      LOG(INFO) << "wait_for_checkpoint 2";
       // If the KVStore has been closed, return kClosed status.
       //
       if (this->halt_.get_value()) {
@@ -859,6 +859,9 @@ Status KVStore::wait_for_checkpoint(EditOffset target) noexcept
         break;
       }
 
+      LOG(INFO) << "wait_for_checkpoint 3: current checkpoint offset="
+                << (latest_checkpoint ? latest_checkpoint->edit_offset_upper_bound().value() : -1)
+                << " target=" << target.value();
       // Observe the reader's sequence number so we can use change notification.
       //
       observed_seq = state_reader.seq();
@@ -872,7 +875,9 @@ Status KVStore::wait_for_checkpoint(EditOffset target) noexcept
 
     // Wait for the state to update.
     //
+    LOG(INFO) << "wait_for_checkpoint 4: observed_seq=" << observed_seq;
     this->state_.wait(observed_seq);
+    LOG(INFO) << "wait_for_checkpoint 5";
     VLOG(1) << "state changed";
   }
   return OkStatus();
@@ -1025,6 +1030,31 @@ StatusOr<ValueView> KVStore::get(const KeyView& key) noexcept /*override*/
   // Failed to find a value for the key.
   //
   return value_from_checkpoint.status();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+StatusOr<ValueView> KVStore::get_from_checkpoint(EditOffset checkpoint_edit_offset,
+                                                 const KeyView& key) noexcept
+{
+  auto it = this->active_checkpoints_.find(checkpoint_edit_offset);
+  if (it == this->active_checkpoints_.end()) {
+    return {batt::StatusCode::kUnavailable};
+  }
+
+  ThreadContext& thread_context = this->per_thread_.get(this);
+  thread_context.query_result_storage.emplace();
+
+  llfs::PageLoader& page_loader = thread_context.get_page_loader();
+
+  KeyQuery query{
+      page_loader,
+      *thread_context.query_result_storage,
+      this->tree_options_,
+      key,
+  };
+
+  return it->second.find_key(query);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -1192,11 +1222,20 @@ Status KVStore::push_mem_table_to_channel(boost::intrusive_ptr<MemTable>&& mem_t
   const EditOffset this_edit_offset = mem_table->edit_offset_lower_bound();
   const EditOffset next_edit_offset = mem_table->edit_offset_upper_bound();
 
+  LOG(INFO) << "[PIPELINE] push_mem_table_to_channel: this_edit_offset=" << this_edit_offset.value()
+            << " next_edit_offset=" << next_edit_offset.value()
+            << " current_next_mem_table_edit_offset="
+            << this->next_mem_table_edit_offset_.get_value();
+
   BATT_REQUIRE_OK(this->next_mem_table_edit_offset_.await_true([this_edit_offset](i64 observed) {
     return EditOffset{observed} == this_edit_offset;
   }));
 
+  LOG(INFO) << "[PIPELINE] push_mem_table_to_channel: await passed, writing to channel...";
+
   BATT_REQUIRE_OK(this->finalized_mem_table_channel_.write(std::move(mem_table)));
+
+  LOG(INFO) << "[PIPELINE] push_mem_table_to_channel: write done, advancing offset";
 
   const i64 replaced_value = this->next_mem_table_edit_offset_.set_value(next_edit_offset.value());
   BATT_CHECK_EQ(replaced_value, this_edit_offset.value());
@@ -1414,11 +1453,14 @@ void KVStore::info_task_main() noexcept
 //
 void KVStore::mem_table_batch_scanner_thread_main()
 {
+  LOG(INFO) << "[PIPELINE] mem_table_batch_scanner_thread started";
   Status status = [this]() -> Status {
     for (;;) {
+      LOG(INFO) << "[PIPELINE] batch_scanner: waiting for mem_table on channel...";
       StatusOr<boost::intrusive_ptr<MemTable>> mem_table =
           this->finalized_mem_table_channel_.read();
 
+      LOG(INFO) << "[PIPELINE] batch_scanner: got mem_table, status=" << mem_table.status();
       BATT_REQUIRE_OK(mem_table);
       BATT_CHECK_NOT_NULLPTR(*mem_table);
 
@@ -1495,16 +1537,23 @@ KVStore::scan_mem_table_to_build_batches(boost::intrusive_ptr<MemTable>&& mem_ta
 //
 void KVStore::checkpoint_update_thread_main()
 {
+  LOG(INFO) << "[PIPELINE] checkpoint_update_thread started";
   Status status = [this]() -> Status {
     for (;;) {
+      LOG(INFO) << "[PIPELINE] update_thread: waiting for delta_batch...";
       StatusOr<std::unique_ptr<DeltaBatch>> delta_batch = this->checkpoint_update_channel_.read();
       if (delta_batch.status() == batt::StatusCode::kPoke) {
         delta_batch = std::unique_ptr<DeltaBatch>{nullptr};
       }
+      LOG(INFO) << "[PIPELINE] update_thread: got delta_batch, status=" << delta_batch.status();
       BATT_REQUIRE_OK(delta_batch);
 
+      LOG(INFO) << "[PIPELINE] update_thread: calling apply_batch_to_checkpoint...";
       BATT_ASSIGN_OK_RESULT(std::unique_ptr<CheckpointJob> checkpoint_job,
                             this->apply_batch_to_checkpoint(std::move(*delta_batch)));
+
+      LOG(INFO) << "[PIPELINE] update_thread: apply_batch returned, job="
+                << (checkpoint_job ? "non-null" : "null");
 
       if (checkpoint_job) {
         const auto& page_cache_job = checkpoint_job->job();
@@ -1558,12 +1607,21 @@ StatusOr<std::unique_ptr<CheckpointJob>> KVStore::apply_batch_to_checkpoint(
 
   // If the batch count is below the checkpoint distance, we are done.
   //
+  LOG(INFO) << "[PIPELINE] apply_batch_to_checkpoint: checkpoint_batch_count_="
+            << this->checkpoint_batch_count_
+            << " checkpoint_distance_=" << this->checkpoint_distance_.load()
+            << " checkpoint_after=" << (int)checkpoint_after
+            << " overcommit=" << overcommit.is_triggered();
+
   if (!overcommit.is_triggered() &&
       ((this->checkpoint_batch_count_ < this->checkpoint_distance_.load() &&
         checkpoint_after == BoolStatus::kUnknown) ||
        (checkpoint_after == BoolStatus::kFalse))) {
+    LOG(INFO) << "[PIPELINE] apply_batch_to_checkpoint: returning nullptr (not finalizing)";
     return nullptr;
   }
+
+  LOG(INFO) << "[PIPELINE] apply_batch_to_checkpoint: proceeding to finalize checkpoint";
 
   if (overcommit.is_triggered()) {
     on_page_cache_overcommit(
@@ -1584,8 +1642,10 @@ StatusOr<std::unique_ptr<CheckpointJob>> KVStore::apply_batch_to_checkpoint(
 
   // Allocate a token for the checkpoint job.
   //
+  LOG(INFO) << "[PIPELINE] apply_batch_to_checkpoint: acquiring token...";
   BATT_ASSIGN_OK_RESULT(batt::Grant checkpoint_token,
                         this->checkpoint_token_pool_->issue_grant(1, batt::WaitForResource::kTrue));
+  LOG(INFO) << "[PIPELINE] apply_batch_to_checkpoint: token acquired, finalizing...";
 
   // Serialize all pages and create the job.
   //
@@ -1596,6 +1656,8 @@ StatusOr<std::unique_ptr<CheckpointJob>> KVStore::apply_batch_to_checkpoint(
                                     batt::make_copy(this->checkpoint_token_pool_),
                                     overcommit));
 
+  LOG(INFO) << "[PIPELINE] apply_batch_to_checkpoint: finalize returned, status="
+            << checkpoint_job.status();
   BATT_REQUIRE_OK(checkpoint_job);
 
   BATT_CHECK_NOT_NULLPTR(*checkpoint_job);
@@ -1614,16 +1676,20 @@ StatusOr<std::unique_ptr<CheckpointJob>> KVStore::apply_batch_to_checkpoint(
 //
 void KVStore::checkpoint_flush_thread_main()
 {
+  LOG(INFO) << "[PIPELINE] checkpoint_flush_thread started";
   auto on_scope_exit = batt::finally([&] {
     this->deltas_size_->close();
   });
 
   Status status = [this]() -> Status {
     for (;;) {
+      LOG(INFO) << "[PIPELINE] flush_thread: waiting for checkpoint_job...";
       BATT_ASSIGN_OK_RESULT(std::unique_ptr<CheckpointJob> checkpoint_job,
                             this->checkpoint_flush_channel_.read());
 
+      LOG(INFO) << "[PIPELINE] flush_thread: got job, calling commit_checkpoint...";
       BATT_REQUIRE_OK(this->commit_checkpoint(std::move(checkpoint_job)));
+      LOG(INFO) << "[PIPELINE] flush_thread: commit_checkpoint completed successfully";
     }
   }();
 
@@ -1636,9 +1702,11 @@ void KVStore::checkpoint_flush_thread_main()
 //
 Status KVStore::commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_job)
 {
+  LOG(INFO) << "[PIPELINE] commit_checkpoint: entered, waiting for recovery...";
   // Make sure recovery has fully completed before continuing.
   //
   BATT_REQUIRE_OK(this->wait_for_recovery());
+  LOG(INFO) << "[PIPELINE] commit_checkpoint: recovery complete, proceeding";
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
   // TODO [tastolfi 2026-05-12] MAYBE? (TBD) call change_log_writer_->sync(/*non-urgent*/) here to
@@ -1648,6 +1716,7 @@ Status KVStore::commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_jo
 
   // Durably commit the checkpoint.
   //
+  LOG(INFO) << "[PIPELINE] commit_checkpoint: appending to volume...";
   StatusOr<llfs::SlotRange> checkpoint_slot_range =
       TURTLE_KV_COLLECT_LATENCY(this->metrics_.append_job_latency,                     //
                                 this->checkpoint_volume_->append(                      //
@@ -1656,37 +1725,41 @@ Status KVStore::commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_jo
                                     std::move(checkpoint_job->prepare_slot_sequencer)  //
                                     ));
 
+  LOG(INFO) << "[PIPELINE] commit_checkpoint: append status=" << checkpoint_slot_range.status();
   BATT_REQUIRE_OK(checkpoint_slot_range);
 
   // Lock the new slot range.
   //
+  LOG(INFO) << "[PIPELINE] commit_checkpoint: locking slots...";
   StatusOr<llfs::SlotReadLock> slot_read_lock = this->checkpoint_volume_->lock_slots(
       llfs::SlotRangeSpec::from(*checkpoint_slot_range),
       llfs::LogReadMode::kSpeculative,
       /*lock_holder=*/"TabletCheckpointTask::handle_checkpoint_commit");
 
   BATT_REQUIRE_OK(slot_read_lock);
+  LOG(INFO) << "[PIPELINE] commit_checkpoint: syncing to durable...";
   BATT_REQUIRE_OK(this->checkpoint_volume_->sync(llfs::LogReadMode::kDurable,
                                                  llfs::SlotUpperBoundAt{
                                                      .offset = checkpoint_slot_range->upper_bound,
                                                  }));
 
+  LOG(INFO) << "[PIPELINE] commit_checkpoint: sync done, trimming change log...";
   // Trim the change log to the oldest retained checkpoint's edit offset. IMPORTANT: this must come
   // before we enter the Writer critical section below; otherwise we could deadlock! (this thread
   // waits for reader to exit which is waiting for change log grant to be released which can't
   // happen until this thread calls trim)
   //
-  // TODO: [Gabe Bornstein 8/25/26] Doesn't this unconditionally trim the oldest checkpoint? We
-  // should only trim if num_active_checkpoints == 8.
-  //
   const auto& packed = *checkpoint_job->packed_checkpoint;
   const ActiveCheckpoints& active = packed.object;
   BATT_CHECK_GT(active.num_active_checkpoints.value(), 0u);
   const EditOffset oldest_retained_offset{active.checkpoints[0].edit_offset_upper_bound};
+  LOG(INFO) << "[PIPELINE] commit_checkpoint: trimming to oldest_retained_offset="
+            << oldest_retained_offset.value();
   BATT_REQUIRE_OK(this->change_log_writer_->trim(oldest_retained_offset));
 
   // Update the base checkpoint and clear deltas.
   //
+  LOG(INFO) << "[PIPELINE] commit_checkpoint: about to create Writer for state update";
   Optional<llfs::slot_offset_type> prev_checkpoint_slot;
   {
     batt::Toggle<State>::Writer state_writer{this->state_};
@@ -1729,7 +1802,11 @@ Status KVStore::commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_jo
 
     this->deltas_size_->set_value(new_state.deltas_.size());
 
+    LOG(INFO) << "[PIPELINE] commit_checkpoint: new base_checkpoint edit_offset_upper_bound="
+              << new_state.base_checkpoint_->edit_offset_upper_bound().value();
+
   }  // ~Writer() swaps the new state into the active status.
+  LOG(INFO) << "[PIPELINE] commit_checkpoint: Writer destructed (state notified)";
 
   // Update the active checkpoints map: add the new checkpoint and remove any that were evicted.
   //
@@ -1737,10 +1814,23 @@ Status KVStore::commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_jo
     const EditOffset new_offset{checkpoint_job->edit_offset_upper_bound};
     this->active_checkpoints_.emplace(
         new_offset,
-        batt::Toggle<State>::Reader{this->state_}->base_checkpoint_->clone());
+        batt::Toggle<State>::Reader { this->state_ } -> base_checkpoint_->clone());
 
-    this->active_checkpoints_.erase(this->active_checkpoints_.begin(),
-                                    this->active_checkpoints_.lower_bound(oldest_retained_offset));
+    auto evict_end = this->active_checkpoints_.lower_bound(oldest_retained_offset);
+
+    batt::SmallVec<llfs::PageId, 8> evicted_roots;
+    for (auto it = this->active_checkpoints_.begin(); it != evict_end; ++it) {
+      Optional<llfs::PageId> root_id = it->second.maybe_root_id();
+      if (root_id) {
+        evicted_roots.emplace_back(*root_id);
+      }
+    }
+
+    this->active_checkpoints_.erase(this->active_checkpoints_.begin(), evict_end);
+
+    if (!evicted_roots.empty()) {
+      this->checkpoint_generator_->add_roots_to_remove(std::move(evicted_roots));
+    }
   }
 
   // Trim the checkpoint volume to free old pages.

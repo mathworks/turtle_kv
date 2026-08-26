@@ -643,6 +643,118 @@ TEST_P(KVStoreRecoveryTest, KVStoreRecovery)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+TEST_F(KVStoreTest, CheckpointReadOldKeys)
+{
+  std::filesystem::path test_kv_store_dir =
+      this->data_root / "turtle_kv_Test" / "checkpoint_read_old_keys";
+
+  StatusOr<std::unique_ptr<KVStore>> open_result = this->CreateAndOpenKVStore(test_kv_store_dir);
+  ASSERT_TRUE(open_result.ok()) << BATT_INSPECT(open_result.status());
+
+  LOG(INFO) << "KVStore opened successfully";
+
+  std::unique_ptr<KVStore>& kv_store = *open_result;
+
+  // Set checkpoint distance to 1 so that each forced MemTable finalization produces a checkpoint.
+  //
+  kv_store->set_checkpoint_distance(99999999);
+
+  LOG(INFO) << "1";
+
+  // Write keys [0, 100) — these will be captured by the first checkpoint.
+  //
+  const i64 x1 = 0;
+  const i64 y1 = 100;
+
+  auto make_key = [](i64 i) -> std::string {
+    return batt::to_string("key_", std::setfill('0'), std::setw(10), i);
+  };
+
+  auto make_value = [](i64 i) -> std::string {
+    return batt::to_string("val_", i);
+  };
+
+  for (i64 i = x1; i < y1; ++i) {
+    std::string key = make_key(i);
+    std::string value = make_value(i);
+    Status put_status = kv_store->put(KeyView{key}, ValueView::from_str(value));
+    ASSERT_TRUE(put_status.ok()) << BATT_INSPECT(put_status);
+  }
+
+  LOG(INFO) << "2";
+  // Force the first checkpoint and wait for it.
+  //
+  StatusOr<EditOffset> first_checkpoint_bound = kv_store->force_checkpoint();
+
+  LOG(INFO) << "3";
+  ASSERT_TRUE(first_checkpoint_bound.ok()) << BATT_INSPECT(first_checkpoint_bound.status());
+
+  ASSERT_TRUE(kv_store->wait_for_checkpoint(*first_checkpoint_bound).ok());
+
+  LOG(INFO) << "4";
+
+  const EditOffset first_checkpoint_offset = *first_checkpoint_bound;
+
+  // Write keys [100, 200) — these will be captured by the second checkpoint.
+  //
+  const i64 x2 = 200;
+
+  for (i64 i = y1; i < x2; ++i) {
+    std::string key = make_key(i);
+    std::string value = make_value(i);
+    Status put_status = kv_store->put(KeyView{key}, ValueView::from_str(value));
+    ASSERT_TRUE(put_status.ok()) << BATT_INSPECT(put_status);
+  }
+
+  LOG(INFO) << "5";
+  // Force the second checkpoint and wait for it.
+  //
+  StatusOr<EditOffset> second_checkpoint_bound = kv_store->force_checkpoint();
+  ASSERT_TRUE(second_checkpoint_bound.ok()) << BATT_INSPECT(second_checkpoint_bound.status());
+
+  LOG(INFO) << "6";
+  ASSERT_TRUE(kv_store->wait_for_checkpoint(*second_checkpoint_bound).ok());
+
+  LOG(INFO) << "7";
+  const EditOffset second_checkpoint_offset = *second_checkpoint_bound;
+
+  // Verify that the second checkpoint can see all keys [0, 200).
+  //
+  for (i64 i = x1; i < x2; ++i) {
+    std::string key = make_key(i);
+    StatusOr<ValueView> result =
+        kv_store->get_from_checkpoint(second_checkpoint_offset, KeyView{key});
+    ASSERT_TRUE(result.ok()) << "Second checkpoint missing key: " << key;
+    EXPECT_EQ(result->as_str(), make_value(i));
+  }
+
+  LOG(INFO) << "8";
+  // Verify that the first checkpoint can only see keys [0, 100).
+  //
+  for (i64 i = x1; i < y1; ++i) {
+    std::string key = make_key(i);
+    StatusOr<ValueView> result =
+        kv_store->get_from_checkpoint(first_checkpoint_offset, KeyView{key});
+    ASSERT_TRUE(result.ok()) << "First checkpoint missing key: " << key;
+    EXPECT_EQ(result->as_str(), make_value(i));
+  }
+
+  LOG(INFO) << "9";
+  // Verify that the first checkpoint cannot see keys [100, 200).
+  //
+  for (i64 i = y1; i < x2; ++i) {
+    std::string key = make_key(i);
+    StatusOr<ValueView> result =
+        kv_store->get_from_checkpoint(first_checkpoint_offset, KeyView{key});
+    EXPECT_FALSE(result.ok()) << "First checkpoint should NOT contain key: " << key;
+  }
+
+  LOG(INFO) << "10";
+  this->ShutdownKVStore(kv_store);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 TEST_F(KVStoreTest, SyncWriteOptions)
 {
   std::filesystem::path test_kv_store_dir = this->data_root / "turtle_kv_Test" / "sync_write_opts";

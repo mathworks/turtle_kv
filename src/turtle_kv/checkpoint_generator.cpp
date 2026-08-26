@@ -18,9 +18,6 @@ namespace turtle_kv {
     boost::intrusive_ptr<FilterPageWriteState>&& filter_page_write_state,
     Checkpoint&& base_checkpoint,
     llfs::Volume& checkpoint_volume,
-    // TODO: [Gabe Bornstein 8/25/26] Not sure that this is necessary. Could grab this info later
-    // from the volume.
-    //
     const ActiveCheckpoints& recovered_active_checkpoints) noexcept
     //----- --- -- -  -  -   -
     : worker_pool_{worker_pool}
@@ -112,10 +109,21 @@ StatusOr<usize> CheckpointGenerator::apply_batch(std::unique_ptr<DeltaBatch>&& b
     Optional<llfs::PageId> root_id = this->base_checkpoint_.maybe_root_id();
     if (root_id) {
       this->job_->new_root(*root_id);
-      // TODO: [Gabe Bornstein 8/25/26] Don't emplace back root_ids that are still in
-      // active_checkpoints.
+      // this->roots_to_remove_.emplace_back(*root_id);
+
+      // TODO: [Gabe Bornstein 8/25/26] Do we need to do any tracking of old roots here? Or can we
+      // exclusively do that elsewhere now?
       //
-      this->roots_to_remove_.emplace_back(*root_id);
+      // bool still_active = false;
+      // for (u8 i = 0; i < this->active_checkpoints_.num_active_checkpoints; ++i) {
+      //   if (this->active_checkpoints_.checkpoints[i].new_tree_root.as_page_id() == *root_id) {
+      //     still_active = true;
+      //     break;
+      //   }
+      // }
+      // if (!still_active) {
+      //   this->roots_to_remove_.emplace_back(*root_id);
+      // }
     }
   }
 
@@ -151,9 +159,6 @@ StatusOr<usize> CheckpointGenerator::apply_batch(std::unique_ptr<DeltaBatch>&& b
 
     const llfs::PageId root_id = batt::get_or_panic(this->base_checkpoint_.maybe_root_id());
     this->job_->new_root(root_id);
-    // TODO: [Gabe Bornstein 8/25/26] Don't let this remove pages that are still needed by alive
-    // checkpoints.
-    //
     this->clear_old_roots();
 
     BATT_REQUIRE_OK(this->job_->prune(/*callers=*/0));
@@ -195,6 +200,15 @@ Status CheckpointGenerator::serialize_checkpoint(llfs::PageCacheOvercommit& over
                                                          this->filter_page_write_state_));
 
   return OkStatus();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void CheckpointGenerator::add_roots_to_remove(batt::SmallVec<llfs::PageId, 8>&& roots) noexcept
+{
+  for (const llfs::PageId root_id : roots) {
+    this->roots_to_remove_.emplace_back(root_id);
+  }
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -252,9 +266,6 @@ StatusOr<std::unique_ptr<CheckpointJob>> CheckpointGenerator::finalize_checkpoin
   checkpoint_job->edit_offset_upper_bound = edit_offset_upper_bound;
   checkpoint_job->batch_count = batch_count;
 
-  // TODO: [Gabe Bornstein 8/25/26] push_back will evict an old checkpoint. Are we actually trimming
-  // it properly? Also, consider renaming so that the eviction is more obvious.
-  //
   this->active_checkpoints_.push_back(PackedCheckpoint{
       .edit_offset_upper_bound = this->base_checkpoint_.edit_offset_upper_bound().value(),
       .new_tree_root = llfs::PackedPageId::from(this->base_checkpoint_.root_id()),

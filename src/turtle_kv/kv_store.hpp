@@ -275,6 +275,23 @@ class KVStore : public Table
    */
   Status wait_for_checkpoint(EditOffset target) noexcept;
 
+  // TODO: [Gabe Bornstein 8/26/26] Revise API so that is returns a checkpoint (or an alias
+  // Snapshot?).
+  //
+  /** \brief Looks up a key in the checkpoint identified by `checkpoint_edit_offset`. Returns the
+   * value if found, kNotFound if the key is not present, or kUnavailable if no checkpoint exists
+   * at that offset.
+   */
+  StatusOr<ValueView> get_from_checkpoint(EditOffset checkpoint_edit_offset,
+                                          const KeyView& key) noexcept;
+
+  /** \brief Returns the number of currently active (tracked) checkpoints.
+   */
+  usize active_checkpoint_count() const noexcept
+  {
+    return this->active_checkpoints_.size();
+  }
+
   std::function<void(std::ostream&)> debug_info() const noexcept;
 
   void collect_stats(
