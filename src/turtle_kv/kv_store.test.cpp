@@ -26,6 +26,8 @@
 #include <batteries/segv.hpp>
 
 #include <barrier>
+#include <chrono>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -722,6 +724,8 @@ TEST_P(CheckpointReadOldKeysTest, CheckpointReadOldKeys)
   const u64 num_expired = (this->num_checkpoints > turtle_kv::MAX_ACTIVE_CHECKPOINTS)
                               ? this->num_checkpoints - turtle_kv::MAX_ACTIVE_CHECKPOINTS
                               : 0;
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
   for (u64 cp = 0; cp < num_expired; ++cp) {
     std::string key = make_key(0);
