@@ -492,6 +492,8 @@ class KVStore : public Table
 
   std::unique_ptr<llfs::Volume> checkpoint_volume_;
 
+  // TODO: [Gabe Bornstein 8/27/26] Should this be moved into State?
+  //
   std::map<EditOffset, Checkpoint> active_checkpoints_;
 
   boost::intrusive_ptr<FilterPageWriteState> filter_page_write_state_;

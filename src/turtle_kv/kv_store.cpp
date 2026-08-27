@@ -1025,6 +1025,9 @@ StatusOr<ValueView> KVStore::get(const KeyView& key) noexcept /*override*/
   return value_from_checkpoint.status();
 }
 
+// TODO: [Gabe Bornstein 8/27/26] Consider re-writing this API to just return a "Snapshot", where
+// snapshot is read only and has a get() function.
+//
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 StatusOr<ValueView> KVStore::get_from_checkpoint(EditOffset checkpoint_edit_offset,
@@ -1032,6 +1035,9 @@ StatusOr<ValueView> KVStore::get_from_checkpoint(EditOffset checkpoint_edit_offs
 {
   auto it = this->active_checkpoints_.find(checkpoint_edit_offset);
   if (it == this->active_checkpoints_.end()) {
+    // TODO: [Gabe Bornstein 8/27/26] Add better/more descriptive logging output here.
+    //
+    LOG(INFO) << "Checkpoint with EditOffset: " << checkpoint_edit_offset << " does not exist.";
     return {batt::StatusCode::kUnavailable};
   }
 

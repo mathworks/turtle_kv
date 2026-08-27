@@ -18,6 +18,7 @@
 #include <turtle_kv/checkpoint_log.hpp>
 #include <turtle_kv/core/table.hpp>
 #include <turtle_kv/core/testing/generate.hpp>
+#include <turtle_kv/packed_checkpoint.hpp>
 #include <turtle_kv/scan_metrics.hpp>
 #include <turtle_kv/testing/workload.test.hpp>
 
@@ -643,99 +644,117 @@ TEST_P(KVStoreRecoveryTest, KVStoreRecovery)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-TEST_F(KVStoreTest, CheckpointReadOldKeys)
+struct CheckpointReadOldKeysParams {
+  u64 num_keys;
+  u64 num_checkpoints;
+};
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+class CheckpointReadOldKeysTest
+    : public KVStoreTest
+    , public testing::WithParamInterface<CheckpointReadOldKeysParams>
 {
+ public:
+  void SetUp() override
+  {
+    KVStoreTest::SetUp();
+
+    CheckpointReadOldKeysParams params = GetParam();
+    this->num_keys = params.num_keys;
+    this->num_checkpoints = params.num_checkpoints;
+  }
+
+  u64 num_keys;
+  u64 num_checkpoints;
+};
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+TEST_P(CheckpointReadOldKeysTest, CheckpointReadOldKeys)
+{
+  ASSERT_GT(this->num_checkpoints, u64{0});
+
   std::filesystem::path test_kv_store_dir =
       this->data_root / "turtle_kv_Test" / "checkpoint_read_old_keys";
 
   StatusOr<std::unique_ptr<KVStore>> open_result = this->CreateAndOpenKVStore(test_kv_store_dir);
   ASSERT_TRUE(open_result.ok()) << BATT_INSPECT(open_result.status());
 
-  LOG(INFO) << "KVStore opened successfully";
-
   std::unique_ptr<KVStore>& kv_store = *open_result;
 
-  // Set checkpoint distance to 1 so that each forced MemTable finalization produces a checkpoint.
-  //
   kv_store->set_checkpoint_distance(99999999);
 
-  // Write keys [0, 100) — these will be captured by the first checkpoint.
-  //
-  const i64 x1 = 0;
-  const i64 y1 = 100;
-
   auto make_key = [](i64 i) -> std::string {
-    return batt::to_string("key_", std::setfill('0'), std::setw(10), i);
+    return batt::to_string(i);
   };
 
   auto make_value = [](i64 i) -> std::string {
-    return batt::to_string("val_", i);
+    return batt::to_string(i);
   };
 
-  for (i64 i = x1; i < y1; ++i) {
-    std::string key = make_key(i);
-    std::string value = make_value(i);
-    Status put_status = kv_store->put(KeyView{key}, ValueView::from_str(value));
-    ASSERT_TRUE(put_status.ok()) << BATT_INSPECT(put_status);
+  const u64 keys_per_checkpoint = this->num_keys / this->num_checkpoints;
+
+  std::vector<EditOffset> checkpoint_offsets;
+
+  for (u64 cp = 0; cp < this->num_checkpoints; ++cp) {
+    const i64 batch_start = cp * keys_per_checkpoint;
+    const i64 batch_end = (cp == this->num_checkpoints - 1)
+                              ? static_cast<i64>(this->num_keys)
+                              : static_cast<i64>((cp + 1) * keys_per_checkpoint);
+
+    for (i64 i = batch_start; i < batch_end; ++i) {
+      std::string key = make_key(i);
+      std::string value = make_value(i);
+      Status put_status = kv_store->put(KeyView{key}, ValueView::from_str(value));
+      ASSERT_TRUE(put_status.ok()) << BATT_INSPECT(put_status);
+    }
+
+    StatusOr<EditOffset> checkpoint_bound = kv_store->force_checkpoint();
+    ASSERT_TRUE(checkpoint_bound.ok()) << BATT_INSPECT(checkpoint_bound.status());
+    ASSERT_TRUE(kv_store->wait_for_checkpoint(*checkpoint_bound).ok());
+
+    checkpoint_offsets.push_back(*checkpoint_bound);
   }
 
-  // Force the first checkpoint and wait for it.
+  // Checkpoints older than MAX_ACTIVE_CHECKPOINTS get trimmed; verify that querying them fails.
   //
-  StatusOr<EditOffset> first_checkpoint_bound = kv_store->force_checkpoint();
+  const u64 num_expired = (this->num_checkpoints > turtle_kv::MAX_ACTIVE_CHECKPOINTS)
+                              ? this->num_checkpoints - turtle_kv::MAX_ACTIVE_CHECKPOINTS
+                              : 0;
 
-  ASSERT_TRUE(first_checkpoint_bound.ok()) << BATT_INSPECT(first_checkpoint_bound.status());
-
-  ASSERT_TRUE(kv_store->wait_for_checkpoint(*first_checkpoint_bound).ok());
-
-  const EditOffset first_checkpoint_offset = *first_checkpoint_bound;
-
-  // Write keys [100, 200) — these will be captured by the second checkpoint.
-  //
-  const i64 x2 = 200;
-
-  for (i64 i = y1; i < x2; ++i) {
-    std::string key = make_key(i);
-    std::string value = make_value(i);
-    Status put_status = kv_store->put(KeyView{key}, ValueView::from_str(value));
-    ASSERT_TRUE(put_status.ok()) << BATT_INSPECT(put_status);
-  }
-
-  // Force the second checkpoint and wait for it.
-  //
-  StatusOr<EditOffset> second_checkpoint_bound = kv_store->force_checkpoint();
-  ASSERT_TRUE(second_checkpoint_bound.ok()) << BATT_INSPECT(second_checkpoint_bound.status());
-
-  ASSERT_TRUE(kv_store->wait_for_checkpoint(*second_checkpoint_bound).ok());
-
-  const EditOffset second_checkpoint_offset = *second_checkpoint_bound;
-
-  // Verify that the second checkpoint can see all keys [0, 200).
-  //
-  for (i64 i = x1; i < x2; ++i) {
-    std::string key = make_key(i);
+  for (u64 cp = 0; cp < num_expired; ++cp) {
+    std::string key = make_key(0);
     StatusOr<ValueView> result =
-        kv_store->get_from_checkpoint(second_checkpoint_offset, KeyView{key});
-    ASSERT_TRUE(result.ok()) << "Second checkpoint missing key: " << key;
-    EXPECT_EQ(result->as_str(), make_value(i));
+        kv_store->get_from_checkpoint(checkpoint_offsets[cp], KeyView{key});
+    EXPECT_FALSE(result.ok()) << "Expired checkpoint " << cp << " should not be queryable";
   }
 
-  // Verify that the first checkpoint can only see keys [0, 100).
+  // Verify each living checkpoint can see exactly the keys written up to and including its batch.
   //
-  for (i64 i = x1; i < y1; ++i) {
-    std::string key = make_key(i);
-    StatusOr<ValueView> result =
-        kv_store->get_from_checkpoint(first_checkpoint_offset, KeyView{key});
-    ASSERT_TRUE(result.ok()) << "First checkpoint missing key: " << key;
-    EXPECT_EQ(result->as_str(), make_value(i));
-  }
+  for (u64 cp = num_expired; cp < this->num_checkpoints; ++cp) {
+    const i64 visible_end = (cp == this->num_checkpoints - 1)
+                                ? static_cast<i64>(this->num_keys)
+                                : static_cast<i64>((cp + 1) * keys_per_checkpoint);
 
-  // Verify that the first checkpoint cannot see keys [100, 200).
-  //
-  for (i64 i = y1; i < x2; ++i) {
-    std::string key = make_key(i);
-    StatusOr<ValueView> result =
-        kv_store->get_from_checkpoint(first_checkpoint_offset, KeyView{key});
-    EXPECT_FALSE(result.ok()) << "First checkpoint should NOT contain key: " << key;
+    // Keys [0, visible_end) should be visible.
+    //
+    for (i64 i = 0; i < visible_end; ++i) {
+      std::string key = make_key(i);
+      StatusOr<ValueView> result =
+          kv_store->get_from_checkpoint(checkpoint_offsets[cp], KeyView{key});
+      ASSERT_TRUE(result.ok()) << "Checkpoint " << cp << " missing key: " << key;
+      EXPECT_EQ(result->as_str(), make_value(i));
+    }
+
+    // Keys [visible_end, num_keys) should NOT be visible.
+    //
+    for (i64 i = visible_end; i < static_cast<i64>(this->num_keys); ++i) {
+      std::string key = make_key(i);
+      StatusOr<ValueView> result =
+          kv_store->get_from_checkpoint(checkpoint_offsets[cp], KeyView{key});
+      EXPECT_FALSE(result.ok()) << "Checkpoint " << cp << " should NOT contain key: " << key;
+    }
   }
 
   this->ShutdownKVStore(kv_store);
@@ -1068,3 +1087,27 @@ INSTANTIATE_TEST_SUITE_P(RecoveringKVStore,
                          KVStoreRecoveryTest,
                          testing::Values(u64{0}, u64{1}, u64{100}, u64{1000}, u64{100000}),
                          format_kv_store_recovery_test_name);
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+std::string format_checkpoint_read_old_keys_test_name(
+    const ::testing::TestParamInfo<CheckpointReadOldKeysParams>& info)
+{
+  return batt::to_string("NumKeys",
+                         info.param.num_keys,
+                         "NumCheckpoints",
+                         info.param.num_checkpoints);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+INSTANTIATE_TEST_SUITE_P(
+    ReadingOldCheckpointKeys,
+    CheckpointReadOldKeysTest,
+    testing::Values(CheckpointReadOldKeysParams{.num_keys = 1000, .num_checkpoints = 1},
+                    CheckpointReadOldKeysParams{.num_keys = 1000, .num_checkpoints = 2},
+                    CheckpointReadOldKeysParams{.num_keys = 1000, .num_checkpoints = 5},
+                    CheckpointReadOldKeysParams{.num_keys = 10000, .num_checkpoints = 2},
+                    CheckpointReadOldKeysParams{.num_keys = 10000, .num_checkpoints = 8},
+                    CheckpointReadOldKeysParams{.num_keys = 10000, .num_checkpoints = 10}),
+    format_checkpoint_read_old_keys_test_name);
