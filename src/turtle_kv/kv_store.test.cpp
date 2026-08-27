@@ -659,8 +659,6 @@ TEST_F(KVStoreTest, CheckpointReadOldKeys)
   //
   kv_store->set_checkpoint_distance(99999999);
 
-  LOG(INFO) << "1";
-
   // Write keys [0, 100) — these will be captured by the first checkpoint.
   //
   const i64 x1 = 0;
@@ -681,17 +679,13 @@ TEST_F(KVStoreTest, CheckpointReadOldKeys)
     ASSERT_TRUE(put_status.ok()) << BATT_INSPECT(put_status);
   }
 
-  LOG(INFO) << "2";
   // Force the first checkpoint and wait for it.
   //
   StatusOr<EditOffset> first_checkpoint_bound = kv_store->force_checkpoint();
 
-  LOG(INFO) << "3";
   ASSERT_TRUE(first_checkpoint_bound.ok()) << BATT_INSPECT(first_checkpoint_bound.status());
 
   ASSERT_TRUE(kv_store->wait_for_checkpoint(*first_checkpoint_bound).ok());
-
-  LOG(INFO) << "4";
 
   const EditOffset first_checkpoint_offset = *first_checkpoint_bound;
 
@@ -706,16 +700,13 @@ TEST_F(KVStoreTest, CheckpointReadOldKeys)
     ASSERT_TRUE(put_status.ok()) << BATT_INSPECT(put_status);
   }
 
-  LOG(INFO) << "5";
   // Force the second checkpoint and wait for it.
   //
   StatusOr<EditOffset> second_checkpoint_bound = kv_store->force_checkpoint();
   ASSERT_TRUE(second_checkpoint_bound.ok()) << BATT_INSPECT(second_checkpoint_bound.status());
 
-  LOG(INFO) << "6";
   ASSERT_TRUE(kv_store->wait_for_checkpoint(*second_checkpoint_bound).ok());
 
-  LOG(INFO) << "7";
   const EditOffset second_checkpoint_offset = *second_checkpoint_bound;
 
   // Verify that the second checkpoint can see all keys [0, 200).
@@ -728,7 +719,6 @@ TEST_F(KVStoreTest, CheckpointReadOldKeys)
     EXPECT_EQ(result->as_str(), make_value(i));
   }
 
-  LOG(INFO) << "8";
   // Verify that the first checkpoint can only see keys [0, 100).
   //
   for (i64 i = x1; i < y1; ++i) {
@@ -739,7 +729,6 @@ TEST_F(KVStoreTest, CheckpointReadOldKeys)
     EXPECT_EQ(result->as_str(), make_value(i));
   }
 
-  LOG(INFO) << "9";
   // Verify that the first checkpoint cannot see keys [100, 200).
   //
   for (i64 i = y1; i < x2; ++i) {
@@ -749,7 +738,6 @@ TEST_F(KVStoreTest, CheckpointReadOldKeys)
     EXPECT_FALSE(result.ok()) << "First checkpoint should NOT contain key: " << key;
   }
 
-  LOG(INFO) << "10";
   this->ShutdownKVStore(kv_store);
 }
 

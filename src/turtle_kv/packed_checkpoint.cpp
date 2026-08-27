@@ -40,13 +40,13 @@ void ActiveCheckpoints::push_back(const PackedCheckpoint& checkpoint)
 PackedCheckpoint ActiveCheckpoints::newest() const
 {
   BATT_CHECK_NE(this->num_active_checkpoints, 0);
-  return this->checkpoints[0];
+  return this->checkpoints[this->num_active_checkpoints - 1];
 }
 
 PackedCheckpoint ActiveCheckpoints::oldest() const
 {
   BATT_CHECK_NE(this->num_active_checkpoints, 0);
-  return this->checkpoints[this->num_active_checkpoints - 1];
+  return this->checkpoints[0];
 }
 
 // TODO: [Gabe Bornstein 8/25/26] Not sure this is right or necessary. We could just use trace_refs
