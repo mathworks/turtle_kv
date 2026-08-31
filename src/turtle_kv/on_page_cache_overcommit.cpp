@@ -1,6 +1,5 @@
 #include <turtle_kv/on_page_cache_overcommit.hpp>
 //
-#include <turtle_kv/util/memory_stats.hpp>
 
 #include <turtle_kv/import/logging.hpp>
 
@@ -35,7 +34,7 @@ void on_page_cache_overcommit(const std::function<void(std::ostream& out)>& cont
             << batt::dump_size(cache_slots.estimate_cache_bytes()) << ")" << std::endl
             << BATT_INSPECT(cache_slots.estimate_pinned_bytes()) << "("
             << batt::dump_size(cache_slots.estimate_pinned_bytes()) << ")" << std::endl
-            << print_page_alloc_info << dump_memory_stats();
+            << print_page_alloc_info;
 }
 
 }  // namespace turtle_kv
