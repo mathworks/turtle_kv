@@ -42,7 +42,7 @@ requirement to migrate to a new data format.
 
 <table border="0" width="75%">
   <tr><td align="center">
-    <img src="doc/images/ycsb_turtle_kv.png" width="100%"/>
+    <img src="doc/images/ycsb_turtle_kv.png" width="75%"/>
   </td></tr>
   <tr><td align="center">
     <i>YCSB benchmark results for TurtleKV and other engines (higher is better)</i>
