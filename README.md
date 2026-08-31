@@ -40,7 +40,14 @@ applications that use it to store data can continue to run faster and
 more efficiently as TurtleKV is updated and improved, with no
 requirement to migrate to a new data format.
 
-<center><img src="doc/images/ycsb_turtle_kv.png" width="75%"/><small>_YCSB benchmark results for TurtleKV and other engines (higher is better)_</small></center>
+<table border="0" width="75%">
+  <tr><td align="center">
+    <img src="doc/images/ycsb_turtle_kv.png" width="100%"/>
+  </td></tr>
+  <tr><td align="center">
+    <i>YCSB benchmark results for TurtleKV and other engines (higher is better)</i>
+  </td></tr>
+</table>
 
 TurtleKV uses the [Conan package management
 system](https://conan.io/), and is built on MathWorks' [Low Level File
