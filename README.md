@@ -51,7 +51,7 @@ requirement to migrate to a new data format.
 </table>
 -->
 
-<div align="center" style="display: block; padding: 18pt">
+<div align="center" style="display: block; margin: 18pt">
 <img src="doc/images/ycsb_turtle_kv.png" alt="YCSB Results" width="75%"><br>
 <i>CSB benchmark results for TurtleKV and other engines (higher is better)</i>
 </div>
