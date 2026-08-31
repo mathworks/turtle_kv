@@ -49,6 +49,7 @@ using turtle_kv::OkStatus;
 using turtle_kv::Optional;
 using turtle_kv::RemoveExisting;
 using turtle_kv::Slice;
+using turtle_kv::Snapshot;
 using turtle_kv::Status;
 using turtle_kv::StatusOr;
 using turtle_kv::StdMapTable;
@@ -728,15 +729,16 @@ TEST_P(CheckpointReadOldKeysTest, CheckpointReadOldKeys)
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
   for (u64 cp = 0; cp < num_expired; ++cp) {
-    std::string key = make_key(0);
-    StatusOr<ValueView> result =
-        kv_store->get_from_checkpoint(checkpoint_offsets[cp], KeyView{key});
-    EXPECT_FALSE(result.ok()) << "Expired checkpoint " << cp << " should not be queryable";
+    StatusOr<Snapshot> snapshot = kv_store->get_snapshot(checkpoint_offsets[cp]);
+    EXPECT_FALSE(snapshot.ok()) << "Expired checkpoint " << cp << " should not be queryable";
   }
 
   // Verify each living checkpoint can see exactly the keys written up to and including its batch.
   //
   for (u64 cp = num_expired; cp < this->num_checkpoints; ++cp) {
+    StatusOr<Snapshot> snapshot = kv_store->get_snapshot(checkpoint_offsets[cp]);
+    ASSERT_TRUE(snapshot.ok()) << "Failed to get snapshot for checkpoint " << cp;
+
     const i64 visible_end = (cp == this->num_checkpoints - 1)
                                 ? static_cast<i64>(this->num_keys)
                                 : static_cast<i64>((cp + 1) * keys_per_checkpoint);
@@ -745,8 +747,7 @@ TEST_P(CheckpointReadOldKeysTest, CheckpointReadOldKeys)
     //
     for (i64 i = 0; i < visible_end; ++i) {
       std::string key = make_key(i);
-      StatusOr<ValueView> result =
-          kv_store->get_from_checkpoint(checkpoint_offsets[cp], KeyView{key});
+      StatusOr<ValueView> result = snapshot->get(KeyView{key});
       ASSERT_TRUE(result.ok()) << "Checkpoint " << cp << " missing key: " << key;
       EXPECT_EQ(result->as_str(), make_value(i));
     }
@@ -755,8 +756,7 @@ TEST_P(CheckpointReadOldKeysTest, CheckpointReadOldKeys)
     //
     for (i64 i = visible_end; i < static_cast<i64>(this->num_keys); ++i) {
       std::string key = make_key(i);
-      StatusOr<ValueView> result =
-          kv_store->get_from_checkpoint(checkpoint_offsets[cp], KeyView{key});
+      StatusOr<ValueView> result = snapshot->get(KeyView{key});
       EXPECT_FALSE(result.ok()) << "Checkpoint " << cp << " should NOT contain key: " << key;
     }
   }

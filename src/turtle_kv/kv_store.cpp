@@ -1025,13 +1025,9 @@ StatusOr<ValueView> KVStore::get(const KeyView& key) noexcept /*override*/
   return value_from_checkpoint.status();
 }
 
-// TODO: [Gabe Bornstein 8/27/26] Consider re-writing this API to just return a "Snapshot", where
-// snapshot is read only and has a get() function.
-//
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<ValueView> KVStore::get_from_checkpoint(EditOffset checkpoint_edit_offset,
-                                                 const KeyView& key) noexcept
+StatusOr<Snapshot> KVStore::get_snapshot(EditOffset checkpoint_edit_offset) noexcept
 {
   auto it = this->active_checkpoints_.find(checkpoint_edit_offset);
   if (it == this->active_checkpoints_.end()) {
@@ -1041,19 +1037,34 @@ StatusOr<ValueView> KVStore::get_from_checkpoint(EditOffset checkpoint_edit_offs
     return {batt::StatusCode::kUnavailable};
   }
 
-  ThreadContext& thread_context = this->per_thread_.get(this);
-  thread_context.query_result_storage.emplace();
-
-  llfs::PageLoader& page_loader = thread_context.get_page_loader();
-
-  KeyQuery query{
-      page_loader,
-      *thread_context.query_result_storage,
+  return Snapshot{
+      it->second.clone(),
+      checkpoint_edit_offset,
+      // TODO: [Gabe Bornstein 8/31/26] I don't like passing page_cache_ here. Seems necessary for
+      // KeyQuery, but is there a better way to do this? Maybe make Snapshot a part of KVStore?
+      //
+      this->page_cache_,
       this->tree_options_,
-      key,
   };
+}
 
-  return it->second.find_key(query);
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+std::vector<Snapshot> KVStore::get_active_snapshots() noexcept
+{
+  std::vector<Snapshot> snapshots;
+  snapshots.reserve(this->active_checkpoints_.size());
+
+  for (const auto& [offset, checkpoint] : this->active_checkpoints_) {
+    snapshots.emplace_back(Snapshot{
+        checkpoint.clone(),
+        offset,
+        this->page_cache_,
+        this->tree_options_,
+    });
+  }
+
+  return snapshots;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

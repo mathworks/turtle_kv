@@ -14,6 +14,7 @@
 
 #include <turtle_kv/change_log/change_log_writer.hpp>
 #include <turtle_kv/checkpoint.hpp>
+#include <turtle_kv/snapshot.hpp>
 #include <turtle_kv/checkpoint_generator.hpp>
 #include <turtle_kv/kv_store_config.hpp>
 #include <turtle_kv/kv_store_metrics.hpp>
@@ -275,15 +276,14 @@ class KVStore : public Table
    */
   Status wait_for_checkpoint(EditOffset target) noexcept;
 
-  // TODO: [Gabe Bornstein 8/26/26] Revise API so that is returns a checkpoint (or an alias
-  // Snapshot?).
-  //
-  /** \brief Looks up a key in the checkpoint identified by `checkpoint_edit_offset`. Returns the
-   * value if found, kNotFound if the key is not present, or kUnavailable if no checkpoint exists
-   * at that offset.
+  /** \brief Returns a read-only Snapshot for the checkpoint identified by the given EditOffset.
+   * Returns kUnavailable if no checkpoint exists at that offset.
    */
-  StatusOr<ValueView> get_from_checkpoint(EditOffset checkpoint_edit_offset,
-                                          const KeyView& key) noexcept;
+  StatusOr<Snapshot> get_snapshot(EditOffset checkpoint_edit_offset) noexcept;
+
+  /** \brief Returns Snapshots for all currently active checkpoints, ordered oldest to newest.
+   */
+  std::vector<Snapshot> get_active_snapshots() noexcept;
 
   /** \brief Returns the number of currently active (tracked) checkpoints.
    */
