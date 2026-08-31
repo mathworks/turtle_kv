@@ -52,10 +52,8 @@ requirement to migrate to a new data format.
 -->
 
 <div align="center">
-  <figure>
-    <img src="doc/images/ycsb_turtle_kv.png" alt="YCSB Results" width="75%">
-    <figcaption>YCSB benchmark results for TurtleKV and other engines (higher is better)</figcaption>
-  </figure>
+<img src="doc/images/ycsb_turtle_kv.png" alt="YCSB Results" width="75%"><br>
+_CSB benchmark results for TurtleKV and other engines (higher is better)_
 </div>
 
 TurtleKV uses the [Conan package management
