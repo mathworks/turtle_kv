@@ -47,7 +47,7 @@ struct CheckpointJob {
 
   Optional<Checkpoint> checkpoint;
 
-  Optional<llfs::PackAsVariant<CheckpointLogEvent, ActiveCheckpoints>> packed_checkpoint;
+  Optional<llfs::PackAsVariant<CheckpointLogEvent, ActiveCheckpoints>> active_checkpoints;
 
   //----- --- -- -  -  -   -
 

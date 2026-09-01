@@ -109,21 +109,11 @@ StatusOr<usize> CheckpointGenerator::apply_batch(std::unique_ptr<DeltaBatch>&& b
     Optional<llfs::PageId> root_id = this->base_checkpoint_.maybe_root_id();
     if (root_id) {
       this->job_->new_root(*root_id);
-      // this->roots_to_remove_.emplace_back(*root_id);
-
-      // TODO: [Gabe Bornstein 8/25/26] Do we need to do any tracking of old roots here? Or can we
-      // exclusively do that elsewhere now?
+      // TODO: [Gabe Bornstein 9/1/26] Tony mentioned for all checkpoints that aren't the newest
+      // one, we need to add_root/new_root to keep checkpoint data alive. Is that true? Or can we
+      // just not remove those roots instead?
       //
-      // bool still_active = false;
-      // for (u8 i = 0; i < this->active_checkpoints_.num_active_checkpoints; ++i) {
-      //   if (this->active_checkpoints_.checkpoints[i].new_tree_root.as_page_id() == *root_id) {
-      //     still_active = true;
-      //     break;
-      //   }
-      // }
-      // if (!still_active) {
-      //   this->roots_to_remove_.emplace_back(*root_id);
-      // }
+      // this->roots_to_remove_.emplace_back(*root_id);
     }
   }
 
@@ -271,7 +261,7 @@ StatusOr<std::unique_ptr<CheckpointJob>> CheckpointGenerator::finalize_checkpoin
       .new_tree_root = llfs::PackedPageId::from(this->base_checkpoint_.root_id()),
   });
 
-  checkpoint_job->packed_checkpoint.emplace(
+  checkpoint_job->active_checkpoints.emplace(
       llfs::PackAsVariant<CheckpointLogEvent, ActiveCheckpoints>{
           this->active_checkpoints_,
       });
@@ -280,7 +270,7 @@ StatusOr<std::unique_ptr<CheckpointJob>> CheckpointGenerator::finalize_checkpoin
   //
   StatusOr<llfs::AppendableJob> appendable_job =
       llfs::make_appendable_job(std::move(this->job_),
-                                llfs::PackableRef{*checkpoint_job->packed_checkpoint});
+                                llfs::PackableRef{*checkpoint_job->active_checkpoints});
 
   BATT_REQUIRE_OK(appendable_job);
 

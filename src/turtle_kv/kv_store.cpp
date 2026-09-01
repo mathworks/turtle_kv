@@ -423,9 +423,6 @@ u64 query_page_loader_reset_every_n()
 {
   this->initialize_state(std::move(latest_recovered_checkpoint));
 
-  // TODO: Initialize active_checkpoints_ from recovered_active_checkpoints without re-reading the
-  // volume.
-
   this->checkpoint_generator_.emplace(
       this->worker_pool_,
       this->tree_options_,
@@ -1716,10 +1713,10 @@ Status KVStore::commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_jo
   // waits for reader to exit which is waiting for change log grant to be released which can't
   // happen until this thread calls trim)
   //
-  const auto& packed = *checkpoint_job->packed_checkpoint;
+  const auto& packed = *checkpoint_job->active_checkpoints;
   const ActiveCheckpoints& active = packed.object;
   BATT_CHECK_GT(active.num_active_checkpoints.value(), 0u);
-  const EditOffset oldest_retained_offset{active.checkpoints[0].edit_offset_upper_bound};
+  const EditOffset oldest_retained_offset{active.oldest().edit_offset_upper_bound};
   BATT_REQUIRE_OK(this->change_log_writer_->trim(oldest_retained_offset));
 
   // Update the base checkpoint and clear deltas.
@@ -1792,6 +1789,12 @@ Status KVStore::commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_jo
       this->checkpoint_generator_->add_roots_to_remove(std::move(evicted_roots));
     }
   }
+
+  // TODO: [Gabe Bornstein 9/1/26] If we crash here, possibility of double removing root pages. 1.
+  // Remove old checkpoint roots. 2. Crash. 3. Recover old checkpoints from Volume that haven't been
+  // trimmed. 4. Checkpoint that already had it's roots deleted attempts to delete roots a second
+  // time. Is this a problem?
+  //
 
   // Trim the checkpoint volume to free old pages.
   //
