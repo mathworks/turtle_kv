@@ -6,6 +6,6 @@
 
 namespace turtle_kv {
 
-using CheckpointLogEvent = llfs::PackedVariant<PackedCheckpoint>;
+using CheckpointLogEvent = llfs::PackedVariant<ActiveCheckpoints>;
 
 }

@@ -17,7 +17,8 @@ namespace turtle_kv {
     llfs::PageCache& cache,
     boost::intrusive_ptr<FilterPageWriteState>&& filter_page_write_state,
     Checkpoint&& base_checkpoint,
-    llfs::Volume& checkpoint_volume) noexcept
+    llfs::Volume& checkpoint_volume,
+    const ActiveCheckpoints& recovered_active_checkpoints) noexcept
     //----- --- -- -  -  -   -
     : worker_pool_{worker_pool}
     , tree_options_{tree_options}
@@ -26,12 +27,14 @@ namespace turtle_kv {
     , base_checkpoint_{std::move(base_checkpoint)}
     , stop_requested_{false}
     , checkpoint_volume_{checkpoint_volume}
+    , active_checkpoints_{recovered_active_checkpoints}
 {
-  Optional<llfs::SlotRange> prev_slot_range = base_checkpoint.slot_range();
+  Optional<llfs::SlotRange> prev_slot_range = this->base_checkpoint_.slot_range();
   if (prev_slot_range) {
     this->slot_sequencer_.set_current(*prev_slot_range);
     this->slot_sequencer_ = this->slot_sequencer_.get_next();
   }
+
   this->initialize_job();
 }
 
@@ -106,7 +109,11 @@ StatusOr<usize> CheckpointGenerator::apply_batch(std::unique_ptr<DeltaBatch>&& b
     Optional<llfs::PageId> root_id = this->base_checkpoint_.maybe_root_id();
     if (root_id) {
       this->job_->new_root(*root_id);
-      this->roots_to_remove_.emplace_back(*root_id);
+      // TODO: [Gabe Bornstein 9/1/26] Tony mentioned for all checkpoints that aren't the newest
+      // one, we need to add_root/new_root to keep checkpoint data alive. Is that true? Or can we
+      // just not remove those roots instead?
+      //
+      // this->roots_to_remove_.emplace_back(*root_id);
     }
   }
 
@@ -187,6 +194,15 @@ Status CheckpointGenerator::serialize_checkpoint(llfs::PageCacheOvercommit& over
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+void CheckpointGenerator::add_roots_to_remove(batt::SmallVec<llfs::PageId, 8>&& roots) noexcept
+{
+  for (const llfs::PageId root_id : roots) {
+    this->roots_to_remove_.emplace_back(root_id);
+  }
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 void CheckpointGenerator::clear_old_roots() noexcept
 {
   for (const llfs::PageId root_id : this->roots_to_remove_) {
@@ -240,19 +256,21 @@ StatusOr<std::unique_ptr<CheckpointJob>> CheckpointGenerator::finalize_checkpoin
   checkpoint_job->edit_offset_upper_bound = edit_offset_upper_bound;
   checkpoint_job->batch_count = batch_count;
 
-  checkpoint_job->packed_checkpoint.emplace(
-      llfs::PackAsVariant<CheckpointLogEvent, PackedCheckpoint>{
-          PackedCheckpoint{
-              .edit_offset_upper_bound = this->base_checkpoint_.edit_offset_upper_bound().value(),
-              .new_tree_root = llfs::PackedPageId::from(this->base_checkpoint_.root_id()),
-          },
+  this->active_checkpoints_.push_back(PackedCheckpoint{
+      .edit_offset_upper_bound = this->base_checkpoint_.edit_offset_upper_bound().value(),
+      .new_tree_root = llfs::PackedPageId::from(this->base_checkpoint_.root_id()),
+  });
+
+  checkpoint_job->active_checkpoints.emplace(
+      llfs::PackAsVariant<CheckpointLogEvent, ActiveCheckpoints>{
+          this->active_checkpoints_,
       });
 
-  // Package the job up with a PackedCheckpoint event record so we can append it to the Volume.
+  // Package the job up with an ActiveCheckpoints event record so we can append it to the Volume.
   //
   StatusOr<llfs::AppendableJob> appendable_job =
       llfs::make_appendable_job(std::move(this->job_),
-                                llfs::PackableRef{*checkpoint_job->packed_checkpoint});
+                                llfs::PackableRef{*checkpoint_job->active_checkpoints});
 
   BATT_REQUIRE_OK(appendable_job);
 

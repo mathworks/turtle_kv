@@ -56,7 +56,8 @@ class CheckpointGenerator
                                llfs::PageCache& cache,
                                boost::intrusive_ptr<FilterPageWriteState>&& filter_page_write_state,
                                Checkpoint&& base_checkpoint,
-                               llfs::Volume& checkpoint_volume) noexcept;
+                               llfs::Volume& checkpoint_volume,
+                               const ActiveCheckpoints& recovered_active_checkpoints) noexcept;
 
   CheckpointGenerator(const CheckpointGenerator&) = delete;
   CheckpointGenerator& operator=(const CheckpointGenerator&) = delete;
@@ -98,6 +99,12 @@ class CheckpointGenerator
       batt::Grant&& token,
       std::shared_ptr<batt::Grant::Issuer>&& token_issuer,
       llfs::PageCacheOvercommit& overcommit) noexcept;
+
+  /** \brief Adds root page IDs to be removed from the job's root set during the next
+   * finalize_checkpoint or periodic serialization. Use this to schedule removal of roots belonging
+   * to checkpoints that have been evicted from the active set.
+   */
+  void add_roots_to_remove(batt::SmallVec<llfs::PageId, 8>&& roots) noexcept;
 
   llfs::PageCacheJob& page_cache_job() const
   {
@@ -201,6 +208,11 @@ class CheckpointGenerator
   // Used to allocate grants directly from checkpoint_volume.
   //
   llfs::Volume& checkpoint_volume_;
+
+  // The set of currently active (retained) checkpoints, in sorted order by
+  // edit_offset_upper_bound.
+  //
+  ActiveCheckpoints active_checkpoints_{};
 
   // Used to cancel pending checkpoint updates on halt().
   //
