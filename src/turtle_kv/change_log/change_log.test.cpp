@@ -827,4 +827,96 @@ TEST_F(ChangeLogTest, SyncStaggeredOffsets)
   LOG(INFO) << BATT_INSPECT(this->writer_->metrics().advance_sync_upper_bound_latency);
 }
 
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+// Goal: Make sure that sync operates correctly when blocks are trimmed faster than they are
+// written.
+//
+TEST_F(ChangeLogTest, SyncAggressiveTrim)
+{
+  // Set the log size large enough to reliably trigger the bug, but small enough so the
+  // test runs quickly.
+  //
+  this->config_.set_log_size(2 * kMiB);
+
+  // How long to wait for sync at the end.
+  //
+  const i32 kSyncTimeoutSeconds =
+      batt::getenv_as<i32>("TURTLE_KV_CHANGE_LOG_TEST_SYNC_TIMEOUT_SECONDS").value_or(15);
+
+  // How many bytes to write.  Make it large enough that trim has to be working.
+  //
+  const usize kBytesToAppend = this->config_.log_size() * 3;
+
+  // How many bytes to write in a single slot; make it a weird size so we get some, but not a lot
+  // of, wasted space in the blocks.
+  //
+  const usize kSlotSize = this->config_.block_size / 5 - 17;
+
+  // Create the log + open a writer.
+  //
+  ASSERT_OK(this->create_writer(RemoveExisting{true}));
+
+  // Keep track of how many blocks were used.
+  //
+  usize blocks_seen = 0;
+  usize bytes_appended = 0;
+  {
+    ChangeLogWriter::Context context{*this->writer_};
+
+    while (bytes_appended < kBytesToAppend) {
+      Status status = context.append_slot(
+          /*min_edit_offset_lower_bound=*/EditOffset{0},
+          kSlotSize,
+          batt::WaitForResource::kTrue,
+          [&](FirstVisitToBlock first_visit,
+              ChangeLogBlock*,
+              MutableBuffer dst,
+              EditOffset edit_offset) {
+            if (first_visit) {
+              ++blocks_seen;
+            }
+            BATT_CHECK_EQ(edit_offset.value(), BATT_CHECKED_CAST(i64, bytes_appended));
+
+            std::memset(dst.data(), bytes_appended & 0xff, dst.size());
+            bytes_appended += dst.size();
+          });
+
+      ASSERT_OK(status);
+
+      // Immediately trim.
+      //
+      ASSERT_OK(this->writer_->trim(EditOffset{(i64)bytes_appended}));
+    }
+  }
+
+  // Create a background thread to eventually close the log writer if sync is taking too long.
+  //
+  std::atomic<bool> cancel_halt_timeout{false};
+  std::thread halt_thread{[&] {
+    for (i32 i = 0; i < kSyncTimeoutSeconds * 10; ++i) {
+      if (cancel_halt_timeout.load()) {
+        return;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds{100});
+    }
+    this->writer_->halt();
+  }};
+
+  // The moment of truth: wait for everything to be flushed!
+  //
+  Status sync_status = this->writer_->sync(EditOffset{(i64)kBytesToAppend});
+
+  // Tell the background thread it can shut down now.
+  //
+  cancel_halt_timeout.store(true);
+  halt_thread.join();
+
+  const usize estimated_blocks = bytes_appended / this->config_.block_size;
+
+  EXPECT_GT(blocks_seen, estimated_blocks / 2);
+  EXPECT_LE(blocks_seen, estimated_blocks * 2);
+  EXPECT_EQ(this->writer_->durable_upper_bound().value(), BATT_CHECKED_CAST(i64, bytes_appended));
+  ASSERT_OK(sync_status);
+}
+
 }  // namespace turtle_kv

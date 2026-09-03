@@ -35,6 +35,22 @@ struct ChangeLogConfig {
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  /** \brief Returns the size of the log in bytes.  This does not include the meta-block.
+   */
+  i64 log_size() const noexcept
+  {
+    return this->block_size * this->block_count;
+  }
+
+  /** \brief Sets the size of the log to at least `target` by varying the block_count.  Does not
+   * modify block_size.
+   */
+  void set_log_size(i64 target) noexcept
+  {
+    this->block_count = BlockCount{(target + this->block_size - 1) / this->block_size};
+    BATT_CHECK_GE(this->log_size(), target);
+  }
+
   void pack_to(PackedChangeLogConfig* packed_config) const noexcept;
 
   /** \brief The maximum number of blocks which can be written in a single multi-chunk write.
