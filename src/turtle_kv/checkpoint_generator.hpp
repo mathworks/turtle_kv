@@ -100,12 +100,6 @@ class CheckpointGenerator
       std::shared_ptr<batt::Grant::Issuer>&& token_issuer,
       llfs::PageCacheOvercommit& overcommit) noexcept;
 
-  /** \brief Adds root page IDs to be removed from the job's root set during the next
-   * finalize_checkpoint or periodic serialization. Use this to schedule removal of roots belonging
-   * to checkpoints that have been evicted from the active set.
-   */
-  void add_roots_to_remove(batt::SmallVec<llfs::PageId, 8>&& roots) noexcept;
-
   llfs::PageCacheJob& page_cache_job() const
   {
     return *this->job_;
@@ -130,11 +124,6 @@ class CheckpointGenerator
   /** \brief Serializes any deferred pages in the current base_checkpoint_ tree.
    */
   Status serialize_checkpoint(llfs::PageCacheOvercommit& overcommit) noexcept;
-
-  /** \brief Clears `this->roots_to_remove_` by deleting obsolete root pages from the current job's
-   * root set.
-   */
-  void clear_old_roots() noexcept;
 
   /** \brief This function first uses a non-blocking call to Volume::reserve on the checkpoint
    * volume. If non-blocking reserve fails, it tracks some metrics and then goes into a blocking
@@ -196,10 +185,6 @@ class CheckpointGenerator
   // not used directly by this class, but rather by the checkpoint committer.
   //
   llfs::SlotSequencer slot_sequencer_;
-
-  // Roots to remove from `job_` when finalizing.
-  //
-  batt::SmallVec<llfs::PageId, 8> roots_to_remove_;
 
   // Set to `true` when halt is invoked.
   //

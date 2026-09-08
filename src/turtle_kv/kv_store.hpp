@@ -289,7 +289,8 @@ class KVStore : public Table
    */
   usize active_checkpoint_count() const noexcept
   {
-    return this->active_checkpoints_.size();
+    return batt::Toggle<State>::Reader{const_cast<KVStore*>(this)->state_}
+        ->active_checkpoints_.size();
   }
 
   std::function<void(std::ostream&)> debug_info() const noexcept;
@@ -338,6 +339,10 @@ class KVStore : public Table
     /** \brief The most recent checkpoint; covers everything older than the deltas.
      */
     Optional<Checkpoint> base_checkpoint_;
+
+    /** \brief Map of all active checkpoints, keyed by EditOffset.
+     */
+    std::map<EditOffset, Checkpoint> active_checkpoints_;
   };
 
   static_assert(std::default_initializable<State>);
@@ -491,10 +496,6 @@ class KVStore : public Table
   std::atomic<usize> checkpoint_distance_;
 
   std::unique_ptr<llfs::Volume> checkpoint_volume_;
-
-  // TODO: [Gabe Bornstein 8/27/26] Should this be moved into State?
-  //
-  std::map<EditOffset, Checkpoint> active_checkpoints_;
 
   boost::intrusive_ptr<FilterPageWriteState> filter_page_write_state_;
 

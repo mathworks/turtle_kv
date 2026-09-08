@@ -1026,8 +1026,10 @@ StatusOr<ValueView> KVStore::get(const KeyView& key) noexcept /*override*/
 //
 StatusOr<Snapshot> KVStore::get_snapshot(EditOffset checkpoint_edit_offset) noexcept
 {
-  auto it = this->active_checkpoints_.find(checkpoint_edit_offset);
-  if (it == this->active_checkpoints_.end()) {
+  batt::Toggle<State>::Reader state_reader{this->state_};
+
+  auto it = state_reader->active_checkpoints_.find(checkpoint_edit_offset);
+  if (it == state_reader->active_checkpoints_.end()) {
     // TODO: [Gabe Bornstein 8/27/26] Add better/more descriptive logging output here.
     //
     LOG(INFO) << "Checkpoint with EditOffset: " << checkpoint_edit_offset << " does not exist.";
@@ -1049,10 +1051,12 @@ StatusOr<Snapshot> KVStore::get_snapshot(EditOffset checkpoint_edit_offset) noex
 //
 std::vector<Snapshot> KVStore::get_active_snapshots() noexcept
 {
-  std::vector<Snapshot> snapshots;
-  snapshots.reserve(this->active_checkpoints_.size());
+  batt::Toggle<State>::Reader state_reader{this->state_};
 
-  for (const auto& [offset, checkpoint] : this->active_checkpoints_) {
+  std::vector<Snapshot> snapshots;
+  snapshots.reserve(state_reader->active_checkpoints_.size());
+
+  for (const auto& [offset, checkpoint] : state_reader->active_checkpoints_) {
     snapshots.emplace_back(Snapshot{
         checkpoint.clone(),
         offset,
@@ -1160,6 +1164,7 @@ Status KVStore::reset_active_mem_table(EditOffset current_edit_offset)
   new_state.base_checkpoint_ = old_state.base_checkpoint_;
   new_state.deltas_ = old_state.deltas_;
   new_state.deltas_.emplace_back(old_state.mem_table_);
+  new_state.active_checkpoints_ = old_state.active_checkpoints_;
 
   BATT_CHECK_EQ(new_state.mem_table_->edit_offset_lower_bound(), current_edit_offset);
 
@@ -1763,38 +1768,17 @@ Status KVStore::commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_jo
 
     this->deltas_size_->set_value(new_state.deltas_.size());
 
-  }  // ~Writer() swaps the new state into the active status.
+    // Update the active checkpoints map: add the new checkpoint and remove any that were evicted.
+    //
+    new_state.active_checkpoints_ = old_state.active_checkpoints_;
 
-  // Update the active checkpoints map: add the new checkpoint and remove any that were evicted.
-  //
-  {
     const EditOffset new_offset{checkpoint_job->edit_offset_upper_bound};
-    this->active_checkpoints_.emplace(
-        new_offset,
-        batt::Toggle<State>::Reader { this->state_ } -> base_checkpoint_->clone());
+    new_state.active_checkpoints_.emplace(new_offset, new_state.base_checkpoint_->clone());
 
-    auto evict_end = this->active_checkpoints_.lower_bound(oldest_retained_offset);
+    auto evict_end = new_state.active_checkpoints_.lower_bound(oldest_retained_offset);
+    new_state.active_checkpoints_.erase(new_state.active_checkpoints_.begin(), evict_end);
 
-    batt::SmallVec<llfs::PageId, 8> evicted_roots;
-    for (auto it = this->active_checkpoints_.begin(); it != evict_end; ++it) {
-      Optional<llfs::PageId> root_id = it->second.maybe_root_id();
-      if (root_id) {
-        evicted_roots.emplace_back(*root_id);
-      }
-    }
-
-    this->active_checkpoints_.erase(this->active_checkpoints_.begin(), evict_end);
-
-    if (!evicted_roots.empty()) {
-      this->checkpoint_generator_->add_roots_to_remove(std::move(evicted_roots));
-    }
-  }
-
-  // TODO: [Gabe Bornstein 9/1/26] If we crash here, possibility of double removing root pages. 1.
-  // Remove old checkpoint roots. 2. Crash. 3. Recover old checkpoints from Volume that haven't been
-  // trimmed. 4. Checkpoint that already had it's roots deleted attempts to delete roots a second
-  // time. Is this a problem?
-  //
+  }  // ~Writer() swaps the new state into the active status.
 
   // Trim the checkpoint volume to free old pages.
   //

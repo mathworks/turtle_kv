@@ -1,5 +1,6 @@
 #include <turtle_kv/packed_checkpoint.hpp>
 //
+#include <turtle_kv/import/slice.hpp>
 
 namespace turtle_kv {
 
@@ -49,21 +50,21 @@ PackedCheckpoint ActiveCheckpoints::oldest() const
   return this->checkpoints[0];
 }
 
-// TODO: [Gabe Bornstein 8/25/26] Not sure this is right or necessary. We could just use trace_refs
-// on a single PackedCheckpoint.
-//
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 llfs::BoxedSeq<llfs::PageId> trace_refs(const ActiveCheckpoints& active)
 {
-  std::vector<llfs::PageId> refs;
-  for (u8 i = 0; i < active.num_active_checkpoints; ++i) {
-    refs.push_back(active.checkpoints[i].new_tree_root.as_page_id());
-  }
-  return batt::into_seq(std::move(refs)) | llfs::seq::map([](const llfs::PageId& id) {
-           return id;
-         }) |
-         llfs::seq::boxed();
+  auto active_slice = as_slice(active.checkpoints.data(),
+                               active.checkpoints.data() + active.num_active_checkpoints);
+
+  auto refs_per_checkpoint = as_seq(active_slice)  //
+                             | llfs::seq::map([](const PackedCheckpoint& checkpoint) {
+                                 return trace_refs(checkpoint);
+                               });
+
+  return std::move(refs_per_checkpoint)  //
+         | llfs::seq::flatten()          //
+         | llfs::seq::boxed();
 }
 
 }  // namespace turtle_kv
