@@ -856,6 +856,14 @@ Status ChangeLogWriter::activate_blocks(
             << BATT_INSPECT(next_block->edit_offset_lower_bound())
             << BATT_INSPECT(next_block->edit_offset_upper_bound());
 
+    // Collect blocks with slots for advancing the durable upper bound.  IMPORTANT: we must do this
+    // before short-circuiting the loop due to the trim point having moved beyond `next_block`
+    // below!
+    //
+    if (next_block->slot_count() > 0) {
+      newly_activated.emplace_back(next_block);
+    }
+
     // If there are no active blocks and the trim point is already past the next block, just
     // increment the block range and keep going.
     //
@@ -868,12 +876,6 @@ Status ChangeLogWriter::activate_blocks(
       cfg.increment_block_range(output.block_range);
       BATT_CHECK(output.block_range.empty()) << BATT_INSPECT(output.block_range);
       continue;
-    }
-
-    // Collect blocks with slots for advancing the durable upper bound.
-    //
-    if (next_block->slot_count() > 0) {
-      newly_activated.emplace_back(next_block);
     }
 
     // Update active blocks edit offset upper bound.
