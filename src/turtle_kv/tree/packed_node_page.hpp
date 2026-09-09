@@ -147,6 +147,8 @@ struct PackedNodePage {
                                                 llfs::PinPageToJob pin_page_to_job,
                                                 llfs::PageCacheOvercommit& overcommit) const;
 
+      PackedPiecewiseFilter get_packed_filter(const SegmentedLevel& level) const;
+
       bool is_index_filtered(const SegmentedLevel& level, u32 index) const;
 
       u32 live_lower_bound(const SegmentedLevel& level, u32 item_i) const;

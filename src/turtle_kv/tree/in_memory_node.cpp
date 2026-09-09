@@ -119,7 +119,7 @@ using PackedSegment = PackedUpdateBuffer::Segment;
         segment.active_pivots = packed_segment.active_pivots.unpack();
 
         segment.filter =
-            PiecewiseFilter<u32>{packed_node.get_packed_filter(level_i, segment_i)};
+            PiecewiseFilter<u32>{packed_segment.get_packed_filter(level)};
 
         segment.check_invariants(__FILE__, __LINE__);
       }

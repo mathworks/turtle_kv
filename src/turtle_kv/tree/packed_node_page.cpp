@@ -291,14 +291,19 @@ StatusOr<llfs::PinnedPage> PackedNodePage::UpdateBuffer::Segment::load_leaf_page
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+PackedPiecewiseFilter PackedNodePage::UpdateBuffer::Segment::get_packed_filter(
+    const SegmentedLevel& level) const
+{
+  const usize segment_i = std::distance(level.segments_slice.begin(), this);
+  return level.packed_node_->get_packed_filter(level.level_i_, segment_i);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 bool PackedNodePage::UpdateBuffer::Segment::is_index_filtered(const SegmentedLevel& level,
                                                               u32 index) const
 {
-  const usize segment_i = std::distance(level.segments_slice.begin(), this);
-  
-  PackedPiecewiseFilter filter = level.packed_node_->get_packed_filter(level.level_i_, segment_i);
-  
-  return !filter.live_at_index(index);
+  return !this->get_packed_filter(level).live_at_index(index);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -306,11 +311,7 @@ bool PackedNodePage::UpdateBuffer::Segment::is_index_filtered(const SegmentedLev
 u32 PackedNodePage::UpdateBuffer::Segment::live_lower_bound(const SegmentedLevel& level,
                                                             u32 item_i) const
 {
-  const usize segment_i = std::distance(level.segments_slice.begin(), this);
- 
-  PackedPiecewiseFilter filter = level.packed_node_->get_packed_filter(level.level_i_, segment_i);
- 
-  return filter.live_lower_bound(item_i);
+  return this->get_packed_filter(level).live_lower_bound(item_i);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -319,11 +320,7 @@ Interval<u32> PackedNodePage::UpdateBuffer::Segment::get_live_item_range(
     const SegmentedLevel& level,
     Interval<u32> i) const
 {
-  const usize segment_i = std::distance(level.segments_slice.begin(), this);
-  
-  PackedPiecewiseFilter filter = level.packed_node_->get_packed_filter(level.level_i_, segment_i);
-  
-  return filter.find_live_range(i);
+  return this->get_packed_filter(level).find_live_range(i);
 }
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
