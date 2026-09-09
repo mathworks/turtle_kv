@@ -421,7 +421,7 @@ u64 query_page_loader_reset_every_n()
     , checkpoint_update_thread_{}
     , checkpoint_flush_thread_{}
 {
-  this->initialize_state(std::move(latest_recovered_checkpoint));
+  this->initialize_state(std::move(latest_recovered_checkpoint), recovered_active_checkpoints);
 
   this->checkpoint_generator_.emplace(
       this->worker_pool_,
@@ -510,7 +510,8 @@ KVStore::~KVStore() noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-void KVStore::initialize_state(Checkpoint&& latest_recovered_checkpoint)
+void KVStore::initialize_state(Checkpoint&& latest_recovered_checkpoint,
+                               const ActiveCheckpoints& recovered_active_checkpoints)
 {
   const EditOffset first_mem_table_edit_offset_lower_bound =
       latest_recovered_checkpoint.edit_offset_upper_bound();
@@ -524,6 +525,7 @@ void KVStore::initialize_state(Checkpoint&& latest_recovered_checkpoint)
     BATT_CHECK(init_state.deltas_.empty());
 
     init_state.base_checkpoint_.emplace(std::move(latest_recovered_checkpoint));
+    init_state.active_checkpoints_ = recovered_active_checkpoints;
   }
   this->next_mem_table_edit_offset_.set_value(
       init_state.mem_table_->edit_offset_lower_bound().value());
@@ -1026,22 +1028,25 @@ StatusOr<ValueView> KVStore::get(const KeyView& key) noexcept /*override*/
 //
 StatusOr<Snapshot> KVStore::get_snapshot(EditOffset checkpoint_edit_offset) noexcept
 {
-  batt::Toggle<State>::Reader state_reader{this->state_};
+  // Need to recover from checkpoint volume to get the llfs::SlotParse.
+  // TODO: [Gabe Bornstein 9/9/26] Could we use PackedCheckpoint::trace_refs instead? Would like
+  // to avoid calling read_checkpoint_volume if possible.
+  //
+  BATT_ASSIGN_OK_RESULT(RecoveredCheckpointState recovered,
+                        read_checkpoint_volume(*this->checkpoint_volume_));
 
-  auto it = state_reader->active_checkpoints_.find(checkpoint_edit_offset);
-  if (it == state_reader->active_checkpoints_.end()) {
-    // TODO: [Gabe Bornstein 8/27/26] Add better/more descriptive logging output here.
-    //
+  const PackedCheckpoint* packed = recovered.active.find(checkpoint_edit_offset.value());
+  if (!packed) {
     LOG(INFO) << "Checkpoint with EditOffset: " << checkpoint_edit_offset << " does not exist.";
     return {batt::StatusCode::kUnavailable};
   }
 
+  BATT_ASSIGN_OK_RESULT(Checkpoint checkpoint,
+                        Checkpoint::recover(*this->checkpoint_volume_, recovered.slot, *packed));
+
   return Snapshot{
-      it->second.clone(),
+      std::move(checkpoint),
       checkpoint_edit_offset,
-      // TODO: [Gabe Bornstein 8/31/26] I don't like passing page_cache_ here. Seems necessary for
-      // KeyQuery, but is there a better way to do this? Maybe make Snapshot a part of KVStore?
-      //
       this->page_cache_,
       this->tree_options_,
   };
@@ -1049,16 +1054,28 @@ StatusOr<Snapshot> KVStore::get_snapshot(EditOffset checkpoint_edit_offset) noex
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-std::vector<Snapshot> KVStore::get_active_snapshots() noexcept
+StatusOr<std::vector<Snapshot>> KVStore::get_active_snapshots() noexcept
 {
-  batt::Toggle<State>::Reader state_reader{this->state_};
+  // Need to recover from checkpoint volume to get the llfs::SlotParse.
+  // TODO: [Gabe Bornstein 9/9/26] Could we use PackedCheckpoint::trace_refs instead? Would like
+  // to avoid calling read_checkpoint_volume if possible.
+  //
+  BATT_ASSIGN_OK_RESULT(RecoveredCheckpointState recovered,
+                        read_checkpoint_volume(*this->checkpoint_volume_));
 
   std::vector<Snapshot> snapshots;
-  snapshots.reserve(state_reader->active_checkpoints_.size());
+  snapshots.reserve(recovered.active.num_active_checkpoints);
 
-  for (const auto& [offset, checkpoint] : state_reader->active_checkpoints_) {
+  for (u8 i = 0; i < recovered.active.num_active_checkpoints; ++i) {
+    const PackedCheckpoint& packed = recovered.active.checkpoints[i];
+    const EditOffset offset{packed.edit_offset_upper_bound.value()};
+
+    StatusOr<Checkpoint> checkpoint =
+        Checkpoint::recover(*this->checkpoint_volume_, recovered.slot, packed);
+    BATT_REQUIRE_OK(checkpoint);
+
     snapshots.emplace_back(Snapshot{
-        checkpoint.clone(),
+        std::move(*checkpoint),
         offset,
         this->page_cache_,
         this->tree_options_,
@@ -1768,15 +1785,7 @@ Status KVStore::commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_jo
 
     this->deltas_size_->set_value(new_state.deltas_.size());
 
-    // Update the active checkpoints map: add the new checkpoint and remove any that were evicted.
-    //
-    new_state.active_checkpoints_ = old_state.active_checkpoints_;
-
-    const EditOffset new_offset{checkpoint_job->edit_offset_upper_bound};
-    new_state.active_checkpoints_.emplace(new_offset, new_state.base_checkpoint_->clone());
-
-    auto evict_end = new_state.active_checkpoints_.lower_bound(oldest_retained_offset);
-    new_state.active_checkpoints_.erase(new_state.active_checkpoints_.begin(), evict_end);
+    new_state.active_checkpoints_ = active;
 
   }  // ~Writer() swaps the new state into the active status.
 

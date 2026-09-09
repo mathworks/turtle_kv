@@ -44,6 +44,8 @@ struct ActiveCheckpoints {
   PackedCheckpoint newest() const;
 
   PackedCheckpoint oldest() const;
+
+  const PackedCheckpoint* find(i64 edit_offset) const;
 };
 
 BATT_STATIC_ASSERT_EQ(sizeof(ActiveCheckpoints),

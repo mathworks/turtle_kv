@@ -50,6 +50,16 @@ PackedCheckpoint ActiveCheckpoints::oldest() const
   return this->checkpoints[0];
 }
 
+const PackedCheckpoint* ActiveCheckpoints::find(i64 edit_offset) const
+{
+  for (u8 i = 0; i < this->num_active_checkpoints; ++i) {
+    if (this->checkpoints[i].edit_offset_upper_bound == edit_offset) {
+      return &this->checkpoints[i];
+    }
+  }
+  return nullptr;
+}
+
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 llfs::BoxedSeq<llfs::PageId> trace_refs(const ActiveCheckpoints& active)

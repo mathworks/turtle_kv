@@ -14,10 +14,10 @@
 
 #include <turtle_kv/change_log/change_log_writer.hpp>
 #include <turtle_kv/checkpoint.hpp>
-#include <turtle_kv/snapshot.hpp>
 #include <turtle_kv/checkpoint_generator.hpp>
 #include <turtle_kv/kv_store_config.hpp>
 #include <turtle_kv/kv_store_metrics.hpp>
+#include <turtle_kv/snapshot.hpp>
 
 #include <turtle_kv/mem_table/mem_table.hpp>
 
@@ -283,14 +283,18 @@ class KVStore : public Table
 
   /** \brief Returns Snapshots for all currently active checkpoints, ordered oldest to newest.
    */
-  std::vector<Snapshot> get_active_snapshots() noexcept;
+  // TODO: [Gabe Bornstein 9/9/26] Make return type StatusOr<T>.
+  //
+  StatusOr<std::vector<Snapshot>> get_active_snapshots() noexcept;
 
   /** \brief Returns the number of currently active (tracked) checkpoints.
    */
   usize active_checkpoint_count() const noexcept
   {
-    return batt::Toggle<State>::Reader{const_cast<KVStore*>(this)->state_}
-        ->active_checkpoints_.size();
+    return batt::Toggle<State>::Reader
+    {
+      const_cast<KVStore*>(this)->state_
+      } -> active_checkpoints_.num_active_checkpoints.value();
   }
 
   std::function<void(std::ostream&)> debug_info() const noexcept;
@@ -340,9 +344,12 @@ class KVStore : public Table
      */
     Optional<Checkpoint> base_checkpoint_;
 
-    /** \brief Map of all active checkpoints, keyed by EditOffset.
+    /** \brief The set of all active (retained) packed checkpoints.
      */
-    std::map<EditOffset, Checkpoint> active_checkpoints_;
+    // TODO: [Gabe Bornstein 9/9/26] Do we even need this if we're just always reading out to the
+    // checkpoint_volume to grab snapshots?
+    //
+    ActiveCheckpoints active_checkpoints_;
   };
 
   static_assert(std::default_initializable<State>);
@@ -365,7 +372,8 @@ class KVStore : public Table
 
   /** \brief Initializes the `State` of the KVStore.
    */
-  void initialize_state(Checkpoint&& latest_recovered_checkpoint);
+  void initialize_state(Checkpoint&& latest_recovered_checkpoint,
+                        const ActiveCheckpoints& recovered_active_checkpoints);
 
   /** \brief Opens the change log file and recovers state from it; this is necessary to properly
    * initialize the KVStore.
