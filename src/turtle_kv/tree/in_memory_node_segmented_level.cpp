@@ -10,6 +10,8 @@
 #include <turtle_kv/tree/leaf_page_view.hpp>
 #include <turtle_kv/tree/segmented_level_scanner.hpp>
 
+#include <turtle_kv/util/piecewise_filter.ipp>
+
 #include <batteries/case_of.hpp>
 
 #include <type_traits>

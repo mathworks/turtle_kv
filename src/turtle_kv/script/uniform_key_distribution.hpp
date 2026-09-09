@@ -37,7 +37,9 @@ inline constexpr std::array<u64, 64> kHashSeeds = {
 class UniformInsertKeyDistribution : public KeyDistribution
 {
  public:
-  explicit UniformInsertKeyDistribution(usize key_size) noexcept : key_buffer_(key_size)
+  explicit UniformInsertKeyDistribution(usize key_size, usize seed = 0) noexcept
+      : next_ordinal_{seed}
+      , key_buffer_(key_size)
   {
   }
 
@@ -48,7 +50,7 @@ class UniformInsertKeyDistribution : public KeyDistribution
 
   std::pair<KeyView, usize> get_next(KeySet& inserted_keys) override
   {
-    return inserted_keys.create_key(this->format_key(this->count_.fetch_add(1)));
+    return inserted_keys.create_key(this->format_key(this->next_ordinal_.fetch_add(1)));
   }
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -77,7 +79,7 @@ class UniformInsertKeyDistribution : public KeyDistribution
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  std::atomic<usize> count_{0};
+  std::atomic<usize> next_ordinal_{0};
   SmallVec<char, 64> key_buffer_;
 };
 

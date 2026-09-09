@@ -2,9 +2,6 @@
 
 #include <batteries/interval.hpp>
 
-#include <cstddef>
-#include <ostream>
-
 namespace turtle_kv {
 
 using batt::BasicInterval;
