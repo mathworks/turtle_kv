@@ -17,7 +17,8 @@ namespace turtle_kv {
     llfs::PageCache& cache,
     boost::intrusive_ptr<FilterPageWriteState>&& filter_page_write_state,
     Checkpoint&& base_checkpoint,
-    llfs::Volume& checkpoint_volume) noexcept
+    llfs::Volume& checkpoint_volume,
+    const PackedActiveCheckpoints& recovered_active_checkpoints) noexcept
     //----- --- -- -  -  -   -
     : worker_pool_{worker_pool}
     , tree_options_{tree_options}
@@ -26,12 +27,14 @@ namespace turtle_kv {
     , base_checkpoint_{std::move(base_checkpoint)}
     , stop_requested_{false}
     , checkpoint_volume_{checkpoint_volume}
+    , active_checkpoints_{recovered_active_checkpoints}
 {
-  Optional<llfs::SlotRange> prev_slot_range = base_checkpoint.slot_range();
+  Optional<llfs::SlotRange> prev_slot_range = this->base_checkpoint_.slot_range();
   if (prev_slot_range) {
     this->slot_sequencer_.set_current(*prev_slot_range);
     this->slot_sequencer_ = this->slot_sequencer_.get_next();
   }
+
   this->initialize_job();
 }
 
@@ -102,14 +105,6 @@ StatusOr<usize> CheckpointGenerator::apply_batch(std::unique_ptr<DeltaBatch>&& b
 
   VLOG(2) << "checkpoint task: flushing batch to create new checkpoint tree";
 
-  {
-    Optional<llfs::PageId> root_id = this->base_checkpoint_.maybe_root_id();
-    if (root_id) {
-      this->job_->new_root(*root_id);
-      this->roots_to_remove_.emplace_back(*root_id);
-    }
-  }
-
   batt::CancelToken cancel_token;
 
   *this->cancel_token_.lock() = cancel_token;
@@ -131,24 +126,6 @@ StatusOr<usize> CheckpointGenerator::apply_batch(std::unique_ptr<DeltaBatch>&& b
   this->base_checkpoint_ = std::move(*new_checkpoint);
 
   this->current_batch_count_ += 1;
-
-  // Periodically serialize to unpin some pages, controlling total memory usage.
-  //
-  static const usize serialize_limit =
-      batt::getenv_as<usize>("TURTLE_KV_SERIALIZE_EVERY_N_BATCHES").value_or(0);
-
-  if (serialize_limit != 0 && (this->current_batch_count_ % serialize_limit) == 0) {
-    BATT_REQUIRE_OK(this->serialize_checkpoint(overcommit));
-
-    const llfs::PageId root_id = batt::get_or_panic(this->base_checkpoint_.maybe_root_id());
-    this->job_->new_root(root_id);
-    this->clear_old_roots();
-
-    BATT_REQUIRE_OK(this->job_->prune(/*callers=*/0));
-
-    this->job_->delete_root(root_id);
-    this->job_->unpin_all();
-  }
 
   return {1u};
 }
@@ -187,16 +164,6 @@ Status CheckpointGenerator::serialize_checkpoint(llfs::PageCacheOvercommit& over
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-void CheckpointGenerator::clear_old_roots() noexcept
-{
-  for (const llfs::PageId root_id : this->roots_to_remove_) {
-    this->job_->delete_root(root_id);
-  }
-  this->roots_to_remove_.clear();
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
 StatusOr<batt::Grant> CheckpointGenerator::reserve_slot_grant_for_checkpoints(usize slot_grant_size)
 {
   return this->checkpoint_volume_.reserve(slot_grant_size, batt::WaitForResource::kTrue);
@@ -227,8 +194,6 @@ StatusOr<std::unique_ptr<CheckpointJob>> CheckpointGenerator::finalize_checkpoin
   this->prev_batch_id_ = None;
   this->current_batch_count_ = 0;
 
-  this->clear_old_roots();
-
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   auto checkpoint_job = std::make_unique<CheckpointJob>();
@@ -240,19 +205,21 @@ StatusOr<std::unique_ptr<CheckpointJob>> CheckpointGenerator::finalize_checkpoin
   checkpoint_job->edit_offset_upper_bound = edit_offset_upper_bound;
   checkpoint_job->batch_count = batch_count;
 
-  checkpoint_job->packed_checkpoint.emplace(
-      llfs::PackAsVariant<CheckpointLogEvent, PackedCheckpoint>{
-          PackedCheckpoint{
-              .edit_offset_upper_bound = this->base_checkpoint_.edit_offset_upper_bound().value(),
-              .new_tree_root = llfs::PackedPageId::from(this->base_checkpoint_.root_id()),
-          },
+  this->active_checkpoints_.push_back(PackedCheckpoint{
+      .edit_offset_upper_bound = this->base_checkpoint_.edit_offset_upper_bound().value(),
+      .new_tree_root = llfs::PackedPageId::from(this->base_checkpoint_.root_id()),
+  });
+
+  checkpoint_job->active_checkpoints.emplace(
+      llfs::PackAsVariant<CheckpointLogEvent, PackedActiveCheckpoints>{
+          this->active_checkpoints_,
       });
 
-  // Package the job up with a PackedCheckpoint event record so we can append it to the Volume.
+  // Package the job up with a PackedActiveCheckpoints event record so we can append it to the Volume.
   //
   StatusOr<llfs::AppendableJob> appendable_job =
       llfs::make_appendable_job(std::move(this->job_),
-                                llfs::PackableRef{*checkpoint_job->packed_checkpoint});
+                                llfs::PackableRef{*checkpoint_job->active_checkpoints});
 
   BATT_REQUIRE_OK(appendable_job);
 
