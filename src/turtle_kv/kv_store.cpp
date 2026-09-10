@@ -1431,25 +1431,6 @@ using CheckpointEvent = llfs::PackedVariant<turtle_kv::ActiveCheckpoints>;
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-/*static*/ batt::StatusOr<std::map<EditOffset, turtle_kv::Checkpoint>>
-KVStore::recover_all_checkpoints(llfs::Volume& checkpoint_volume)
-{
-  BATT_ASSIGN_OK_RESULT(RecoveredCheckpointState state, read_checkpoint_volume(checkpoint_volume));
-
-  std::map<EditOffset, Checkpoint> result;
-
-  for (u8 i = 0; i < state.active.num_active_checkpoints; ++i) {
-    const PackedCheckpoint& packed = state.active.checkpoints[i];
-    BATT_ASSIGN_OK_RESULT(Checkpoint checkpoint,
-                          Checkpoint::recover(checkpoint_volume, state.slot, packed));
-    result.emplace(checkpoint.edit_offset_upper_bound(), std::move(checkpoint));
-  }
-
-  return result;
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
 Status KVStore::sync(Optional<EditOffset> upper_bound,
                      Optional<WriteOptions> write_options) noexcept
 {

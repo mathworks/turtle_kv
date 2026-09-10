@@ -189,12 +189,6 @@ class KVStore : public Table
    */
   static StatusOr<Checkpoint> recover_latest_checkpoint(llfs::Volume& checkpoint_volume);
 
-  /** \brief Recovers all active checkpoints from the checkpoint volume, returning them as a map
-   * from EditOffset to Checkpoint.
-   */
-  static StatusOr<std::map<EditOffset, Checkpoint>> recover_all_checkpoints(
-      llfs::Volume& checkpoint_volume);
-
   struct RecoveredCheckpointState {
     ActiveCheckpoints active;
     llfs::SlotParse slot;
