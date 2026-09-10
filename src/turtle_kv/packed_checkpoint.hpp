@@ -30,7 +30,7 @@ llfs::BoxedSeq<llfs::PageId> trace_refs(const PackedCheckpoint& checkpoint);
 
 const u8 MAX_ACTIVE_CHECKPOINTS = 8;
 
-struct ActiveCheckpoints {
+struct PackedActiveCheckpoints {
   std::array<PackedCheckpoint, MAX_ACTIVE_CHECKPOINTS> checkpoints;
   little_u8 num_active_checkpoints;
 
@@ -48,11 +48,11 @@ struct ActiveCheckpoints {
   const PackedCheckpoint* find(i64 edit_offset) const;
 };
 
-BATT_STATIC_ASSERT_EQ(sizeof(ActiveCheckpoints),
+BATT_STATIC_ASSERT_EQ(sizeof(PackedActiveCheckpoints),
                       sizeof(PackedCheckpoint) * MAX_ACTIVE_CHECKPOINTS + sizeof(little_u8));
 
-LLFS_SIMPLE_PACKED_TYPE(ActiveCheckpoints);
+LLFS_SIMPLE_PACKED_TYPE(PackedActiveCheckpoints);
 
-llfs::BoxedSeq<llfs::PageId> trace_refs(const ActiveCheckpoints& active);
+llfs::BoxedSeq<llfs::PageId> trace_refs(const PackedActiveCheckpoints& active);
 
 }  // namespace turtle_kv

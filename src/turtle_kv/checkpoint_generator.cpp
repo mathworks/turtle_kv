@@ -18,7 +18,7 @@ namespace turtle_kv {
     boost::intrusive_ptr<FilterPageWriteState>&& filter_page_write_state,
     Checkpoint&& base_checkpoint,
     llfs::Volume& checkpoint_volume,
-    const ActiveCheckpoints& recovered_active_checkpoints) noexcept
+    const PackedActiveCheckpoints& recovered_active_checkpoints) noexcept
     //----- --- -- -  -  -   -
     : worker_pool_{worker_pool}
     , tree_options_{tree_options}
@@ -211,11 +211,11 @@ StatusOr<std::unique_ptr<CheckpointJob>> CheckpointGenerator::finalize_checkpoin
   });
 
   checkpoint_job->active_checkpoints.emplace(
-      llfs::PackAsVariant<CheckpointLogEvent, ActiveCheckpoints>{
+      llfs::PackAsVariant<CheckpointLogEvent, PackedActiveCheckpoints>{
           this->active_checkpoints_,
       });
 
-  // Package the job up with an ActiveCheckpoints event record so we can append it to the Volume.
+  // Package the job up with a PackedActiveCheckpoints event record so we can append it to the Volume.
   //
   StatusOr<llfs::AppendableJob> appendable_job =
       llfs::make_appendable_job(std::move(this->job_),

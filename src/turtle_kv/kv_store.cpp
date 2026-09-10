@@ -294,7 +294,7 @@ u64 query_page_loader_reset_every_n()
   BATT_ASSIGN_OK_RESULT(Checkpoint latest_checkpoint,
                         KVStore::recover_latest_checkpoint(*checkpoint_volume));
 
-  BATT_ASSIGN_OK_RESULT(ActiveCheckpoints recovered_active_checkpoints,
+  BATT_ASSIGN_OK_RESULT(PackedActiveCheckpoints recovered_active_checkpoints,
                         KVStore::recover_active_checkpoints(*checkpoint_volume));
 
   std::unique_ptr<KVStore> kv_store{new KVStore{
@@ -389,7 +389,7 @@ u64 query_page_loader_reset_every_n()
                               const RuntimeOptions& runtime_options,
                               std::unique_ptr<llfs::Volume>&& checkpoint_volume,
                               Checkpoint&& latest_recovered_checkpoint,
-                              const ActiveCheckpoints& recovered_active_checkpoints) noexcept
+                              const PackedActiveCheckpoints& recovered_active_checkpoints) noexcept
     : metrics_{}
     , task_scheduler_{task_scheduler}
     , worker_pool_{worker_pool}
@@ -511,7 +511,7 @@ KVStore::~KVStore() noexcept
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 void KVStore::initialize_state(Checkpoint&& latest_recovered_checkpoint,
-                               const ActiveCheckpoints& recovered_active_checkpoints)
+                               const PackedActiveCheckpoints& recovered_active_checkpoints)
 {
   const EditOffset first_mem_table_edit_offset_lower_bound =
       latest_recovered_checkpoint.edit_offset_upper_bound();
@@ -1032,7 +1032,7 @@ StatusOr<Snapshot> KVStore::get_snapshot(EditOffset checkpoint_edit_offset) noex
   // TODO: [Gabe Bornstein 9/9/26] Could we use PackedCheckpoint::trace_refs instead? Would like
   // to avoid calling read_checkpoint_volume if possible.
   //
-  BATT_ASSIGN_OK_RESULT(RecoveredCheckpointState recovered,
+  BATT_ASSIGN_OK_RESULT(RecoveredActiveCheckpointsState recovered,
                         read_checkpoint_volume(*this->checkpoint_volume_));
 
   const PackedCheckpoint* packed = recovered.active.find(checkpoint_edit_offset.value());
@@ -1060,7 +1060,7 @@ StatusOr<std::vector<Snapshot>> KVStore::get_active_snapshots() noexcept
   // TODO: [Gabe Bornstein 9/9/26] Could we use PackedCheckpoint::trace_refs instead? Would like
   // to avoid calling read_checkpoint_volume if possible.
   //
-  BATT_ASSIGN_OK_RESULT(RecoveredCheckpointState recovered,
+  BATT_ASSIGN_OK_RESULT(RecoveredActiveCheckpointsState recovered,
                         read_checkpoint_volume(*this->checkpoint_volume_));
 
   std::vector<Snapshot> snapshots;
@@ -1366,11 +1366,11 @@ Status KVStore::wait_for_recovery() const noexcept
   }
 }
 
-using CheckpointEvent = llfs::PackedVariant<turtle_kv::ActiveCheckpoints>;
+using CheckpointEvent = llfs::PackedVariant<turtle_kv::PackedActiveCheckpoints>;
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-/*static*/ batt::StatusOr<KVStore::RecoveredCheckpointState> KVStore::read_checkpoint_volume(
+/*static*/ batt::StatusOr<KVStore::RecoveredActiveCheckpointsState> KVStore::read_checkpoint_volume(
     llfs::Volume& checkpoint_volume)
 {
   llfs::StatusOr<llfs::TypedVolumeReader<CheckpointEvent>> reader =
@@ -1383,12 +1383,12 @@ using CheckpointEvent = llfs::PackedVariant<turtle_kv::ActiveCheckpoints>;
 
   BATT_REQUIRE_OK(reader);
 
-  RecoveredCheckpointState state{};
+  RecoveredActiveCheckpointsState state{};
 
   for (;;) {
     llfs::StatusOr<usize> n_slots_visited = reader->visit_typed_next(
         batt::WaitForResource::kFalse,
-        [&state](const llfs::SlotParse& s, const turtle_kv::ActiveCheckpoints& active_checkpoints) {
+        [&state](const llfs::SlotParse& s, const turtle_kv::PackedActiveCheckpoints& active_checkpoints) {
           BATT_CHECK_GT(active_checkpoints.num_active_checkpoints.value(), 0u);
           state.active = active_checkpoints;
           state.slot = s;
@@ -1407,10 +1407,10 @@ using CheckpointEvent = llfs::PackedVariant<turtle_kv::ActiveCheckpoints>;
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-/*static*/ batt::StatusOr<turtle_kv::ActiveCheckpoints> KVStore::recover_active_checkpoints(
+/*static*/ batt::StatusOr<turtle_kv::PackedActiveCheckpoints> KVStore::recover_active_checkpoints(
     llfs::Volume& checkpoint_volume)
 {
-  BATT_ASSIGN_OK_RESULT(RecoveredCheckpointState state, read_checkpoint_volume(checkpoint_volume));
+  BATT_ASSIGN_OK_RESULT(RecoveredActiveCheckpointsState state, read_checkpoint_volume(checkpoint_volume));
   return state.active;
 }
 
@@ -1419,7 +1419,7 @@ using CheckpointEvent = llfs::PackedVariant<turtle_kv::ActiveCheckpoints>;
 /*static*/ batt::StatusOr<turtle_kv::Checkpoint> KVStore::recover_latest_checkpoint(
     llfs::Volume& checkpoint_volume)
 {
-  BATT_ASSIGN_OK_RESULT(RecoveredCheckpointState state, read_checkpoint_volume(checkpoint_volume));
+  BATT_ASSIGN_OK_RESULT(RecoveredActiveCheckpointsState state, read_checkpoint_volume(checkpoint_volume));
 
   if (state.active.num_active_checkpoints == 0) {
     return Checkpoint::make_empty();
@@ -1717,7 +1717,7 @@ Status KVStore::commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_jo
   // happen until this thread calls trim)
   //
   const auto& packed = *checkpoint_job->active_checkpoints;
-  const ActiveCheckpoints& active = packed.object;
+  const PackedActiveCheckpoints& active = packed.object;
   BATT_CHECK_GT(active.num_active_checkpoints.value(), 0u);
   const EditOffset oldest_retained_offset{active.oldest().edit_offset_upper_bound};
   BATT_REQUIRE_OK(this->change_log_writer_->trim(oldest_retained_offset));

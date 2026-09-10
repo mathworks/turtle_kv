@@ -24,7 +24,7 @@ llfs::BoxedSeq<llfs::PageId> trace_refs(const PackedCheckpoint& checkpoint)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-void ActiveCheckpoints::push_back(const PackedCheckpoint& checkpoint)
+void PackedActiveCheckpoints::push_back(const PackedCheckpoint& checkpoint)
 {
   const u8 n = this->num_active_checkpoints;
   if (n < MAX_ACTIVE_CHECKPOINTS) {
@@ -38,19 +38,19 @@ void ActiveCheckpoints::push_back(const PackedCheckpoint& checkpoint)
   }
 }
 
-PackedCheckpoint ActiveCheckpoints::newest() const
+PackedCheckpoint PackedActiveCheckpoints::newest() const
 {
   BATT_CHECK_NE(this->num_active_checkpoints, 0);
   return this->checkpoints[this->num_active_checkpoints - 1];
 }
 
-PackedCheckpoint ActiveCheckpoints::oldest() const
+PackedCheckpoint PackedActiveCheckpoints::oldest() const
 {
   BATT_CHECK_NE(this->num_active_checkpoints, 0);
   return this->checkpoints[0];
 }
 
-const PackedCheckpoint* ActiveCheckpoints::find(i64 edit_offset) const
+const PackedCheckpoint* PackedActiveCheckpoints::find(i64 edit_offset) const
 {
   for (u8 i = 0; i < this->num_active_checkpoints; ++i) {
     if (this->checkpoints[i].edit_offset_upper_bound == edit_offset) {
@@ -62,7 +62,7 @@ const PackedCheckpoint* ActiveCheckpoints::find(i64 edit_offset) const
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-llfs::BoxedSeq<llfs::PageId> trace_refs(const ActiveCheckpoints& active)
+llfs::BoxedSeq<llfs::PageId> trace_refs(const PackedActiveCheckpoints& active)
 {
   auto active_slice = as_slice(active.checkpoints.data(),
                                active.checkpoints.data() + active.num_active_checkpoints);

@@ -181,23 +181,23 @@ class KVStore : public Table
    */
   static Status register_page_layouts(llfs::PageCache& page_cache);
 
-  /** \brief Returns the most recent ActiveCheckpoints record from the checkpoint volume.
+  /** \brief Returns the most recent PackedActiveCheckpoints record from the checkpoint volume.
    */
-  static StatusOr<ActiveCheckpoints> recover_active_checkpoints(llfs::Volume& checkpoint_volume);
+  static StatusOr<PackedActiveCheckpoints> recover_active_checkpoints(llfs::Volume& checkpoint_volume);
 
   /** \brief Returns the latest checkpoint recovered from the passed volume.
    */
   static StatusOr<Checkpoint> recover_latest_checkpoint(llfs::Volume& checkpoint_volume);
 
-  struct RecoveredCheckpointState {
-    ActiveCheckpoints active;
+  struct RecoveredActiveCheckpointsState {
+    PackedActiveCheckpoints active;
     llfs::SlotParse slot;
   };
 
-  /** \brief Reads the checkpoint volume and returns the most recent ActiveCheckpoints record along
+  /** \brief Reads the checkpoint volume and returns the most recent PackedActiveCheckpoints record along
    * with its slot parse. All other recover_* methods delegate to this.
    */
-  static StatusOr<RecoveredCheckpointState> read_checkpoint_volume(llfs::Volume& checkpoint_volume);
+  static StatusOr<RecoveredActiveCheckpointsState> read_checkpoint_volume(llfs::Volume& checkpoint_volume);
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -343,7 +343,7 @@ class KVStore : public Table
     // TODO: [Gabe Bornstein 9/9/26] Do we even need this if we're just always reading out to the
     // checkpoint_volume to grab snapshots?
     //
-    ActiveCheckpoints active_checkpoints_;
+    PackedActiveCheckpoints active_checkpoints_;
   };
 
   static_assert(std::default_initializable<State>);
@@ -360,14 +360,14 @@ class KVStore : public Table
                    const RuntimeOptions& runtime_options,
                    std::unique_ptr<llfs::Volume>&& checkpoint_volume,
                    Checkpoint&& latest_recovered_checkpoint,
-                   const ActiveCheckpoints& recovered_active_checkpoints) noexcept;
+                   const PackedActiveCheckpoints& recovered_active_checkpoints) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   /** \brief Initializes the `State` of the KVStore.
    */
   void initialize_state(Checkpoint&& latest_recovered_checkpoint,
-                        const ActiveCheckpoints& recovered_active_checkpoints);
+                        const PackedActiveCheckpoints& recovered_active_checkpoints);
 
   /** \brief Opens the change log file and recovers state from it; this is necessary to properly
    * initialize the KVStore.
