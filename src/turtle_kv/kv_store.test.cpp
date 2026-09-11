@@ -729,14 +729,14 @@ TEST_P(CheckpointReadOldKeysTest, CheckpointReadOldKeys)
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
   for (u64 cp = 0; cp < num_expired; ++cp) {
-    StatusOr<Snapshot> snapshot = kv_store->get_snapshot(checkpoint_offsets[cp]);
+    StatusOr<std::shared_ptr<Snapshot>> snapshot = kv_store->get_snapshot(checkpoint_offsets[cp]);
     EXPECT_FALSE(snapshot.ok()) << "Expired checkpoint " << cp << " should not be queryable";
   }
 
   // Verify each living checkpoint can see exactly the keys written up to and including its batch.
   //
   for (u64 cp = num_expired; cp < this->num_checkpoints; ++cp) {
-    StatusOr<Snapshot> snapshot = kv_store->get_snapshot(checkpoint_offsets[cp]);
+    StatusOr<std::shared_ptr<Snapshot>> snapshot = kv_store->get_snapshot(checkpoint_offsets[cp]);
     ASSERT_TRUE(snapshot.ok()) << "Failed to get snapshot for checkpoint " << cp;
 
     const i64 visible_end = (cp == this->num_checkpoints - 1)
@@ -747,7 +747,7 @@ TEST_P(CheckpointReadOldKeysTest, CheckpointReadOldKeys)
     //
     for (i64 i = 0; i < visible_end; ++i) {
       std::string key = make_key(i);
-      StatusOr<ValueView> result = snapshot->get(KeyView{key});
+      StatusOr<ValueView> result = (*snapshot)->get(KeyView{key});
       ASSERT_TRUE(result.ok()) << "Checkpoint " << cp << " missing key: " << key;
       EXPECT_EQ(result->as_str(), make_value(i));
     }
@@ -756,7 +756,7 @@ TEST_P(CheckpointReadOldKeysTest, CheckpointReadOldKeys)
     //
     for (i64 i = visible_end; i < static_cast<i64>(this->num_keys); ++i) {
       std::string key = make_key(i);
-      StatusOr<ValueView> result = snapshot->get(KeyView{key});
+      StatusOr<ValueView> result = (*snapshot)->get(KeyView{key});
       EXPECT_FALSE(result.ok()) << "Checkpoint " << cp << " should NOT contain key: " << key;
     }
   }

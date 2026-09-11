@@ -183,21 +183,29 @@ class KVStore : public Table
 
   /** \brief Returns the most recent PackedActiveCheckpoints record from the checkpoint volume.
    */
-  static StatusOr<PackedActiveCheckpoints> recover_active_checkpoints(llfs::Volume& checkpoint_volume);
+  static StatusOr<PackedActiveCheckpoints> recover_active_checkpoints(
+      llfs::Volume& checkpoint_volume);
 
   /** \brief Returns the latest checkpoint recovered from the passed volume.
    */
   static StatusOr<Checkpoint> recover_latest_checkpoint(llfs::Volume& checkpoint_volume);
+
+  /** \brief Recovers all active checkpoints from the checkpoint volume, returning them as a map
+   * from EditOffset to Checkpoint.
+   */
+  static StatusOr<std::map<EditOffset, Checkpoint>> recover_all_checkpoints(
+      llfs::Volume& checkpoint_volume);
 
   struct RecoveredActiveCheckpointsState {
     PackedActiveCheckpoints active;
     llfs::SlotParse slot;
   };
 
-  /** \brief Reads the checkpoint volume and returns the most recent PackedActiveCheckpoints record along
-   * with its slot parse. All other recover_* methods delegate to this.
+  /** \brief Reads the checkpoint volume and returns the most recent PackedActiveCheckpoints record
+   * along with its slot parse. All other recover_* methods delegate to this.
    */
-  static StatusOr<RecoveredActiveCheckpointsState> read_checkpoint_volume(llfs::Volume& checkpoint_volume);
+  static StatusOr<RecoveredActiveCheckpointsState> read_checkpoint_volume(
+      llfs::Volume& checkpoint_volume);
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -273,13 +281,13 @@ class KVStore : public Table
   /** \brief Returns a read-only Snapshot for the checkpoint identified by the given EditOffset.
    * Returns kUnavailable if no checkpoint exists at that offset.
    */
-  StatusOr<Snapshot> get_snapshot(EditOffset checkpoint_edit_offset) noexcept;
+  StatusOr<std::shared_ptr<Snapshot>> get_snapshot(EditOffset checkpoint_edit_offset) noexcept;
 
   /** \brief Returns Snapshots for all currently active checkpoints, ordered oldest to newest.
    */
   // TODO: [Gabe Bornstein 9/9/26] Make return type StatusOr<T>.
   //
-  StatusOr<std::vector<Snapshot>> get_active_snapshots() noexcept;
+  StatusOr<std::vector<std::shared_ptr<Snapshot>>> get_active_snapshots() noexcept;
 
   /** \brief Returns the number of currently active (tracked) checkpoints.
    */
@@ -288,7 +296,7 @@ class KVStore : public Table
     return batt::Toggle<State>::Reader
     {
       const_cast<KVStore*>(this)->state_
-      } -> active_checkpoints_.num_active_checkpoints.value();
+      } -> snapshots_.size();
   }
 
   std::function<void(std::ostream&)> debug_info() const noexcept;
@@ -338,12 +346,9 @@ class KVStore : public Table
      */
     Optional<Checkpoint> base_checkpoint_;
 
-    /** \brief The set of all active (retained) packed checkpoints.
+    /** \brief The set of all active (retained) snapshots, ordered oldest to newest.
      */
-    // TODO: [Gabe Bornstein 9/9/26] Do we even need this if we're just always reading out to the
-    // checkpoint_volume to grab snapshots?
-    //
-    PackedActiveCheckpoints active_checkpoints_;
+    std::vector<std::shared_ptr<Snapshot>> snapshots_;
   };
 
   static_assert(std::default_initializable<State>);
@@ -360,14 +365,15 @@ class KVStore : public Table
                    const RuntimeOptions& runtime_options,
                    std::unique_ptr<llfs::Volume>&& checkpoint_volume,
                    Checkpoint&& latest_recovered_checkpoint,
-                   const PackedActiveCheckpoints& recovered_active_checkpoints) noexcept;
+                   const PackedActiveCheckpoints& recovered_active_checkpoints,
+                   std::vector<std::shared_ptr<Snapshot>>&& recovered_snapshots) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   /** \brief Initializes the `State` of the KVStore.
    */
   void initialize_state(Checkpoint&& latest_recovered_checkpoint,
-                        const PackedActiveCheckpoints& recovered_active_checkpoints);
+                        std::vector<std::shared_ptr<Snapshot>>&& recovered_snapshots);
 
   /** \brief Opens the change log file and recovers state from it; this is necessary to properly
    * initialize the KVStore.
