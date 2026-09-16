@@ -46,7 +46,6 @@
 #include <boost/intrusive_ptr.hpp>
 
 #include <filesystem>
-#include <map>
 #include <memory>
 #include <thread>
 #include <utility>
@@ -181,23 +180,21 @@ class KVStore : public Table
    */
   static Status register_page_layouts(llfs::PageCache& page_cache);
 
-  /** \brief Returns the most recent PackedActiveCheckpoints record from the checkpoint volume.
-   */
-  static StatusOr<PackedActiveCheckpoints> recover_active_checkpoints(llfs::Volume& checkpoint_volume);
-
-  /** \brief Returns the latest checkpoint recovered from the passed volume.
-   */
-  static StatusOr<Checkpoint> recover_latest_checkpoint(llfs::Volume& checkpoint_volume);
-
   struct RecoveredActiveCheckpointsState {
     PackedActiveCheckpoints active;
     llfs::SlotParse slot;
   };
 
-  /** \brief Reads the checkpoint volume and returns the most recent PackedActiveCheckpoints record along
-   * with its slot parse. All other recover_* methods delegate to this.
+  /** \brief Reads the checkpoint volume and returns the most recent PackedActiveCheckpoints record
+   * along with its slot parse. All other recover_* methods delegate to this.
    */
-  static StatusOr<RecoveredActiveCheckpointsState> read_checkpoint_volume(llfs::Volume& checkpoint_volume);
+  static StatusOr<RecoveredActiveCheckpointsState> read_checkpoint_volume(
+      llfs::Volume& checkpoint_volume);
+
+  /** \brief Returns the latest checkpoint recovered from the passed volume.
+   */
+  static StatusOr<Checkpoint> recover_latest_checkpoint(llfs::Volume& checkpoint_volume,
+                                                        RecoveredActiveCheckpointsState state);
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -271,14 +268,12 @@ class KVStore : public Table
   Status wait_for_checkpoint(EditOffset target) noexcept;
 
   /** \brief Returns a read-only Snapshot for the checkpoint identified by the given EditOffset.
-   * Returns kUnavailable if no checkpoint exists at that offset.
+   * Returns kNotFound if no checkpoint exists at that offset.
    */
   StatusOr<Snapshot> get_snapshot(EditOffset checkpoint_edit_offset) noexcept;
 
   /** \brief Returns Snapshots for all currently active checkpoints, ordered oldest to newest.
    */
-  // TODO: [Gabe Bornstein 9/9/26] Make return type StatusOr<T>.
-  //
   StatusOr<std::vector<Snapshot>> get_active_snapshots() noexcept;
 
   /** \brief Returns the number of currently active (tracked) checkpoints.
@@ -340,9 +335,6 @@ class KVStore : public Table
 
     /** \brief The set of all active (retained) packed checkpoints.
      */
-    // TODO: [Gabe Bornstein 9/9/26] Do we even need this if we're just always reading out to the
-    // checkpoint_volume to grab snapshots?
-    //
     PackedActiveCheckpoints active_checkpoints_;
   };
 

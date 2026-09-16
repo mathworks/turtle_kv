@@ -550,8 +550,12 @@ TEST_P(CheckpointTest, CheckpointRecovery)
 
   BATT_CHECK_OK(checkpoint_log_volume);
 
+  batt::StatusOr<KVStore::RecoveredActiveCheckpointsState> state =
+      KVStore::read_checkpoint_volume(**checkpoint_log_volume);
+  BATT_CHECK_OK(state);
+
   batt::StatusOr<turtle_kv::Checkpoint> checkpoint =
-      KVStore::recover_latest_checkpoint(**checkpoint_log_volume);
+      KVStore::recover_latest_checkpoint(**checkpoint_log_volume, *state);
 
   if (!checkpoint.ok()) {
     EXPECT_TRUE(checkpoint.ok());
