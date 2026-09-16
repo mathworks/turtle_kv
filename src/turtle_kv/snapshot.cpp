@@ -19,8 +19,8 @@ namespace turtle_kv {
 //
 Snapshot::Snapshot(Checkpoint&& checkpoint,
                    EditOffset edit_offset,
-                   llfs::PageCache& page_cache,
-                   const TreeOptions& tree_options) noexcept
+                   llfs::PageCache* page_cache,
+                   const TreeOptions* tree_options) noexcept
     : checkpoint_{std::move(checkpoint)}
     , page_cache_{page_cache}
     , tree_options_{tree_options}
@@ -31,13 +31,13 @@ Snapshot::Snapshot(Checkpoint&& checkpoint,
 //
 StatusOr<ValueView> Snapshot::get(const KeyView& key)
 {
-  PinningPageLoader page_loader{this->page_cache_};
+  PinningPageLoader page_loader{*this->page_cache_};
   PageSliceStorage result_storage;
 
   KeyQuery query{
       page_loader,
       result_storage,
-      this->tree_options_,
+      *this->tree_options_,
       key,
   };
 

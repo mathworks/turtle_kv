@@ -37,14 +37,14 @@ struct PackedActiveCheckpoints {
   // Appends a checkpoint to the active set, maintaining sorted order by edit_offset_upper_bound.
   // If the set is already at capacity, the oldest (index 0) is evicted.
   //
-  // TODO: [Gabe Bornstein 8/31/26] Consider re-naming to reflect we may evict oldest checkpoint.
-  //
   void push_back(const PackedCheckpoint& checkpoint);
 
-  PackedCheckpoint newest() const;
+  const PackedCheckpoint& newest() const;
 
-  PackedCheckpoint oldest() const;
+  const PackedCheckpoint& oldest() const;
 
+  // Linear search that looks for an exact match for `edit_offset`. Returns `nullptr` if not found.
+  //
   const PackedCheckpoint* find(i64 edit_offset) const;
 };
 

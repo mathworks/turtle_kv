@@ -25,6 +25,8 @@ namespace turtle_kv {
 class Snapshot
 {
  public:
+  Snapshot() = default;
+
   Snapshot(const Snapshot&) = delete;
   Snapshot& operator=(const Snapshot&) = delete;
   Snapshot(Snapshot&&) = default;
@@ -48,17 +50,14 @@ class Snapshot
 
   explicit Snapshot(Checkpoint&& checkpoint,
                     EditOffset edit_offset,
-                    llfs::PageCache& page_cache,
-                    const TreeOptions& tree_options) noexcept;
+                    llfs::PageCache* page_cache,
+                    const TreeOptions* tree_options) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   Checkpoint checkpoint_;
-  // TODO: [Gabe Bornstein 8/31/26] Do we need to maintain page_cache_, or is there another way to
-  // create a KeyQuery? Don't love having a reference to PageCache here.
-  //
-  llfs::PageCache& page_cache_;
-  const TreeOptions& tree_options_;
+  llfs::PageCache* page_cache_ = nullptr;
+  const TreeOptions* tree_options_ = nullptr;
 };
 
 }  // namespace turtle_kv
