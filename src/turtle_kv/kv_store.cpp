@@ -1028,21 +1028,26 @@ StatusOr<ValueView> KVStore::get(const KeyView& key) noexcept /*override*/
 //
 StatusOr<Snapshot> KVStore::get_snapshot(EditOffset checkpoint_edit_offset) noexcept
 {
-  // Need to recover from checkpoint volume to get the llfs::SlotParse.
-  // TODO: [Gabe Bornstein 9/9/26] Could we use PackedCheckpoint::trace_refs instead? Would like
-  // to avoid calling read_checkpoint_volume if possible.
-  //
-  BATT_ASSIGN_OK_RESULT(RecoveredActiveCheckpointsState recovered,
-                        read_checkpoint_volume(*this->checkpoint_volume_));
+  PackedCheckpoint packed;
+  Optional<CheckpointLock> checkpoint_lock;
+  {
+    batt::Toggle<State>::Reader state_reader{this->state_};
 
-  const PackedCheckpoint* packed = recovered.active.find(checkpoint_edit_offset.value());
-  if (!packed) {
-    LOG(INFO) << "Checkpoint with EditOffset: " << checkpoint_edit_offset << " does not exist.";
-    return {batt::StatusCode::kUnavailable};
+    const PackedCheckpoint* found =
+        state_reader->active_checkpoints_.find(checkpoint_edit_offset.value());
+    if (!found) {
+      LOG(INFO) << "Checkpoint with EditOffset: " << checkpoint_edit_offset << " does not exist.";
+      return {batt::StatusCode::kUnavailable};
+    }
+    packed = *found;
+
+    BATT_CHECK(state_reader->base_checkpoint_.has_value());
+    checkpoint_lock.emplace(state_reader->base_checkpoint_->clone_checkpoint_lock());
   }
 
-  BATT_ASSIGN_OK_RESULT(Checkpoint checkpoint,
-                        Checkpoint::recover(*this->checkpoint_volume_, recovered.slot, *packed));
+  BATT_ASSIGN_OK_RESULT(
+      Checkpoint checkpoint,
+      Checkpoint::recover(this->page_cache_, packed, std::move(*checkpoint_lock)));
 
   return Snapshot{
       std::move(checkpoint),
