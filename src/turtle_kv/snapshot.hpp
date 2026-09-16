@@ -44,6 +44,7 @@ class Snapshot
 
  private:
   friend class KVStore;
+  friend class KVStoreScanner;
 
   explicit Snapshot(Checkpoint&& checkpoint,
                     EditOffset edit_offset,

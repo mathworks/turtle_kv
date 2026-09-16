@@ -293,6 +293,12 @@ class KVStoreScanner
                           llfs::PageSize trie_index_sharded_view_size,
                           PageSliceStorage* slice_storage) noexcept;
 
+  /** \brief Create a scanner from a Snapshot (checkpoint tree only, no MemTables).
+   */
+  explicit KVStoreScanner(Snapshot& snapshot,
+                          const KeyView& min_key,
+                          PageSliceStorage* slice_storage) noexcept;
+
   ~KVStoreScanner() noexcept;
 
   Status start();

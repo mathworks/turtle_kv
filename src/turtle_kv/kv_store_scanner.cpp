@@ -84,6 +84,20 @@ KeyView art_scanner_get_key(ART<MemTableValueEntry>::Scanner<kSynchronized,
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+/*explicit*/ KVStoreScanner::KVStoreScanner(Snapshot& snapshot,
+                                            const KeyView& min_key,
+                                            PageSliceStorage* slice_storage) noexcept
+    : KVStoreScanner(snapshot.page_cache_,
+                     snapshot.checkpoint_.tree()->page_id_slot_or_panic(),
+                     snapshot.checkpoint_.tree_height(),
+                     min_key,
+                     snapshot.tree_options_.trie_index_sharded_view_size(),
+                     slice_storage)
+{
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 KVStoreScanner::~KVStoreScanner() noexcept
 {
   if (this->delta_storage_ != this->static_delta_storage_.data()) {

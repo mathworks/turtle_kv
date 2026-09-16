@@ -18,9 +18,11 @@
 #include <turtle_kv/checkpoint_log.hpp>
 #include <turtle_kv/core/table.hpp>
 #include <turtle_kv/core/testing/generate.hpp>
+#include <turtle_kv/kv_store_scanner.hpp>
 #include <turtle_kv/packed_checkpoint.hpp>
 #include <turtle_kv/scan_metrics.hpp>
 #include <turtle_kv/testing/workload.test.hpp>
+#include <turtle_kv/util/page_slice_reader.hpp>
 
 #include <batteries/do_nothing.hpp>
 #include <batteries/segv.hpp>
@@ -1095,6 +1097,56 @@ INSTANTIATE_TEST_SUITE_P(RecoveringKVStore,
                          KVStoreRecoveryTest,
                          testing::Values(u64{0}, u64{1}, u64{100}, u64{1000}, u64{100000}),
                          format_kv_store_recovery_test_name);
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+TEST_F(KVStoreTest, SnapshotScan)
+{
+  std::filesystem::path test_kv_store_dir = this->data_root / "turtle_kv_Test" / "snapshot_scan";
+
+  StatusOr<std::unique_ptr<KVStore>> open_result = this->CreateAndOpenKVStore(test_kv_store_dir);
+  ASSERT_TRUE(open_result.ok()) << BATT_INSPECT(open_result.status());
+
+  std::unique_ptr<KVStore>& kv_store = *open_result;
+
+  kv_store->set_checkpoint_distance(99999999);
+
+  constexpr u64 kNumKeys = 100;
+
+  std::map<std::string, std::string> expected;
+  this->PopulateKVStore(*kv_store, kNumKeys, &expected);
+
+  StatusOr<EditOffset> checkpoint_bound = kv_store->force_checkpoint();
+  ASSERT_TRUE(checkpoint_bound.ok()) << BATT_INSPECT(checkpoint_bound.status());
+  ASSERT_TRUE(kv_store->wait_for_checkpoint(*checkpoint_bound).ok());
+
+  std::map<std::string, std::string> scanned;
+  {
+    StatusOr<Snapshot> snapshot = kv_store->get_snapshot(*checkpoint_bound);
+    ASSERT_TRUE(snapshot.ok()) << BATT_INSPECT(snapshot.status());
+
+    turtle_kv::PageSliceStorage slice_storage;
+    turtle_kv::KVStoreScanner scanner{*snapshot, KeyView{}, &slice_storage};
+
+    ASSERT_TRUE(scanner.start().ok());
+
+    while (auto item = scanner.next()) {
+      if (!item->value.is_delete()) {
+        scanned[std::string(item->key)] = std::string(item->value.as_str());
+      }
+    }
+    ASSERT_TRUE(scanner.status().ok());
+  }
+
+  EXPECT_EQ(scanned.size(), expected.size());
+  for (const auto& [key, value] : expected) {
+    auto it = scanned.find(key);
+    ASSERT_NE(it, scanned.end()) << "Missing key: " << key;
+    EXPECT_EQ(it->second, value);
+  }
+
+  this->ShutdownKVStore(kv_store);
+}
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
