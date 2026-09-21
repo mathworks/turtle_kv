@@ -34,7 +34,7 @@ class Snapshot
 
   /** \brief Looks up a key in this snapshot's checkpoint tree.
    */
-  StatusOr<ValueView> get(const KeyView& key);
+  StatusOr<ValueView> get(const KeyView& key) const noexcept;
 
   /** \brief Returns the EditOffset upper bound of this snapshot.
    */

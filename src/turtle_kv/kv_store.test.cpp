@@ -1125,8 +1125,7 @@ TEST_F(KVStoreTest, SnapshotScan)
     StatusOr<Snapshot> snapshot = kv_store->get_snapshot(*checkpoint_bound);
     ASSERT_TRUE(snapshot.ok()) << BATT_INSPECT(snapshot.status());
 
-    turtle_kv::PageSliceStorage slice_storage;
-    turtle_kv::KVStoreScanner scanner{*snapshot, KeyView{}, &slice_storage};
+    turtle_kv::KVStoreScanner scanner{*snapshot, KeyView{}};
 
     ASSERT_TRUE(scanner.start().ok());
 

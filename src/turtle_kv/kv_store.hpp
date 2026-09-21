@@ -276,16 +276,6 @@ class KVStore : public Table
    */
   StatusOr<std::vector<Snapshot>> get_active_snapshots() noexcept;
 
-  /** \brief Returns the number of currently active (tracked) checkpoints.
-   */
-  usize active_checkpoint_count() const noexcept
-  {
-    return batt::Toggle<State>::Reader
-    {
-      const_cast<KVStore*>(this)->state_
-      } -> active_checkpoints_.num_active_checkpoints.value();
-  }
-
   std::function<void(std::ostream&)> debug_info() const noexcept;
 
   void collect_stats(
@@ -336,6 +326,11 @@ class KVStore : public Table
     /** \brief The set of all active (retained) packed checkpoints.
      */
     PackedActiveCheckpoints active_checkpoints_;
+
+    /** \brief Creates a new State by rotating out the current mem_table_ into deltas_ and
+     * installing `new_mem_table` as the active MemTable.
+     */
+    State create_new_state(boost::intrusive_ptr<MemTable> new_mem_table) const;
   };
 
   static_assert(std::default_initializable<State>);

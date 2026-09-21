@@ -1036,7 +1036,7 @@ StatusOr<Snapshot> KVStore::get_snapshot(EditOffset checkpoint_edit_offset) noex
     const PackedCheckpoint* found =
         state_reader->active_checkpoints_.find(checkpoint_edit_offset.value());
     if (!found) {
-      LOG(INFO) << "Checkpoint with EditOffset: " << checkpoint_edit_offset << " does not exist.";
+      VLOG(1) << "Checkpoint with EditOffset: " << checkpoint_edit_offset << " does not exist.";
       return {batt::StatusCode::kNotFound};
     }
     packed = *found;
@@ -1061,26 +1061,34 @@ StatusOr<Snapshot> KVStore::get_snapshot(EditOffset checkpoint_edit_offset) noex
 //
 StatusOr<std::vector<Snapshot>> KVStore::get_active_snapshots() noexcept
 {
-  // Need to recover from checkpoint volume to get the llfs::SlotParse.
-  // TODO: [Gabe Bornstein 9/9/26] Could we use PackedCheckpoint::trace_refs instead? Would like
-  // to avoid calling read_checkpoint_volume if possible.
-  //
-  BATT_ASSIGN_OK_RESULT(RecoveredActiveCheckpointsState recovered,
-                        read_checkpoint_volume(*this->checkpoint_volume_));
+  std::vector<PackedCheckpoint> packed_checkpoints;
+  Optional<CheckpointLock> checkpoint_lock;
+  {
+    batt::Toggle<State>::Reader state_reader{this->state_};
+
+    const auto& active = state_reader->active_checkpoints_;
+    packed_checkpoints.reserve(active.num_active_checkpoints);
+
+    for (u8 i = 0; i < active.num_active_checkpoints; ++i) {
+      packed_checkpoints.push_back(active.checkpoints[i]);
+    }
+
+    BATT_CHECK(state_reader->base_checkpoint_.has_value());
+    checkpoint_lock.emplace(state_reader->base_checkpoint_->clone_checkpoint_lock());
+  }
 
   std::vector<Snapshot> snapshots;
-  snapshots.reserve(recovered.active.num_active_checkpoints);
+  snapshots.reserve(packed_checkpoints.size());
 
-  for (u8 i = 0; i < recovered.active.num_active_checkpoints; ++i) {
-    const PackedCheckpoint& packed = recovered.active.checkpoints[i];
+  for (const PackedCheckpoint& packed : packed_checkpoints) {
     const EditOffset offset{packed.edit_offset_upper_bound.value()};
 
-    StatusOr<Checkpoint> checkpoint =
-        Checkpoint::recover(*this->checkpoint_volume_, recovered.slot, packed);
-    BATT_REQUIRE_OK(checkpoint);
+    BATT_ASSIGN_OK_RESULT(
+        Checkpoint checkpoint,
+        Checkpoint::recover(this->page_cache_, packed, batt::make_copy(*checkpoint_lock)));
 
     snapshots.emplace_back(Snapshot{
-        std::move(*checkpoint),
+        std::move(checkpoint),
         offset,
         &this->page_cache_,
         &this->tree_options_,
@@ -1171,6 +1179,17 @@ Status KVStore::finalize_mem_table(boost::intrusive_ptr<MemTable>&& old_mem_tabl
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+auto KVStore::State::create_new_state(boost::intrusive_ptr<MemTable> new_mem_table) const -> State
+{
+  State new_state;
+  new_state.mem_table_ = std::move(new_mem_table);
+  new_state.base_checkpoint_ = this->base_checkpoint_;
+  new_state.deltas_ = this->deltas_;
+  new_state.deltas_.emplace_back(this->mem_table_);
+  new_state.active_checkpoints_ = this->active_checkpoints_;
+  return new_state;
+}
+
 Status KVStore::reset_active_mem_table(EditOffset current_edit_offset)
 {
 #if TURTLE_KV_PROFILE_UPDATES
@@ -1179,16 +1198,11 @@ Status KVStore::reset_active_mem_table(EditOffset current_edit_offset)
 
   batt::Toggle<State>::Writer state_writer{this->state_};
 
-  State& new_state = state_writer.new_value();
-  const State& old_state = state_writer.old_value();
+  state_writer.new_value() =
+      state_writer.old_value().create_new_state(this->create_mem_table(current_edit_offset));
 
-  new_state.mem_table_ = this->create_mem_table(current_edit_offset);
-  new_state.base_checkpoint_ = old_state.base_checkpoint_;
-  new_state.deltas_ = old_state.deltas_;
-  new_state.deltas_.emplace_back(old_state.mem_table_);
-  new_state.active_checkpoints_ = old_state.active_checkpoints_;
-
-  BATT_CHECK_EQ(new_state.mem_table_->edit_offset_lower_bound(), current_edit_offset);
+  BATT_CHECK_EQ(state_writer.new_value().mem_table_->edit_offset_lower_bound(),
+                current_edit_offset);
 
   this->deltas_size_->fetch_add(1);
 
@@ -1420,9 +1434,9 @@ using CheckpointEvent = llfs::PackedVariant<turtle_kv::PackedActiveCheckpoints>;
   if (state.active.num_active_checkpoints == 0) {
     return Checkpoint::make_empty();
   }
-  const PackedCheckpoint& latest = state.active.newest();
+  const PackedCheckpoint& newest = state.active.newest();
 
-  return Checkpoint::recover(checkpoint_volume, state.slot, latest);
+  return Checkpoint::recover(checkpoint_volume, state.slot, newest);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -1706,6 +1720,11 @@ Status KVStore::commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_jo
                                                  llfs::SlotUpperBoundAt{
                                                      .offset = checkpoint_slot_range->upper_bound,
                                                  }));
+  // Trim the change log.  IMPORTANT: this must come before we enter the Writer critical section
+  // below; otherwise we could deadlock! (this thread waits for reader to exit which is waiting for
+  // change log grant to be released which can't happen until this thread calls trim)
+  //
+  BATT_REQUIRE_OK(this->change_log_writer_->trim(checkpoint_job->edit_offset_upper_bound));
 
   // Update the base checkpoint and clear deltas.
   //

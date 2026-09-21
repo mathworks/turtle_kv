@@ -29,7 +29,7 @@ Snapshot::Snapshot(Checkpoint&& checkpoint,
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<ValueView> Snapshot::get(const KeyView& key)
+StatusOr<ValueView> Snapshot::get(const KeyView& key) const noexcept
 {
   PinningPageLoader page_loader{*this->page_cache_};
   PageSliceStorage result_storage;
