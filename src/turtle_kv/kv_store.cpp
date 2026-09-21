@@ -1052,8 +1052,7 @@ StatusOr<Snapshot> KVStore::get_snapshot(EditOffset checkpoint_edit_offset) noex
   return Snapshot{
       std::move(checkpoint),
       checkpoint_edit_offset,
-      &this->page_cache_,
-      &this->tree_options_,
+      this,
   };
 }
 
@@ -1090,8 +1089,7 @@ StatusOr<std::vector<Snapshot>> KVStore::get_active_snapshots() noexcept
     snapshots.emplace_back(Snapshot{
         std::move(checkpoint),
         offset,
-        &this->page_cache_,
-        &this->tree_options_,
+        this,
     });
   }
 

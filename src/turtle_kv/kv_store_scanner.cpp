@@ -86,11 +86,11 @@ KeyView art_scanner_get_key(ART<MemTableValueEntry>::Scanner<kSynchronized,
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 /*explicit*/ KVStoreScanner::KVStoreScanner(Snapshot& snapshot, const KeyView& min_key) noexcept
-    : KVStoreScanner(*snapshot.page_cache_,
+    : KVStoreScanner(snapshot.kv_store_->page_cache_,
                      snapshot.checkpoint_.tree()->page_id_slot_or_panic(),
                      snapshot.checkpoint_.tree_height(),
                      min_key,
-                     snapshot.tree_options_->trie_index_sharded_view_size())
+                     snapshot.kv_store_->tree_options_.trie_index_sharded_view_size())
 {
 }
 

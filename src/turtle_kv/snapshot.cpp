@@ -9,8 +9,9 @@
 #include <turtle_kv/snapshot.hpp>
 //
 
+#include <turtle_kv/kv_store.hpp>
+
 #include <turtle_kv/tree/key_query.hpp>
-#include <turtle_kv/tree/pinning_page_loader.hpp>
 #include <turtle_kv/util/page_slice_reader.hpp>
 
 namespace turtle_kv {
@@ -19,11 +20,9 @@ namespace turtle_kv {
 //
 Snapshot::Snapshot(Checkpoint&& checkpoint,
                    EditOffset edit_offset,
-                   llfs::PageCache* page_cache,
-                   const TreeOptions* tree_options) noexcept
+                   KVStore* kv_store) noexcept
     : checkpoint_{std::move(checkpoint)}
-    , page_cache_{page_cache}
-    , tree_options_{tree_options}
+    , kv_store_{kv_store}
 {
 }
 
@@ -31,13 +30,16 @@ Snapshot::Snapshot(Checkpoint&& checkpoint,
 //
 StatusOr<ValueView> Snapshot::get(const KeyView& key) const noexcept
 {
-  PinningPageLoader page_loader{*this->page_cache_};
-  PageSliceStorage result_storage;
+  KVStore::ThreadContext& thread_context = this->kv_store_->per_thread_.get(this->kv_store_);
+
+  thread_context.query_result_storage.emplace();
+
+  llfs::PageLoader& page_loader = thread_context.get_page_loader();
 
   KeyQuery query{
       page_loader,
-      result_storage,
-      *this->tree_options_,
+      *thread_context.query_result_storage,
+      this->kv_store_->tree_options_,
       key,
   };
 

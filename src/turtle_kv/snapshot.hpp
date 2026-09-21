@@ -10,7 +10,6 @@
 #define TURTLE_KV_SNAPSHOT_HPP
 
 #include <turtle_kv/checkpoint.hpp>
-#include <turtle_kv/tree/tree_options.hpp>
 
 #include <turtle_kv/core/key_view.hpp>
 #include <turtle_kv/core/value_view.hpp>
@@ -18,9 +17,9 @@
 #include <turtle_kv/import/int_types.hpp>
 #include <turtle_kv/import/status.hpp>
 
-#include <llfs/page_cache.hpp>
-
 namespace turtle_kv {
+
+class KVStore;
 
 class Snapshot
 {
@@ -50,14 +49,12 @@ class Snapshot
 
   explicit Snapshot(Checkpoint&& checkpoint,
                     EditOffset edit_offset,
-                    llfs::PageCache* page_cache,
-                    const TreeOptions* tree_options) noexcept;
+                    KVStore* kv_store) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   Checkpoint checkpoint_;
-  llfs::PageCache* page_cache_ = nullptr;
-  const TreeOptions* tree_options_ = nullptr;
+  KVStore* kv_store_ = nullptr;
 };
 
 }  // namespace turtle_kv

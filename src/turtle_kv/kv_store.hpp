@@ -60,6 +60,7 @@ class KVStore : public Table
   using Self = KVStore;
 
   friend class KVStoreScanner;
+  friend class Snapshot;
 
   using Config = KVStoreConfig;
   using RuntimeOptions = KVStoreRuntimeOptions;
