@@ -16,7 +16,7 @@ using namespace batt::constants;
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 // Default values for all config structs
 //
-TEST(KVStoreConfigTest, DefaultValues_AllStructs)
+TEST(KVStoreConfigTest, DefaultValues)
 {
   KVStoreConfig config = KVStoreConfig::with_default_values();
   EXPECT_EQ(config.initial_capacity_bytes, 512 * kMiB);
@@ -142,7 +142,7 @@ TEST(KVStoreConfigTest, ParseConfig_ErrorCases)
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 // config_to_string_list: completeness, sorting, and default value correctness
 //
-TEST(KVStoreConfigTest, ConfigToStringList_ContentsAndOrdering)
+TEST(KVStoreConfigTest, ConfigToStringList)
 {
   KVStoreConfig config = KVStoreConfig::with_default_values();
   KVStoreRuntimeOptions runtime = KVStoreRuntimeOptions::with_default_values();
@@ -151,17 +151,20 @@ TEST(KVStoreConfigTest, ConfigToStringList_ContentsAndOrdering)
   EXPECT_FALSE(string_list.empty());
 
   // Verify sorted order.
+  //
   for (usize i = 1; i < string_list.size(); ++i) {
     EXPECT_LE(string_list[i - 1].first, string_list[i].first);
   }
 
   // Build a map for value lookups.
+  //
   std::unordered_map<std::string, std::string> param_map;
   for (const auto& [name, value] : string_list) {
     param_map[name] = value;
   }
 
   // Verify all expected params are present.
+  //
   for (const auto& expected : {"initial_capacity_bytes", "max_capacity_bytes", "wal_size_bytes",
                                 "cache_size_bytes", "chi", "checkpoint_pipeline", "node_size",
                                 "leaf_size", "min_flush", "max_flush"}) {
@@ -169,6 +172,7 @@ TEST(KVStoreConfigTest, ConfigToStringList_ContentsAndOrdering)
   }
 
   // Verify default value serialization.
+  //
   EXPECT_EQ(param_map["initial_capacity_bytes"], std::to_string(512 * kMiB));
   EXPECT_EQ(param_map["max_capacity_bytes"], std::to_string(4 * kGiB));
   EXPECT_EQ(param_map["wal_size_bytes"], std::to_string(256 * kMiB));
@@ -178,9 +182,9 @@ TEST(KVStoreConfigTest, ConfigToStringList_ContentsAndOrdering)
 }
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
-// Round-trip: parse_config -> config_to_string_list
+// parse_config -> config_to_string_list
 //
-TEST(KVStoreConfigTest, RoundTrip_ParseThenSerialize)
+TEST(KVStoreConfigTest, ParseThenSerialize)
 {
   KVStoreConfig config = KVStoreConfig::with_default_values();
   KVStoreRuntimeOptions runtime = KVStoreRuntimeOptions::with_default_values();
@@ -212,7 +216,7 @@ TEST(KVStoreConfigTest, RoundTrip_ParseThenSerialize)
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 // DefaultParser: u64, double, bool, and failure cases
 //
-TEST(KVStoreConfigTest, DefaultParser_ParseAllTypesAndFailures)
+TEST(KVStoreConfigTest, DefaultParser)
 {
   {
     auto& parser = config_params::DefaultParser<u64>::instance();
@@ -246,7 +250,7 @@ TEST(KVStoreConfigTest, DefaultParser_ParseAllTypesAndFailures)
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 // DefaultFormatter
 //
-TEST(KVStoreConfigTest, DefaultFormatter_FormatAllTypes)
+TEST(KVStoreConfigTest, DefaultFormatter)
 {
   auto& formatter = config_params::DefaultFormatter::instance();
 
@@ -280,7 +284,7 @@ TEST(KVStoreConfigTest, DefaultFormatter_FormatAllTypes)
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 // select_object overloads
 //
-TEST(KVStoreConfigTest, SelectObject_AllOverloads)
+TEST(KVStoreConfigTest, SelectObject)
 {
   KVStoreConfig config = KVStoreConfig::with_default_values();
   KVStoreRuntimeOptions runtime = KVStoreRuntimeOptions::with_default_values();
@@ -304,9 +308,9 @@ TEST(KVStoreConfigTest, SelectObject_AllOverloads)
 }
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
-// TypeFieldParam: get, set, and wrong-type error
+// TypeFieldParam
 //
-TEST(KVStoreConfigTest, TypeFieldParam_GetSetAndWrongType)
+TEST(KVStoreConfigTest, TypeFieldParam)
 {
   config_params::TypeFieldParam<KVStoreConfig, u64> field{&KVStoreConfig::initial_capacity_bytes};
 
@@ -320,9 +324,9 @@ TEST(KVStoreConfigTest, TypeFieldParam_GetSetAndWrongType)
 }
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
-// ScaleConversion: get scales down, set scales up, wrong type errors
+// ScaleConversion
 //
-TEST(KVStoreConfigTest, ScaleConversion_ScalingAndWrongType)
+TEST(KVStoreConfigTest, ScaleConversion)
 {
   config_params::TypeFieldParam<KVStoreConfig, u64> field{&KVStoreConfig::initial_capacity_bytes};
   config_params::ScaleConversion<u64> scaled{field, field, kGiB};
@@ -330,20 +334,19 @@ TEST(KVStoreConfigTest, ScaleConversion_ScalingAndWrongType)
   KVStoreConfig config = KVStoreConfig::with_default_values();
   KVStoreRuntimeOptions runtime = KVStoreRuntimeOptions::with_default_values();
 
-  // get scales down
   config.initial_capacity_bytes = 2 * kGiB;
   EXPECT_EQ(std::get<u64>(scaled.get(&config, &runtime)), u64{2});
 
-  // set scales up
   ASSERT_TRUE(scaled.set(ConfigParam::TypedValue{u64{3}}, &config, &runtime).ok());
   EXPECT_EQ(config.initial_capacity_bytes, 3 * kGiB);
 
-  // wrong type
+  // Wrong type
+  //
   EXPECT_FALSE(scaled.set(ConfigParam::TypedValue{std::string{"wrong"}}, &config, &runtime).ok());
 }
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
-// BATT_OBJECT_PRINT_IMPL: verify operator<< outputs field names
+// Verify operator<< outputs field names
 //
 TEST(KVStoreConfigTest, PrintOutput)
 {
