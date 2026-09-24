@@ -726,10 +726,44 @@ TEST_P(CheckpointReadOldKeysTest, CheckpointReadOldKeys)
     checkpoint_offsets.push_back(*checkpoint_bound);
   }
 
+  // Update keys [0, num_keys/4) with new values and checkpoint.
+  //
+  auto make_updated_value = [](i64 i) -> std::string {
+    return batt::to_string(i) + "_updated";
+  };
+
+  const i64 num_updated = static_cast<i64>(this->num_keys) / 4;
+  for (i64 i = 0; i < num_updated; ++i) {
+    Status s = kv_store->put(KeyView{make_key(i)}, ValueView::from_str(make_updated_value(i)));
+    ASSERT_TRUE(s.ok()) << BATT_INSPECT(s);
+  }
+
+  auto do_checkpoint = [&] {
+    StatusOr<EditOffset> bound = kv_store->force_checkpoint();
+    ASSERT_TRUE(bound.ok()) << BATT_INSPECT(bound.status());
+    ASSERT_TRUE(kv_store->wait_for_checkpoint(*bound).ok());
+    checkpoint_offsets.push_back(*bound);
+  };
+
+  do_checkpoint();
+
+  // Delete keys [num_keys/4, num_keys/2) and checkpoint.
+  //
+  const i64 delete_start = num_updated;
+  const i64 delete_end = delete_start + static_cast<i64>(this->num_keys) / 4;
+  for (i64 i = delete_start; i < delete_end; ++i) {
+    Status s = kv_store->remove(KeyView{make_key(i)});
+    ASSERT_TRUE(s.ok()) << BATT_INSPECT(s);
+  }
+
+  do_checkpoint();
+
+  const u64 total_checkpoints = checkpoint_offsets.size();
+
   // Checkpoints older than MAX_ACTIVE_CHECKPOINTS get trimmed; verify that querying them fails.
   //
-  const u64 num_expired = (this->num_checkpoints > turtle_kv::MAX_ACTIVE_CHECKPOINTS)
-                              ? this->num_checkpoints - turtle_kv::MAX_ACTIVE_CHECKPOINTS
+  const u64 num_expired = (total_checkpoints > turtle_kv::MAX_ACTIVE_CHECKPOINTS)
+                              ? total_checkpoints - turtle_kv::MAX_ACTIVE_CHECKPOINTS
                               : 0;
 
   for (u64 cp = 0; cp < num_expired; ++cp) {
@@ -737,27 +771,37 @@ TEST_P(CheckpointReadOldKeysTest, CheckpointReadOldKeys)
     EXPECT_FALSE(snapshot.ok()) << "Expired checkpoint " << cp << " should not be queryable";
   }
 
-  // Verify each living checkpoint can see exactly the keys written up to and including its batch.
+  // Verify each living checkpoint sees the correct state.
   //
-  for (u64 cp = num_expired; cp < this->num_checkpoints; ++cp) {
+  for (u64 cp = num_expired; cp < total_checkpoints; ++cp) {
     StatusOr<Snapshot> snapshot = kv_store->get_snapshot(checkpoint_offsets[cp]);
     ASSERT_TRUE(snapshot.ok()) << "Failed to get snapshot for checkpoint " << cp;
 
-    const i64 visible_end = (cp == this->num_checkpoints - 1)
+    const bool includes_updates = (cp >= this->num_checkpoints);
+    const bool includes_deletes = (cp >= this->num_checkpoints + 1);
+
+    const i64 visible_end = (cp >= this->num_checkpoints - 1)
                                 ? static_cast<i64>(this->num_keys)
                                 : static_cast<i64>((cp + 1) * keys_per_checkpoint);
 
-    // Keys [0, visible_end) should be visible.
-    //
     for (i64 i = 0; i < visible_end; ++i) {
       std::string key = make_key(i);
       StatusOr<ValueView> result = snapshot->get(KeyView{key});
+
+      if (includes_deletes && i >= delete_start && i < delete_end) {
+        EXPECT_FALSE(result.ok()) << "Checkpoint " << cp << " deleted key present: " << key;
+        continue;
+      }
+
       ASSERT_TRUE(result.ok()) << "Checkpoint " << cp << " missing key: " << key;
-      EXPECT_EQ(result->as_str(), make_value(i));
+
+      if (includes_updates && i < num_updated) {
+        EXPECT_EQ(result->as_str(), make_updated_value(i));
+      } else {
+        EXPECT_EQ(result->as_str(), make_value(i));
+      }
     }
 
-    // Keys [visible_end, num_keys) should NOT be visible.
-    //
     for (i64 i = visible_end; i < static_cast<i64>(this->num_keys); ++i) {
       std::string key = make_key(i);
       StatusOr<ValueView> result = snapshot->get(KeyView{key});
