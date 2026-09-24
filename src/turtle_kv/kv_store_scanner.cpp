@@ -67,7 +67,8 @@ KeyView art_scanner_get_key(ART<MemTableValueEntry>::Scanner<kSynchronized,
                                             PageSliceStorage* slice_storage) noexcept
     : state_reader_{}
     , page_loader_{page_loader}
-    , slice_storage_{slice_storage}
+    , owned_slice_storage_{slice_storage ? None : Optional<PageSliceStorage>{batt::InPlaceInit}}
+    , slice_storage_{slice_storage ? slice_storage : &*this->owned_slice_storage_}
     , root_{root}
     , trie_index_sharded_view_size_{trie_index_sharded_view_size}
     , tree_height_{tree_height}
@@ -79,6 +80,17 @@ KeyView art_scanner_get_key(ART<MemTableValueEntry>::Scanner<kSynchronized,
     , tree_scan_path_{}
     , scan_levels_{}
     , heap_{}
+{
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+/*explicit*/ KVStoreScanner::KVStoreScanner(Snapshot& snapshot, const KeyView& min_key) noexcept
+    : KVStoreScanner(snapshot.kv_store_->page_cache_,
+                     snapshot.checkpoint_.tree()->page_id_slot_or_panic(),
+                     snapshot.checkpoint_.tree_height(),
+                     min_key,
+                     snapshot.kv_store_->tree_options_.trie_index_sharded_view_size())
 {
 }
 

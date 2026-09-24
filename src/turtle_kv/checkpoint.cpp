@@ -62,6 +62,32 @@ namespace turtle_kv {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+/*static*/ StatusOr<Checkpoint> Checkpoint::recover(
+    llfs::PageCache& page_cache,
+    const PackedCheckpoint& packed_checkpoint,
+    CheckpointLock&& checkpoint_lock) noexcept
+{
+  BATT_CHECK_GT(packed_checkpoint.edit_offset_upper_bound, 0)
+      << "Invalid PackedCheckpoint: batch_upper_bound==0 indicates no checkpoint.";
+
+  const llfs::PageId tree_root_id = packed_checkpoint.new_tree_root.as_page_id();
+
+  Subtree tree = Subtree::from_page_id(tree_root_id);
+
+  BATT_ASSIGN_OK_RESULT(
+      i32 height, tree.get_height(page_cache, llfs::PageCacheOvercommit::not_allowed()));
+
+  return Checkpoint{
+      tree_root_id,
+      std::make_shared<Subtree>(std::move(tree)),
+      height,
+      EditOffset{packed_checkpoint.edit_offset_upper_bound.value()},
+      std::move(checkpoint_lock),
+  };
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 /*static*/ Checkpoint Checkpoint::make_empty() noexcept
 {
   return Checkpoint{};

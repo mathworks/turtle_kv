@@ -47,6 +47,13 @@ class Checkpoint
                                       llfs::SlotParse& slot,
                                       const PackedCheckpoint& checkpoint) noexcept;
 
+  /** \brief Returns a valid, in-memory Checkpoint from the given packed checkpoint data and an
+   * existing CheckpointLock (e.g., cloned from another Checkpoint).
+   */
+  static StatusOr<Checkpoint> recover(llfs::PageCache& page_cache,
+                                      const PackedCheckpoint& checkpoint,
+                                      CheckpointLock&& checkpoint_lock) noexcept;
+
   /** \brief Returns the canonical, empty initial Checkpoint with invalid llfs::PageId (indicating
    * there is no root page) and EditOffset upper bound of 0.
    */

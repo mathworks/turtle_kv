@@ -56,7 +56,8 @@ class CheckpointGenerator
                                llfs::PageCache& cache,
                                boost::intrusive_ptr<FilterPageWriteState>&& filter_page_write_state,
                                Checkpoint&& base_checkpoint,
-                               llfs::Volume& checkpoint_volume) noexcept;
+                               llfs::Volume& checkpoint_volume,
+                               const PackedActiveCheckpoints& recovered_active_checkpoints) noexcept;
 
   CheckpointGenerator(const CheckpointGenerator&) = delete;
   CheckpointGenerator& operator=(const CheckpointGenerator&) = delete;
@@ -124,11 +125,6 @@ class CheckpointGenerator
    */
   Status serialize_checkpoint(llfs::PageCacheOvercommit& overcommit) noexcept;
 
-  /** \brief Clears `this->roots_to_remove_` by deleting obsolete root pages from the current job's
-   * root set.
-   */
-  void clear_old_roots() noexcept;
-
   /** \brief This function first uses a non-blocking call to Volume::reserve on the checkpoint
    * volume. If non-blocking reserve fails, it tracks some metrics and then goes into a blocking
    * reserve call.
@@ -190,10 +186,6 @@ class CheckpointGenerator
   //
   llfs::SlotSequencer slot_sequencer_;
 
-  // Roots to remove from `job_` when finalizing.
-  //
-  batt::SmallVec<llfs::PageId, 8> roots_to_remove_;
-
   // Set to `true` when halt is invoked.
   //
   batt::Watch<bool> stop_requested_;
@@ -201,6 +193,11 @@ class CheckpointGenerator
   // Used to allocate grants directly from checkpoint_volume.
   //
   llfs::Volume& checkpoint_volume_;
+
+  // The set of currently active (retained) checkpoints, in sorted order by
+  // edit_offset_upper_bound.
+  //
+  PackedActiveCheckpoints active_checkpoints_{};
 
   // Used to cancel pending checkpoint updates on halt().
   //

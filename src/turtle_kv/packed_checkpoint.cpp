@@ -1,5 +1,6 @@
 #include <turtle_kv/packed_checkpoint.hpp>
 //
+#include <turtle_kv/import/slice.hpp>
 
 namespace turtle_kv {
 
@@ -18,6 +19,65 @@ std::ostream& operator<<(std::ostream& out, const PackedCheckpoint& t)
 llfs::BoxedSeq<llfs::PageId> trace_refs(const PackedCheckpoint& checkpoint)
 {
   return llfs::seq::single_item(checkpoint.new_tree_root.as_page_id())  //
+         | llfs::seq::boxed();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void PackedActiveCheckpoints::push_back(const PackedCheckpoint& checkpoint)
+{
+  if (this->num_active_checkpoints > 0) {
+    BATT_CHECK_GT(checkpoint.edit_offset_upper_bound, this->newest().edit_offset_upper_bound);
+  }
+
+  const u8 n = this->num_active_checkpoints;
+  if (n < MAX_ACTIVE_CHECKPOINTS) {
+    this->checkpoints[n] = checkpoint;
+    this->num_active_checkpoints = n + 1;
+  } else {
+    for (u8 i = 0; i < MAX_ACTIVE_CHECKPOINTS - 1; ++i) {
+      this->checkpoints[i] = this->checkpoints[i + 1];
+    }
+    this->checkpoints[MAX_ACTIVE_CHECKPOINTS - 1] = checkpoint;
+  }
+}
+
+const PackedCheckpoint& PackedActiveCheckpoints::newest() const
+{
+  BATT_CHECK_NE(this->num_active_checkpoints, 0);
+  return this->checkpoints[this->num_active_checkpoints - 1];
+}
+
+const PackedCheckpoint& PackedActiveCheckpoints::oldest() const
+{
+  BATT_CHECK_NE(this->num_active_checkpoints, 0);
+  return this->checkpoints[0];
+}
+
+const PackedCheckpoint* PackedActiveCheckpoints::find(i64 edit_offset) const
+{
+  for (u8 i = 0; i < this->num_active_checkpoints; ++i) {
+    if (this->checkpoints[i].edit_offset_upper_bound == edit_offset) {
+      return &this->checkpoints[i];
+    }
+  }
+  return nullptr;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+llfs::BoxedSeq<llfs::PageId> trace_refs(const PackedActiveCheckpoints& active)
+{
+  auto active_slice = as_slice(active.checkpoints.data(),
+                               active.checkpoints.data() + active.num_active_checkpoints);
+
+  auto refs_per_checkpoint = as_seq(active_slice)  //
+                             | llfs::seq::map([](const PackedCheckpoint& checkpoint) {
+                                 return trace_refs(checkpoint);
+                               });
+
+  return std::move(refs_per_checkpoint)  //
+         | llfs::seq::flatten()          //
          | llfs::seq::boxed();
 }
 
