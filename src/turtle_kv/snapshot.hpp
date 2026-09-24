@@ -43,12 +43,13 @@ class Snapshot
    */
   bool is_empty() const noexcept;
 
+  explicit operator bool() const noexcept;
+
  private:
   friend class KVStore;
   friend class KVStoreScanner;
 
   explicit Snapshot(Checkpoint&& checkpoint,
-                    EditOffset edit_offset,
                     KVStore* kv_store) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -

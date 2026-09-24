@@ -19,7 +19,6 @@ namespace turtle_kv {
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 Snapshot::Snapshot(Checkpoint&& checkpoint,
-                   EditOffset edit_offset,
                    KVStore* kv_store) noexcept
     : checkpoint_{std::move(checkpoint)}
     , kv_store_{kv_store}
@@ -58,6 +57,13 @@ EditOffset Snapshot::edit_offset() const noexcept
 bool Snapshot::is_empty() const noexcept
 {
   return this->checkpoint_.is_empty();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Snapshot::operator bool() const noexcept
+{
+  return !this->is_empty();
 }
 
 }  // namespace turtle_kv

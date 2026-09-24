@@ -1051,7 +1051,6 @@ StatusOr<Snapshot> KVStore::get_snapshot(EditOffset checkpoint_edit_offset) noex
 
   return Snapshot{
       std::move(checkpoint),
-      checkpoint_edit_offset,
       this,
   };
 }
@@ -1080,15 +1079,12 @@ StatusOr<std::vector<Snapshot>> KVStore::get_active_snapshots() noexcept
   snapshots.reserve(packed_checkpoints.size());
 
   for (const PackedCheckpoint& packed : packed_checkpoints) {
-    const EditOffset offset{packed.edit_offset_upper_bound.value()};
-
     BATT_ASSIGN_OK_RESULT(
         Checkpoint checkpoint,
         Checkpoint::recover(this->page_cache_, packed, batt::make_copy(*checkpoint_lock)));
 
     snapshots.emplace_back(Snapshot{
         std::move(checkpoint),
-        offset,
         this,
     });
   }

@@ -732,8 +732,6 @@ TEST_P(CheckpointReadOldKeysTest, CheckpointReadOldKeys)
                               ? this->num_checkpoints - turtle_kv::MAX_ACTIVE_CHECKPOINTS
                               : 0;
 
-  std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
   for (u64 cp = 0; cp < num_expired; ++cp) {
     StatusOr<Snapshot> snapshot = kv_store->get_snapshot(checkpoint_offsets[cp]);
     EXPECT_FALSE(snapshot.ok()) << "Expired checkpoint " << cp << " should not be queryable";
@@ -1168,5 +1166,6 @@ INSTANTIATE_TEST_SUITE_P(
                     CheckpointReadOldKeysParams{.num_keys = 1000, .num_checkpoints = 5},
                     CheckpointReadOldKeysParams{.num_keys = 10000, .num_checkpoints = 2},
                     CheckpointReadOldKeysParams{.num_keys = 10000, .num_checkpoints = 8},
-                    CheckpointReadOldKeysParams{.num_keys = 10000, .num_checkpoints = 10}),
+                    CheckpointReadOldKeysParams{.num_keys = 10000, .num_checkpoints = 10},
+                    CheckpointReadOldKeysParams{.num_keys = 1000000, .num_checkpoints = 10}),
     format_checkpoint_read_old_keys_test_name);
