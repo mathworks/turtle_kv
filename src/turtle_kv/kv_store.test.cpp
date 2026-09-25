@@ -57,7 +57,7 @@ using turtle_kv::testing::RandomStringGenerator;
 using turtle_kv::testing::run_workload;
 using turtle_kv::testing::SequentialStringGenerator;
 
-constexpr bool kQuiet = false;
+constexpr bool kQuiet = true;
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 // Base test fixture with common KVStore setup and teardown
