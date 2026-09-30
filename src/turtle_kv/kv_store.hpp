@@ -277,6 +277,11 @@ class KVStore : public Table
    */
   StatusOr<std::vector<Snapshot>> get_active_snapshots() noexcept;
 
+  /** \brief Deletes the snapshot/checkpoint identified by the given EditOffset.
+   * Returns kNotFound if no checkpoint exists at that offset.
+   */
+  Status delete_snapshot(EditOffset checkpoint_edit_offset) noexcept;
+
   std::function<void(std::ostream&)> debug_info() const noexcept;
 
   void collect_stats(

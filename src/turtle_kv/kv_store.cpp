@@ -1094,6 +1094,43 @@ StatusOr<std::vector<Snapshot>> KVStore::get_active_snapshots() noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+Status KVStore::delete_snapshot(EditOffset checkpoint_edit_offset) noexcept
+{
+  BATT_REQUIRE_OK(this->wait_for_recovery());
+
+  {
+    batt::Toggle<State>::Reader state_reader{this->state_};
+
+    const auto& active = state_reader->active_checkpoints_;
+    if (active.num_active_checkpoints == 0) {
+      return {batt::StatusCode::kNotFound};
+    }
+    if (checkpoint_edit_offset.value() == active.newest().edit_offset_upper_bound) {
+      return {batt::StatusCode::kFailedPrecondition};
+    }
+  }
+
+  PackedActiveCheckpoints updated_active_checkpoints;
+  BATT_REQUIRE_OK(this->checkpoint_generator_->delete_checkpoint(checkpoint_edit_offset,
+                                                                 updated_active_checkpoints));
+
+  {
+    batt::Toggle<State>::Writer state_writer{this->state_};
+
+    State& new_state = state_writer.new_value();
+    const State& old_state = state_writer.old_value();
+
+    new_state.mem_table_ = old_state.mem_table_;
+    new_state.deltas_ = old_state.deltas_;
+    new_state.base_checkpoint_ = old_state.base_checkpoint_;
+    new_state.active_checkpoints_ = updated_active_checkpoints;
+  }
+
+  return OkStatus();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 StatusOr<usize> KVStore::scan(
     const KeyView& min_key,
     const Slice<std::pair<KeyView, ValueView>>& items_out) noexcept /*override*/

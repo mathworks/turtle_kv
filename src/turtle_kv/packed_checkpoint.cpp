@@ -64,6 +64,20 @@ const PackedCheckpoint* PackedActiveCheckpoints::find(i64 edit_offset) const
   return nullptr;
 }
 
+bool PackedActiveCheckpoints::erase(i64 edit_offset)
+{
+  for (u8 i = 0; i < this->num_active_checkpoints; ++i) {
+    if (this->checkpoints[i].edit_offset_upper_bound == edit_offset) {
+      for (u8 j = i; j + 1 < this->num_active_checkpoints; ++j) {
+        this->checkpoints[j] = this->checkpoints[j + 1];
+      }
+      this->num_active_checkpoints = this->num_active_checkpoints - 1;
+      return true;
+    }
+  }
+  return false;
+}
+
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 llfs::BoxedSeq<llfs::PageId> trace_refs(const PackedActiveCheckpoints& active)
