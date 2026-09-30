@@ -1213,3 +1213,147 @@ INSTANTIATE_TEST_SUITE_P(
                     CheckpointReadOldKeysParams{.num_keys = 10000, .num_checkpoints = 10},
                     CheckpointReadOldKeysParams{.num_keys = 1000000, .num_checkpoints = 10}),
     format_checkpoint_read_old_keys_test_name);
+
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+
+struct DeleteSnapshotParams {
+  u64 num_keys;
+  u64 num_checkpoints;
+};
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+class DeleteSnapshotTest
+    : public KVStoreTest
+    , public testing::WithParamInterface<DeleteSnapshotParams>
+{
+ public:
+  void SetUp() override
+  {
+    KVStoreTest::SetUp();
+
+    DeleteSnapshotParams params = GetParam();
+    this->num_keys = params.num_keys;
+    this->num_checkpoints = params.num_checkpoints;
+  }
+
+  u64 num_keys;
+  u64 num_checkpoints;
+};
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+TEST_P(DeleteSnapshotTest, DeleteSnapshot)
+{
+  ASSERT_GT(this->num_checkpoints, u64{1})
+      << "Need at least 2 checkpoints so the newest is never deleted";
+
+  std::filesystem::path test_kv_store_dir = this->data_root / "turtle_kv_Test" / "delete_snapshot";
+
+  StatusOr<std::unique_ptr<KVStore>> open_result = this->CreateAndOpenKVStore(test_kv_store_dir);
+  ASSERT_TRUE(open_result.ok()) << BATT_INSPECT(open_result.status());
+
+  std::unique_ptr<KVStore>& kv_store = *open_result;
+
+  kv_store->set_checkpoint_distance(99999999);
+
+  auto make_key = [](i64 i) -> std::string {
+    return batt::to_string(i);
+  };
+
+  auto make_value = [](i64 i) -> std::string {
+    return batt::to_string(i);
+  };
+
+  const u64 keys_per_checkpoint = this->num_keys / this->num_checkpoints;
+
+  std::vector<EditOffset> checkpoint_offsets;
+
+  for (u64 cp = 0; cp < this->num_checkpoints; ++cp) {
+    const i64 batch_start = cp * keys_per_checkpoint;
+    const i64 batch_end = (cp == this->num_checkpoints - 1)
+                              ? static_cast<i64>(this->num_keys)
+                              : static_cast<i64>((cp + 1) * keys_per_checkpoint);
+
+    for (i64 i = batch_start; i < batch_end; ++i) {
+      std::string key = make_key(i);
+      std::string value = make_value(i);
+      Status put_status = kv_store->put(KeyView{key}, ValueView::from_str(value));
+      ASSERT_TRUE(put_status.ok()) << BATT_INSPECT(put_status);
+    }
+
+    StatusOr<EditOffset> checkpoint_bound = kv_store->force_checkpoint();
+    ASSERT_TRUE(checkpoint_bound.ok()) << BATT_INSPECT(checkpoint_bound.status());
+    ASSERT_TRUE(kv_store->wait_for_checkpoint(*checkpoint_bound).ok());
+
+    checkpoint_offsets.push_back(*checkpoint_bound);
+  }
+
+  // Verify all checkpoints are queryable before deletion.
+  //
+  const u64 total_checkpoints = checkpoint_offsets.size();
+  const u64 num_expired = (total_checkpoints > turtle_kv::MAX_ACTIVE_CHECKPOINTS)
+                              ? total_checkpoints - turtle_kv::MAX_ACTIVE_CHECKPOINTS
+                              : 0;
+
+  for (u64 cp = num_expired; cp < total_checkpoints; ++cp) {
+    StatusOr<Snapshot> snapshot = kv_store->get_snapshot(checkpoint_offsets[cp]);
+    ASSERT_TRUE(snapshot.ok()) << "Checkpoint " << cp << " should be queryable before deletion";
+  }
+
+  // Deleting the newest checkpoint must fail.
+  //
+  {
+    Status status = kv_store->delete_snapshot(checkpoint_offsets.back());
+    EXPECT_FALSE(status.ok()) << "Deleting the newest checkpoint should fail";
+  }
+
+  // Delete all non-newest, non-expired checkpoints and verify they are gone.
+  //
+  const u64 newest_cp = total_checkpoints - 1;
+  for (u64 cp = num_expired; cp < newest_cp; ++cp) {
+    Status delete_status = kv_store->delete_snapshot(checkpoint_offsets[cp]);
+    ASSERT_TRUE(delete_status.ok())
+        << "Failed to delete checkpoint " << cp << ": " << delete_status;
+
+    StatusOr<Snapshot> snapshot = kv_store->get_snapshot(checkpoint_offsets[cp]);
+    EXPECT_FALSE(snapshot.ok()) << "Checkpoint " << cp << " should not be queryable after deletion";
+
+    // Re-deleting the same checkpoint should return not-found.
+    //
+    Status re_delete_status = kv_store->delete_snapshot(checkpoint_offsets[cp]);
+    EXPECT_FALSE(re_delete_status.ok()) << "Re-deleting checkpoint " << cp << " should fail";
+  }
+
+  // The newest checkpoint must still be queryable.
+  //
+  {
+    StatusOr<Snapshot> snapshot = kv_store->get_snapshot(checkpoint_offsets[newest_cp]);
+    ASSERT_TRUE(snapshot.ok()) << "Newest checkpoint should still be queryable after deletions";
+  }
+
+  this->ShutdownKVStore(kv_store);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+std::string format_delete_snapshot_test_name(
+    const ::testing::TestParamInfo<DeleteSnapshotParams>& info)
+{
+  return batt::to_string("NumKeys",
+                         info.param.num_keys,
+                         "NumCheckpoints",
+                         info.param.num_checkpoints);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+INSTANTIATE_TEST_SUITE_P(
+    DeletingSnapshots,
+    DeleteSnapshotTest,
+    testing::Values(DeleteSnapshotParams{.num_keys = 1000, .num_checkpoints = 2},
+                    DeleteSnapshotParams{.num_keys = 1000, .num_checkpoints = 5},
+                    DeleteSnapshotParams{.num_keys = 10000, .num_checkpoints = 3},
+                    DeleteSnapshotParams{.num_keys = 10000, .num_checkpoints = 8},
+                    DeleteSnapshotParams{.num_keys = 1000000, .num_checkpoints = 16}),
+    format_delete_snapshot_test_name);
