@@ -291,7 +291,11 @@ class KVStoreScanner
                           i32 tree_height,
                           const KeyView& min_key,
                           llfs::PageSize trie_index_sharded_view_size,
-                          PageSliceStorage* slice_storage) noexcept;
+                          PageSliceStorage* slice_storage = nullptr) noexcept;
+
+  /** \brief Create a scanner from a Snapshot (checkpoint tree only, no MemTables).
+   */
+  explicit KVStoreScanner(Snapshot& snapshot, const KeyView& min_key) noexcept;
 
   ~KVStoreScanner() noexcept;
 
@@ -336,6 +340,7 @@ class KVStoreScanner
 
   batt::Toggle<KVStore::State>::Reader state_reader_;
   llfs::PageLoader& page_loader_;
+  Optional<PageSliceStorage> owned_slice_storage_;
   PageSliceStorage* slice_storage_;
   llfs::PageIdSlot root_;
   llfs::PageSize trie_index_sharded_view_size_;

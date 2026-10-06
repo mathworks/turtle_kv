@@ -17,6 +17,7 @@
 #include <turtle_kv/checkpoint_generator.hpp>
 #include <turtle_kv/kv_store_config.hpp>
 #include <turtle_kv/kv_store_metrics.hpp>
+#include <turtle_kv/snapshot.hpp>
 
 #include <turtle_kv/mem_table/mem_table.hpp>
 
@@ -47,6 +48,7 @@
 #include <filesystem>
 #include <memory>
 #include <thread>
+#include <utility>
 
 namespace turtle_kv {
 
@@ -58,6 +60,7 @@ class KVStore : public Table
   using Self = KVStore;
 
   friend class KVStoreScanner;
+  friend class Snapshot;
 
   using Config = KVStoreConfig;
   using RuntimeOptions = KVStoreRuntimeOptions;
@@ -178,9 +181,21 @@ class KVStore : public Table
    */
   static Status register_page_layouts(llfs::PageCache& page_cache);
 
+  struct RecoveredActiveCheckpointsState {
+    PackedActiveCheckpoints active;
+    llfs::SlotParse slot;
+  };
+
+  /** \brief Reads the checkpoint volume and returns the most recent PackedActiveCheckpoints record
+   * along with its slot parse. All other recover_* methods delegate to this.
+   */
+  static StatusOr<RecoveredActiveCheckpointsState> read_checkpoint_volume(
+      llfs::Volume& checkpoint_volume);
+
   /** \brief Returns the latest checkpoint recovered from the passed volume.
    */
-  static StatusOr<Checkpoint> recover_latest_checkpoint(llfs::Volume& checkpoint_volume);
+  static StatusOr<Checkpoint> recover_latest_checkpoint(llfs::Volume& checkpoint_volume,
+                                                        RecoveredActiveCheckpointsState state);
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -253,6 +268,15 @@ class KVStore : public Table
    */
   Status wait_for_checkpoint(EditOffset target) noexcept;
 
+  /** \brief Returns a read-only Snapshot for the checkpoint identified by the given EditOffset.
+   * Returns kNotFound if no checkpoint exists at that offset.
+   */
+  StatusOr<Snapshot> get_snapshot(EditOffset checkpoint_edit_offset) noexcept;
+
+  /** \brief Returns Snapshots for all currently active checkpoints, ordered oldest to newest.
+   */
+  StatusOr<std::vector<Snapshot>> get_active_snapshots() noexcept;
+
   std::function<void(std::ostream&)> debug_info() const noexcept;
 
   void collect_stats(
@@ -299,6 +323,15 @@ class KVStore : public Table
     /** \brief The most recent checkpoint; covers everything older than the deltas.
      */
     Optional<Checkpoint> base_checkpoint_;
+
+    /** \brief The set of all active (retained) packed checkpoints.
+     */
+    PackedActiveCheckpoints active_checkpoints_;
+
+    /** \brief Creates a new State by rotating out the current mem_table_ into deltas_ and
+     * installing `new_mem_table` as the active MemTable.
+     */
+    State create_new_state(boost::intrusive_ptr<MemTable> new_mem_table) const;
   };
 
   static_assert(std::default_initializable<State>);
@@ -314,13 +347,15 @@ class KVStore : public Table
                    const TreeOptions& tree_options,
                    const RuntimeOptions& runtime_options,
                    std::unique_ptr<llfs::Volume>&& checkpoint_volume,
-                   Checkpoint&& latest_recovered_checkpoint) noexcept;
+                   Checkpoint&& latest_recovered_checkpoint,
+                   const PackedActiveCheckpoints& recovered_active_checkpoints) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   /** \brief Initializes the `State` of the KVStore.
    */
-  void initialize_state(Checkpoint&& latest_recovered_checkpoint);
+  void initialize_state(Checkpoint&& latest_recovered_checkpoint,
+                        const PackedActiveCheckpoints& recovered_active_checkpoints);
 
   /** \brief Opens the change log file and recovers state from it; this is necessary to properly
    * initialize the KVStore.
@@ -382,9 +417,8 @@ class KVStore : public Table
    * checkpoint generator (depending on whether the threaded checkpoint pipeline is enabled).
    */
   template <typename Fn>
-    requires std::invocable<Fn, std::unique_ptr<DeltaBatch>>
-  Status scan_mem_table_to_build_batches(boost::intrusive_ptr<MemTable>&& mem_table,
-                                         Fn&& consume_fn);
+  requires std::invocable<Fn, std::unique_ptr<DeltaBatch>> Status
+  scan_mem_table_to_build_batches(boost::intrusive_ptr<MemTable>&& mem_table, Fn&& consume_fn);
 
   /** \brief Entry point for the MemTable::BatchCompactor thread.
    */

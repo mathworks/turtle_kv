@@ -184,16 +184,13 @@ void perform_range_scan(Table& expected_table,
 
   std::array<std::pair<KeyView, ValueView>, kMaxScanSize> scan_items_buffer;
 
-  PageSliceStorage page_slice_storage;
-
   KVStoreScanner kv_scanner{
       page_loader,
       root_ptr->page_id_slot_or_panic(),
       BATT_OK_RESULT_OR_PANIC(root_ptr->get_height(page_loader,  //
                                                    llfs::PageCacheOvercommit::not_allowed())),
       min_key,
-      tree_options.trie_index_sharded_view_size(),
-      &page_slice_storage};
+      tree_options.trie_index_sharded_view_size()};
 
   usize n_read = 0;
   {
