@@ -26,22 +26,6 @@ namespace turtle_kv {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-/*static*/ TreeOptions::GlobalOptions& TreeOptions::global_options()
-{
-  static constexpr const char* const kVarName = "TURTLE_KV_PAGE_CACHE_OBSOLETE_HINTS";
-
-  static GlobalOptions* const p_global_options_ = []() {
-    static GlobalOptions global_options_;
-    global_options_.page_cache_obsolete_hints = batt::getenv_as<bool>(kVarName).value_or(false);
-    LOG(INFO) << kVarName << "=" << global_options_.page_cache_obsolete_hints;
-    return &global_options_;
-  }();
-
-  return *p_global_options_;
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
 std::ostream& operator<<(std::ostream& out, const TreeOptions& t)
 {
   return out << "TreeOptions{.node_size=" << t.node_size()            //

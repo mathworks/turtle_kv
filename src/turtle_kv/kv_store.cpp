@@ -28,8 +28,6 @@
 #include <turtle_kv/tree/sharded_level_scanner.hpp>
 #include <turtle_kv/tree/storage_config.hpp>
 
-#include <turtle_kv/util/memory_stats.hpp>
-
 #include <turtle_kv/import/constants.hpp>
 #include <turtle_kv/import/env.hpp>
 
@@ -1484,9 +1482,9 @@ void KVStore::mem_table_batch_scanner_thread_main()
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename Fn>
-requires std::invocable<Fn, std::unique_ptr<DeltaBatch>> Status
-KVStore::scan_mem_table_to_build_batches(boost::intrusive_ptr<MemTable>&& mem_table,
-                                         Fn&& consume_fn)
+  requires std::invocable<Fn, std::unique_ptr<DeltaBatch>>
+Status KVStore::scan_mem_table_to_build_batches(boost::intrusive_ptr<MemTable>&& mem_table,
+                                                Fn&& consume_fn)
 {
   MemTable::BatchCompactor batch_compactor{*mem_table,
                                            /*byte_size_limit=*/this->tree_options_.flush_size()};
