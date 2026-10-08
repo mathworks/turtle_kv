@@ -269,31 +269,6 @@ Status CheckpointGenerator::delete_checkpoint(
     return {batt::StatusCode::kNotFound};
   }
 
-  llfs::PackAsVariant<CheckpointLogEvent, PackedActiveCheckpoints> packed_event{
-      this->active_checkpoints_,
-  };
-
-  // TODO: [Gabe Bornstein 9/30/26] Is it ok to append to the checkpoint volume like this? Or do I
-  // need to use a checkpoint_job? If I need to use a checkpoint_job, where should I be getting the
-  // checkpoint_job? Here's how commit_checkpoint appends:
-  // this->checkpoint_volume_->append(                  //
-  // std::move(*checkpoint_job->appendable_job),        //
-  // *checkpoint_job->append_job_grant,                 //
-  // std::move(checkpoint_job->prepare_slot_sequencer)  //
-  // )
-  //
-  const u64 grant_size = this->checkpoint_volume_.calculate_grant_size(packed_event);
-  StatusOr<batt::Grant> grant = this->reserve_slot_grant_for_checkpoints(grant_size);
-  BATT_REQUIRE_OK(grant);
-
-  StatusOr<llfs::SlotRange> slot_range = this->checkpoint_volume_.append(packed_event, *grant);
-  BATT_REQUIRE_OK(slot_range);
-
-  BATT_REQUIRE_OK(this->checkpoint_volume_.sync(llfs::LogReadMode::kDurable,
-                                                llfs::SlotUpperBoundAt{
-                                                    .offset = slot_range->upper_bound,
-                                                }));
-
   active_checkpoints_out = this->active_checkpoints_;
 
   return OkStatus();

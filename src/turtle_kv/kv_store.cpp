@@ -1057,6 +1057,20 @@ StatusOr<Snapshot> KVStore::get_snapshot(EditOffset checkpoint_edit_offset) noex
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+StatusOr<Snapshot> KVStore::create_snapshot() noexcept
+{
+  BATT_ASSIGN_OK_RESULT(EditOffset checkpoint_edit_offset, this->force_checkpoint());
+
+  // force_checkpoint only finalizes the active MemTable; the checkpoint itself is committed
+  // asynchronously, so wait for it to become active before looking it up.
+  //
+  BATT_REQUIRE_OK(this->wait_for_checkpoint(checkpoint_edit_offset));
+
+  return this->get_snapshot(checkpoint_edit_offset);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 StatusOr<std::vector<Snapshot>> KVStore::get_active_snapshots() noexcept
 {
   std::vector<PackedCheckpoint> packed_checkpoints;

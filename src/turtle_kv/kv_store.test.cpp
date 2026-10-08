@@ -691,8 +691,7 @@ class CheckpointReadOldKeysTest
 
   // Inserts keys in batches across `num_checkpoints` checkpoints and returns the EditOffsets.
   //
-  void create_checkpoints(KVStore& kv_store,
-                          std::vector<EditOffset>& checkpoint_offsets_out)
+  void create_checkpoints(KVStore& kv_store, std::vector<EditOffset>& checkpoint_offsets_out)
   {
     const u64 keys_per_checkpoint = this->num_keys / this->num_checkpoints;
 
@@ -703,8 +702,7 @@ class CheckpointReadOldKeysTest
                                 : static_cast<i64>((cp + 1) * keys_per_checkpoint);
 
       for (i64 i = batch_start; i < batch_end; ++i) {
-        Status put_status =
-            kv_store.put(KeyView{make_key(i)}, ValueView::from_str(make_value(i)));
+        Status put_status = kv_store.put(KeyView{make_key(i)}, ValueView::from_str(make_value(i)));
         ASSERT_TRUE(put_status.ok()) << BATT_INSPECT(put_status);
       }
 
@@ -712,13 +710,11 @@ class CheckpointReadOldKeysTest
     }
   }
 
-  void do_checkpoint(KVStore& kv_store,
-                     std::vector<EditOffset>& checkpoint_offsets_out)
+  void do_checkpoint(KVStore& kv_store, std::vector<EditOffset>& checkpoint_offsets_out)
   {
-    StatusOr<EditOffset> bound = kv_store.force_checkpoint();
-    ASSERT_TRUE(bound.ok()) << BATT_INSPECT(bound.status());
-    ASSERT_TRUE(kv_store.wait_for_checkpoint(*bound).ok());
-    checkpoint_offsets_out.push_back(*bound);
+    StatusOr<Snapshot> snapshot = kv_store.create_snapshot();
+    ASSERT_TRUE(snapshot.ok()) << BATT_INSPECT(snapshot.status());
+    checkpoint_offsets_out.push_back(snapshot->edit_offset());
   }
 
   // Returns the number of expired (evicted) checkpoints.
@@ -735,17 +731,13 @@ class CheckpointReadOldKeysTest
   i64 visible_key_end(u64 cp) const
   {
     const u64 keys_per_checkpoint = this->num_keys / this->num_checkpoints;
-    return (cp >= this->num_checkpoints - 1)
-               ? static_cast<i64>(this->num_keys)
-               : static_cast<i64>((cp + 1) * keys_per_checkpoint);
+    return (cp >= this->num_checkpoints - 1) ? static_cast<i64>(this->num_keys)
+                                             : static_cast<i64>((cp + 1) * keys_per_checkpoint);
   }
 
   // Verifies that a snapshot contains the expected original values for keys [0, visible_end).
   //
-  static void verify_original_keys(Snapshot& snapshot,
-                                   i64 visible_end,
-                                   i64 total_keys,
-                                   u64 cp)
+  static void verify_original_keys(Snapshot& snapshot, i64 visible_end, i64 total_keys, u64 cp)
   {
     for (i64 i = 0; i < visible_end; ++i) {
       std::string key = make_key(i);
@@ -796,8 +788,10 @@ TEST_P(CheckpointReadOldKeysTest, CheckpointReadOldKeys)
     StatusOr<Snapshot> snapshot = kv_store->get_snapshot(checkpoint_offsets[cp]);
     ASSERT_TRUE(snapshot.ok()) << "Failed to get snapshot for checkpoint " << cp;
 
-    verify_original_keys(*snapshot, this->visible_key_end(cp),
-                         static_cast<i64>(this->num_keys), cp);
+    verify_original_keys(*snapshot,
+                         this->visible_key_end(cp),
+                         static_cast<i64>(this->num_keys),
+                         cp);
   }
 
   this->ShutdownKVStore(kv_store);
@@ -842,8 +836,10 @@ TEST_P(CheckpointReadOldKeysTest, CheckpointSnapshotUpdates)
     StatusOr<Snapshot> snapshot = kv_store->get_snapshot(checkpoint_offsets[cp]);
     ASSERT_TRUE(snapshot.ok()) << "Failed to get snapshot for checkpoint " << cp;
 
-    verify_original_keys(*snapshot, this->visible_key_end(cp),
-                         static_cast<i64>(this->num_keys), cp);
+    verify_original_keys(*snapshot,
+                         this->visible_key_end(cp),
+                         static_cast<i64>(this->num_keys),
+                         cp);
   }
 
   // The update snapshot should see updated values for [0, num_updated) and original values for the
@@ -909,8 +905,10 @@ TEST_P(CheckpointReadOldKeysTest, CheckpointSnapshotDeletions)
     StatusOr<Snapshot> snapshot = kv_store->get_snapshot(checkpoint_offsets[cp]);
     ASSERT_TRUE(snapshot.ok()) << "Failed to get snapshot for checkpoint " << cp;
 
-    verify_original_keys(*snapshot, this->visible_key_end(cp),
-                         static_cast<i64>(this->num_keys), cp);
+    verify_original_keys(*snapshot,
+                         this->visible_key_end(cp),
+                         static_cast<i64>(this->num_keys),
+                         cp);
   }
 
   // The deletion snapshot should not contain deleted keys, but should contain the rest.
@@ -1281,13 +1279,9 @@ TEST_F(KVStoreTest, SnapshotScan)
   std::map<std::string, std::string> expected;
   this->PopulateKVStore(*kv_store, kNumKeys, &expected);
 
-  StatusOr<EditOffset> checkpoint_bound = kv_store->force_checkpoint();
-  ASSERT_TRUE(checkpoint_bound.ok()) << BATT_INSPECT(checkpoint_bound.status());
-  ASSERT_TRUE(kv_store->wait_for_checkpoint(*checkpoint_bound).ok());
-
   std::map<std::string, std::string> scanned;
   {
-    StatusOr<Snapshot> snapshot = kv_store->get_snapshot(*checkpoint_bound);
+    StatusOr<Snapshot> snapshot = kv_store->create_snapshot();
     ASSERT_TRUE(snapshot.ok()) << BATT_INSPECT(snapshot.status());
 
     turtle_kv::KVStoreScanner scanner{*snapshot, KeyView{}};
@@ -1405,11 +1399,19 @@ TEST_P(DeleteSnapshotTest, DeleteSnapshot)
       ASSERT_TRUE(put_status.ok()) << BATT_INSPECT(put_status);
     }
 
-    StatusOr<EditOffset> checkpoint_bound = kv_store->force_checkpoint();
-    ASSERT_TRUE(checkpoint_bound.ok()) << BATT_INSPECT(checkpoint_bound.status());
-    ASSERT_TRUE(kv_store->wait_for_checkpoint(*checkpoint_bound).ok());
+    StatusOr<Snapshot> snapshot = kv_store->create_snapshot();
+    ASSERT_TRUE(snapshot.ok()) << BATT_INSPECT(snapshot.status());
 
-    checkpoint_offsets.push_back(*checkpoint_bound);
+    // The new snapshot should see the batch we just wrote.
+    //
+    for (i64 i = batch_start; i < batch_end; ++i) {
+      std::string key = make_key(i);
+      StatusOr<ValueView> result = snapshot->get(KeyView{key});
+      ASSERT_TRUE(result.ok()) << "Created snapshot missing key: " << key;
+      EXPECT_EQ(result->as_str(), make_value(i));
+    }
+
+    checkpoint_offsets.push_back(snapshot->edit_offset());
   }
 
   // Verify all checkpoints are queryable before deletion.
