@@ -1057,6 +1057,20 @@ StatusOr<Snapshot> KVStore::get_snapshot(EditOffset checkpoint_edit_offset) noex
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+StatusOr<Snapshot> KVStore::create_snapshot() noexcept
+{
+  BATT_ASSIGN_OK_RESULT(EditOffset checkpoint_edit_offset, this->force_checkpoint());
+
+  // force_checkpoint only finalizes the active MemTable; the checkpoint itself is committed
+  // asynchronously, so wait for it to become active before looking it up.
+  //
+  BATT_REQUIRE_OK(this->wait_for_checkpoint(checkpoint_edit_offset));
+
+  return this->get_snapshot(checkpoint_edit_offset);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 StatusOr<std::vector<Snapshot>> KVStore::get_active_snapshots() noexcept
 {
   std::vector<PackedCheckpoint> packed_checkpoints;
@@ -1090,6 +1104,43 @@ StatusOr<std::vector<Snapshot>> KVStore::get_active_snapshots() noexcept
   }
 
   return snapshots;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Status KVStore::delete_snapshot(EditOffset checkpoint_edit_offset) noexcept
+{
+  BATT_REQUIRE_OK(this->wait_for_recovery());
+
+  {
+    batt::Toggle<State>::Reader state_reader{this->state_};
+
+    const auto& active = state_reader->active_checkpoints_;
+    if (active.num_active_checkpoints == 0) {
+      return {batt::StatusCode::kNotFound};
+    }
+    if (checkpoint_edit_offset.value() == active.newest().edit_offset_upper_bound) {
+      return {batt::StatusCode::kFailedPrecondition};
+    }
+  }
+
+  PackedActiveCheckpoints updated_active_checkpoints;
+  BATT_REQUIRE_OK(this->checkpoint_generator_->delete_checkpoint(checkpoint_edit_offset,
+                                                                 updated_active_checkpoints));
+
+  {
+    batt::Toggle<State>::Writer state_writer{this->state_};
+
+    State& new_state = state_writer.new_value();
+    const State& old_state = state_writer.old_value();
+
+    new_state.mem_table_ = old_state.mem_table_;
+    new_state.deltas_ = old_state.deltas_;
+    new_state.base_checkpoint_ = old_state.base_checkpoint_;
+    new_state.active_checkpoints_ = updated_active_checkpoints;
+  }
+
+  return OkStatus();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

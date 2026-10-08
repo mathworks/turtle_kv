@@ -205,43 +205,73 @@ StatusOr<std::unique_ptr<CheckpointJob>> CheckpointGenerator::finalize_checkpoin
   checkpoint_job->edit_offset_upper_bound = edit_offset_upper_bound;
   checkpoint_job->batch_count = batch_count;
 
-  this->active_checkpoints_.push_back(PackedCheckpoint{
-      .edit_offset_upper_bound = this->base_checkpoint_.edit_offset_upper_bound().value(),
-      .new_tree_root = llfs::PackedPageId::from(this->base_checkpoint_.root_id()),
-  });
+  {
+    std::lock_guard<std::mutex> lock{this->checkpoint_mutex_};
 
-  checkpoint_job->active_checkpoints.emplace(
-      llfs::PackAsVariant<CheckpointLogEvent, PackedActiveCheckpoints>{
-          this->active_checkpoints_,
-      });
+    this->active_checkpoints_.push_back(PackedCheckpoint{
+        .edit_offset_upper_bound = this->base_checkpoint_.edit_offset_upper_bound().value(),
+        .new_tree_root = llfs::PackedPageId::from(this->base_checkpoint_.root_id()),
+    });
 
-  // Package the job up with a PackedActiveCheckpoints event record so we can append it to the Volume.
-  //
-  StatusOr<llfs::AppendableJob> appendable_job =
-      llfs::make_appendable_job(std::move(this->job_),
-                                llfs::PackableRef{*checkpoint_job->active_checkpoints});
+    checkpoint_job->active_checkpoints.emplace(
+        llfs::PackAsVariant<CheckpointLogEvent, PackedActiveCheckpoints>{
+            this->active_checkpoints_,
+        });
 
-  BATT_REQUIRE_OK(appendable_job);
+    // Package the job up with a PackedActiveCheckpoints event record so we can append it to the
+    // Volume.
+    //
+    StatusOr<llfs::AppendableJob> appendable_job =
+        llfs::make_appendable_job(std::move(this->job_),
+                                  llfs::PackableRef{*checkpoint_job->active_checkpoints});
 
-  // Reserve slot grant for the current checkpoint in checkpoint-log.
-  //
-  auto grant_size = appendable_job->calculate_grant_size();
-  StatusOr<batt::Grant> checkpoint_grant = this->reserve_slot_grant_for_checkpoints(grant_size);
+    BATT_REQUIRE_OK(appendable_job);
 
-  BATT_REQUIRE_OK(checkpoint_grant);
+    // Reserve slot grant for the current checkpoint in checkpoint-log.
+    //
+    auto grant_size = appendable_job->calculate_grant_size();
+    StatusOr<batt::Grant> checkpoint_grant = this->reserve_slot_grant_for_checkpoints(grant_size);
 
-  checkpoint_job->append_job_grant.emplace(std::move(*checkpoint_grant));
-  checkpoint_job->appendable_job.emplace(std::move(*appendable_job));
-  checkpoint_job->prepare_slot_sequencer.emplace(this->slot_sequencer_);
+    BATT_REQUIRE_OK(checkpoint_grant);
 
-  this->base_job_ = checkpoint_job->appendable_job->job.finalized_job();
-  this->slot_sequencer_ = this->slot_sequencer_.get_next();
+    checkpoint_job->append_job_grant.emplace(std::move(*checkpoint_grant));
+    checkpoint_job->appendable_job.emplace(std::move(*appendable_job));
+    checkpoint_job->prepare_slot_sequencer.emplace(this->slot_sequencer_);
+
+    this->base_job_ = checkpoint_job->appendable_job->job.finalized_job();
+    this->slot_sequencer_ = this->slot_sequencer_.get_next();
+  }
 
   BATT_CHECK_EQ(this->job_, nullptr);
 
   VLOG(1) << "checkpoint finalized";
 
   return {std::move(checkpoint_job)};
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Status CheckpointGenerator::delete_checkpoint(
+    EditOffset edit_offset,
+    PackedActiveCheckpoints& active_checkpoints_out) noexcept
+{
+  std::lock_guard<std::mutex> lock{this->checkpoint_mutex_};
+
+  if (this->active_checkpoints_.num_active_checkpoints == 0) {
+    return {batt::StatusCode::kNotFound};
+  }
+
+  if (edit_offset.value() == this->active_checkpoints_.newest().edit_offset_upper_bound) {
+    return {batt::StatusCode::kFailedPrecondition};
+  }
+
+  if (!this->active_checkpoints_.erase(edit_offset.value())) {
+    return {batt::StatusCode::kNotFound};
+  }
+
+  active_checkpoints_out = this->active_checkpoints_;
+
+  return OkStatus();
 }
 
 }  // namespace turtle_kv

@@ -273,9 +273,19 @@ class KVStore : public Table
    */
   StatusOr<Snapshot> get_snapshot(EditOffset checkpoint_edit_offset) noexcept;
 
+  /** \brief Forces a checkpoint of all edits up to this point, waits for it to be durably
+   * committed, and returns a read-only Snapshot of that checkpoint.
+   */
+  StatusOr<Snapshot> create_snapshot() noexcept;
+
   /** \brief Returns Snapshots for all currently active checkpoints, ordered oldest to newest.
    */
   StatusOr<std::vector<Snapshot>> get_active_snapshots() noexcept;
+
+  /** \brief Deletes the snapshot/checkpoint identified by the given EditOffset.
+   * Returns kNotFound if no checkpoint exists at that offset.
+   */
+  Status delete_snapshot(EditOffset checkpoint_edit_offset) noexcept;
 
   std::function<void(std::ostream&)> debug_info() const noexcept;
 
