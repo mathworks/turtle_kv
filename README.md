@@ -1,5 +1,7 @@
 # TurtleKV: High Performance, Dynamically Tuned Key-Value Storage
 
+> Read our VLDB 2026 paper: [Dynamic read and write optimization with TurtleKV](https://dl.acm.org/doi/abs/10.14778/3819518.3819523) ([login-free version](https://arxiv.org/abs/2509.10714))
+
 [TurtleKV](https://arxiv.org/abs/2509.10714) is a general-purpose,
 embedded key-value storage engine designed with the goal of being the
 best choice for the widest possible range of applications and
@@ -38,13 +40,27 @@ applications that use it to store data can continue to run faster and
 more efficiently as TurtleKV is updated and improved, with no
 requirement to migrate to a new data format.
 
+<!--
+<table border="0" width="75%">
+  <tr><td align="center">
+    <img src="doc/images/ycsb_turtle_kv.png" width="75%"/>
+  </td></tr>
+  <tr><td align="center">
+    <i>YCSB benchmark results for TurtleKV and other engines (higher is better)</i>
+  </td></tr>
+</table>
+-->
+
+<div align="center" style="display: block; padding: 18pt">
+<img src="doc/images/ycsb_turtle_kv.png" alt="YCSB Results" width="75%"><br>
+<i>YCSB benchmark results for TurtleKV and other engines (higher is better)</i>
+</div>
+
 TurtleKV uses the [Conan package management
 system](https://conan.io/), and is built on MathWorks' [Low Level File
 System (LLFS)](https://github.com/mathworks/llfs/) library.
 
 ## Getting Started
-
-***The build instructions are currently broken, see [issues/1](https://github.com/mathworks/turtle_kv/issues/1) for updates***
 
 **Note: TurtleKV is currently only supported on x86_64 architecture, on the GNU/Linux operating system.**
 
