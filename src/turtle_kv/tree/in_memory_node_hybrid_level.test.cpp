@@ -12,7 +12,9 @@
 #include <turtle_kv/import/constants.hpp>
 #include <turtle_kv/import/int_types.hpp>
 
-#include <sstream>
+#include <batteries/stream_util.hpp>
+
+#include <string>
 
 namespace {
 
@@ -262,25 +264,17 @@ TEST_F(InMemoryNodeHybridLevelTest, DumpProducesOutput)
   level.add_new_sub_level(
       HybridLevel::SubLevel{this->make_segmented_level({this->make_segment(1, {0})})});
 
-  std::ostringstream oss;
-  auto dump_fn = level.dump();
-  dump_fn(oss);
-
-  std::string output = oss.str();
-  EXPECT_FALSE(output.empty());
-  EXPECT_NE(output.find("HybridLevel"), std::string::npos);
+  std::string output = batt::to_string(level.dump());
+  EXPECT_THAT(output, ::testing::StartsWith("HybridLevel{\n"));
+  EXPECT_THAT(output, ::testing::EndsWith("  }"));
 }
 
 TEST_F(InMemoryNodeHybridLevelTest, DumpEmptyLevel)
 {
   HybridLevel level;
 
-  std::ostringstream oss;
-  auto dump_fn = level.dump();
-  dump_fn(oss);
-
-  std::string output = oss.str();
-  EXPECT_NE(output.find("HybridLevel"), std::string::npos);
+  std::string output = batt::to_string(level.dump());
+  EXPECT_EQ(output, "HybridLevel{\n  }");
 }
 
 }  // namespace

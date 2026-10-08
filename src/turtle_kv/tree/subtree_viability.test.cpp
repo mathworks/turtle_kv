@@ -7,7 +7,7 @@
 
 #include <turtle_kv/import/int_types.hpp>
 
-#include <sstream>
+#include <batteries/stream_util.hpp>
 
 namespace {
 
@@ -29,6 +29,10 @@ using turtle_kv::Viable;
 TEST(NeedsMergeTest, DefaultIsFalse)
 {
   NeedsMerge nm;
+  EXPECT_FALSE(nm.single_pivot);
+  EXPECT_FALSE(nm.too_few_pivots);
+  EXPECT_FALSE(nm.too_few_items);
+  EXPECT_FALSE(nm.zero_items);
   EXPECT_FALSE(bool(nm));
 }
 
@@ -66,11 +70,8 @@ TEST(NeedsMergeTest, StreamOutput)
   nm.too_few_pivots = true;
   nm.zero_items = true;
 
-  std::ostringstream oss;
-  oss << nm;
-  std::string output = oss.str();
-  EXPECT_NE(output.find("NeedsMerge"), std::string::npos);
-  EXPECT_NE(output.find("too_few_pivots"), std::string::npos);
+  EXPECT_EQ(batt::to_string(nm),
+            "NeedsMerge{.single_pivot=0, .too_few_pivots=1, .too_few_items=0, .zero_items=1,}");
 }
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
@@ -80,6 +81,14 @@ TEST(NeedsMergeTest, StreamOutput)
 TEST(NeedsSplitTest, DefaultIsFalse)
 {
   NeedsSplit ns{};
+  EXPECT_EQ(ns.pivot_count, 0u);
+  EXPECT_EQ(ns.segment_count, 0u);
+  EXPECT_EQ(ns.height, 0);
+  EXPECT_FALSE(ns.items_too_large);
+  EXPECT_FALSE(ns.keys_too_large);
+  EXPECT_FALSE(ns.too_many_pivots);
+  EXPECT_FALSE(ns.too_many_segments);
+  EXPECT_FALSE(ns.segment_filters_too_large);
   EXPECT_FALSE(bool(ns));
 }
 
@@ -124,11 +133,10 @@ TEST(NeedsSplitTest, StreamOutput)
   ns.too_many_pivots = true;
   ns.pivot_count = 42;
 
-  std::ostringstream oss;
-  oss << ns;
-  std::string output = oss.str();
-  EXPECT_NE(output.find("NeedsSplit"), std::string::npos);
-  EXPECT_NE(output.find("too_many_pivots"), std::string::npos);
+  EXPECT_EQ(
+      batt::to_string(ns),
+      "NeedsSplit{.items_too_large=0, .keys_too_large=0, .too_many_pivots=1, .pivot_count=42, "
+      ".segment_count=0, .height=0, .too_many_segments=0, .segment_filters_too_large=0,}");
 }
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
@@ -138,9 +146,7 @@ TEST(NeedsSplitTest, StreamOutput)
 TEST(ViableTest, StreamOutput)
 {
   Viable v;
-  std::ostringstream oss;
-  oss << v;
-  EXPECT_EQ(oss.str(), "Viable");
+  EXPECT_EQ(batt::to_string(v), "Viable");
 }
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
@@ -150,9 +156,7 @@ TEST(ViableTest, StreamOutput)
 TEST(SubtreeViabilityTest, StreamOutputViable)
 {
   SubtreeViability sv = Viable{};
-  std::ostringstream oss;
-  oss << sv;
-  EXPECT_EQ(oss.str(), "Viable");
+  EXPECT_EQ(batt::to_string(sv), "Viable");
 }
 
 TEST(SubtreeViabilityTest, StreamOutputNeedsMerge)
@@ -161,9 +165,8 @@ TEST(SubtreeViabilityTest, StreamOutputNeedsMerge)
   nm.too_few_items = true;
   SubtreeViability sv = nm;
 
-  std::ostringstream oss;
-  oss << sv;
-  EXPECT_NE(oss.str().find("NeedsMerge"), std::string::npos);
+  EXPECT_EQ(batt::to_string(sv),
+            "NeedsMerge{.single_pivot=0, .too_few_pivots=0, .too_few_items=1, .zero_items=0,}");
 }
 
 TEST(SubtreeViabilityTest, StreamOutputNeedsSplit)
@@ -172,9 +175,9 @@ TEST(SubtreeViabilityTest, StreamOutputNeedsSplit)
   ns.items_too_large = true;
   SubtreeViability sv = ns;
 
-  std::ostringstream oss;
-  oss << sv;
-  EXPECT_NE(oss.str().find("NeedsSplit"), std::string::npos);
+  EXPECT_EQ(batt::to_string(sv),
+            "NeedsSplit{.items_too_large=1, .keys_too_large=0, .too_many_pivots=0, .pivot_count=0, "
+            ".segment_count=0, .height=0, .too_many_segments=0, .segment_filters_too_large=0,}");
 }
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
