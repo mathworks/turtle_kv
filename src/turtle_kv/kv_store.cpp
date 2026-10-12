@@ -1110,29 +1110,18 @@ StatusOr<std::vector<Snapshot>> KVStore::get_active_snapshots() noexcept
 //
 Status KVStore::delete_snapshot(EditOffset checkpoint_edit_offset) noexcept
 {
+  // TODO: [Gabe Bornstein 10/12/26] commit_checkpoint does this. Do we need delete_snapshot to do
+  // it too?
+  //
   BATT_REQUIRE_OK(this->wait_for_recovery());
-
-  {
-    batt::Toggle<State>::Reader state_reader{this->state_};
-
-    const auto& active = state_reader->active_checkpoints_;
-    if (active.num_active_checkpoints == 0) {
-      return {batt::StatusCode::kNotFound};
-    }
-    if (checkpoint_edit_offset.value() == active.newest().edit_offset_upper_bound) {
-      return {batt::StatusCode::kFailedPrecondition};
-    }
-  }
 
   PackedActiveCheckpoints updated_active_checkpoints;
   BATT_REQUIRE_OK(this->checkpoint_generator_->delete_checkpoint(checkpoint_edit_offset,
                                                                  updated_active_checkpoints));
-
   {
     batt::Toggle<State>::Writer state_writer{this->state_};
-
-    State& new_state = state_writer.new_value();
     const State& old_state = state_writer.old_value();
+    State& new_state = state_writer.new_value();
 
     new_state.mem_table_ = old_state.mem_table_;
     new_state.deltas_ = old_state.deltas_;
@@ -1535,9 +1524,9 @@ void KVStore::mem_table_batch_scanner_thread_main()
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename Fn>
-requires std::invocable<Fn, std::unique_ptr<DeltaBatch>> Status
-KVStore::scan_mem_table_to_build_batches(boost::intrusive_ptr<MemTable>&& mem_table,
-                                         Fn&& consume_fn)
+  requires std::invocable<Fn, std::unique_ptr<DeltaBatch>>
+Status KVStore::scan_mem_table_to_build_batches(boost::intrusive_ptr<MemTable>&& mem_table,
+                                                Fn&& consume_fn)
 {
   MemTable::BatchCompactor batch_compactor{*mem_table,
                                            /*byte_size_limit=*/this->tree_options_.flush_size()};
