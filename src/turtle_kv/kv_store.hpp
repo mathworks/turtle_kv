@@ -275,15 +275,24 @@ class KVStore : public Table
 
   /** \brief Forces a checkpoint of all edits up to this point, waits for it to be durably
    * committed, and returns a read-only Snapshot of that checkpoint.
+   *
+   * If `pin` is true, the checkpoint is also pinned: it is not evicted when new checkpoints are
+   * created (the oldest *unpinned* checkpoint is evicted instead) until it is deleted via
+   * `delete_snapshot`.  At most `MAX_ACTIVE_CHECKPOINTS - 1` checkpoints may be pinned at once;
+   * returns kResourceExhausted without creating a checkpoint if that limit has been reached.
+   *
+   * Pins are kept in memory only: they are not persisted, and are lost when the KVStore is
+   * closed/reopened.
    */
-  StatusOr<Snapshot> create_snapshot() noexcept;
+  StatusOr<Snapshot> create_snapshot(bool pin = false) noexcept;
 
   /** \brief Returns Snapshots for all currently active checkpoints, ordered oldest to newest.
    */
   StatusOr<std::vector<Snapshot>> get_active_snapshots() noexcept;
 
   /** \brief Deletes the snapshot/checkpoint identified by the given EditOffset.
-   * Returns kNotFound if no checkpoint exists at that offset.
+   * Returns kNotFound if no checkpoint exists at that offset.  If the checkpoint is pinned, its pin
+   * is released.
    *
    * Deletion is lazy: the checkpoint remains visible (e.g. via `get_snapshot`) until the next
    * checkpoint is committed, at which point the deletion takes effect both in memory and durably.
@@ -430,8 +439,9 @@ class KVStore : public Table
    * checkpoint generator (depending on whether the threaded checkpoint pipeline is enabled).
    */
   template <typename Fn>
-  requires std::invocable<Fn, std::unique_ptr<DeltaBatch>> Status
-  scan_mem_table_to_build_batches(boost::intrusive_ptr<MemTable>&& mem_table, Fn&& consume_fn);
+    requires std::invocable<Fn, std::unique_ptr<DeltaBatch>>
+  Status scan_mem_table_to_build_batches(boost::intrusive_ptr<MemTable>&& mem_table,
+                                         Fn&& consume_fn);
 
   /** \brief Entry point for the MemTable::BatchCompactor thread.
    */
@@ -465,6 +475,19 @@ class KVStore : public Table
   /** \brief Blocks the caller until recovery has either finished or failed.
    */
   Status wait_for_recovery() const noexcept;
+
+  /** \brief Pins the snapshot/checkpoint identified by the given EditOffset (see
+   * `create_snapshot`).  Pinning an already-pinned checkpoint is a no-op.
+   *
+   * Returns kNotFound if no checkpoint exists at that offset, and kResourceExhausted if the pin
+   * limit has been reached.
+   */
+  Status pin_snapshot(EditOffset checkpoint_edit_offset) noexcept;
+
+  /** \brief Unpins the snapshot/checkpoint identified by the given EditOffset, making it eligible
+   * for eviction again.  Returns kNotFound if it is not pinned.
+   */
+  Status unpin_snapshot(EditOffset checkpoint_edit_offset) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 

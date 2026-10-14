@@ -208,6 +208,8 @@ StatusOr<std::unique_ptr<CheckpointJob>> CheckpointGenerator::finalize_checkpoin
   {
     std::lock_guard<std::mutex> lock{this->checkpoint_mutex_};
 
+    this->make_room_for_new_checkpoint();
+
     this->active_checkpoints_.push_back(PackedCheckpoint{
         .edit_offset_upper_bound = this->base_checkpoint_.edit_offset_upper_bound().value(),
         .new_tree_root = llfs::PackedPageId::from(this->base_checkpoint_.root_id()),
@@ -268,7 +270,76 @@ Status CheckpointGenerator::delete_checkpoint(EditOffset edit_offset) noexcept
     return {batt::StatusCode::kNotFound};
   }
 
+  this->pinned_checkpoints_.erase(edit_offset.value());
+
   return OkStatus();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Status CheckpointGenerator::pin_checkpoint(EditOffset edit_offset) noexcept
+{
+  std::lock_guard<std::mutex> lock{this->checkpoint_mutex_};
+
+  if (!this->active_checkpoints_.find(edit_offset.value())) {
+    return {batt::StatusCode::kNotFound};
+  }
+
+  if (this->pinned_checkpoints_.contains(edit_offset.value())) {
+    return OkStatus();
+  }
+
+  if (this->pinned_checkpoints_.size() >= MAX_ACTIVE_CHECKPOINTS - 1) {
+    return {batt::StatusCode::kResourceExhausted};
+  }
+
+  this->pinned_checkpoints_.insert(edit_offset.value());
+
+  return OkStatus();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Status CheckpointGenerator::unpin_checkpoint(EditOffset edit_offset) noexcept
+{
+  std::lock_guard<std::mutex> lock{this->checkpoint_mutex_};
+
+  if (this->pinned_checkpoints_.erase(edit_offset.value()) == 0) {
+    return {batt::StatusCode::kNotFound};
+  }
+
+  return OkStatus();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+usize CheckpointGenerator::num_pinned_checkpoints() noexcept
+{
+  std::lock_guard<std::mutex> lock{this->checkpoint_mutex_};
+
+  return this->pinned_checkpoints_.size();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void CheckpointGenerator::make_room_for_new_checkpoint() noexcept
+{
+  if (this->active_checkpoints_.num_active_checkpoints < MAX_ACTIVE_CHECKPOINTS) {
+    return;
+  }
+
+  // Evict the oldest *unpinned* checkpoint ourselves, so that push_back doesn't evict the oldest
+  // one (which may be pinned).
+  //
+  for (u8 i = 0; i < MAX_ACTIVE_CHECKPOINTS; ++i) {
+    const i64 offset = this->active_checkpoints_.checkpoints[i].edit_offset_upper_bound;
+    if (!this->pinned_checkpoints_.contains(offset)) {
+      BATT_CHECK(this->active_checkpoints_.erase(offset));
+      return;
+    }
+  }
+
+  BATT_PANIC() << "There must always be at least one unpinned checkpoint";
 }
 
 }  // namespace turtle_kv
