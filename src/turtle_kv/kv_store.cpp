@@ -1057,8 +1057,18 @@ StatusOr<Snapshot> KVStore::get_snapshot(EditOffset checkpoint_edit_offset) noex
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<Snapshot> KVStore::create_snapshot() noexcept
+StatusOr<Snapshot> KVStore::create_snapshot(bool pin) noexcept
 {
+  // Fail fast (before forcing a new checkpoint) if we already know the pin can't succeed.
+  // pin_snapshot below does the authoritative check.
+  //
+  if (pin) {
+    BATT_REQUIRE_OK(this->wait_for_recovery());
+    if (this->checkpoint_generator_->num_pinned_checkpoints() >= MAX_ACTIVE_CHECKPOINTS - 1) {
+      return {batt::StatusCode::kResourceExhausted};
+    }
+  }
+
   BATT_ASSIGN_OK_RESULT(EditOffset checkpoint_edit_offset, this->force_checkpoint());
 
   // force_checkpoint only finalizes the active MemTable; the checkpoint itself is committed
@@ -1066,7 +1076,39 @@ StatusOr<Snapshot> KVStore::create_snapshot() noexcept
   //
   BATT_REQUIRE_OK(this->wait_for_checkpoint(checkpoint_edit_offset));
 
-  return this->get_snapshot(checkpoint_edit_offset);
+  if (!pin) {
+    return this->get_snapshot(checkpoint_edit_offset);
+  }
+
+  // Pin before get_snapshot: once the pin succeeds, every subsequently finalized checkpoint retains
+  // this one, so it can't be evicted out from under us.  If enough checkpoints were finalized since
+  // ours to evict it already, this returns kNotFound.
+  //
+  BATT_REQUIRE_OK(this->pin_snapshot(checkpoint_edit_offset));
+
+  StatusOr<Snapshot> snapshot = this->get_snapshot(checkpoint_edit_offset);
+  if (!snapshot.ok()) {
+    this->unpin_snapshot(checkpoint_edit_offset).IgnoreError();
+  }
+  return snapshot;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Status KVStore::pin_snapshot(EditOffset checkpoint_edit_offset) noexcept
+{
+  BATT_REQUIRE_OK(this->wait_for_recovery());
+
+  return this->checkpoint_generator_->pin_checkpoint(checkpoint_edit_offset);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Status KVStore::unpin_snapshot(EditOffset checkpoint_edit_offset) noexcept
+{
+  BATT_REQUIRE_OK(this->wait_for_recovery());
+
+  return this->checkpoint_generator_->unpin_checkpoint(checkpoint_edit_offset);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

@@ -7,6 +7,8 @@
 #include <batteries/env.hpp>
 #include <batteries/status.hpp>
 
+#include <algorithm>
+
 namespace turtle_kv {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -208,6 +210,22 @@ StatusOr<std::unique_ptr<CheckpointJob>> CheckpointGenerator::finalize_checkpoin
   {
     std::lock_guard<std::mutex> lock{this->checkpoint_mutex_};
 
+    // If the active set is full, evict the oldest *unpinned* checkpoint ourselves so that
+    // push_back doesn't evict the oldest one (which may be pinned).
+    //
+    if (this->active_checkpoints_.num_active_checkpoints == MAX_ACTIVE_CHECKPOINTS) {
+      bool evicted = false;
+      for (u8 i = 0; i < MAX_ACTIVE_CHECKPOINTS; ++i) {
+        const i64 offset = this->active_checkpoints_.checkpoints[i].edit_offset_upper_bound;
+        if (!this->is_pinned(offset)) {
+          BATT_CHECK(this->active_checkpoints_.erase(offset));
+          evicted = true;
+          break;
+        }
+      }
+      BATT_CHECK(evicted) << "There must always be at least one unpinned checkpoint";
+    }
+
     this->active_checkpoints_.push_back(PackedCheckpoint{
         .edit_offset_upper_bound = this->base_checkpoint_.edit_offset_upper_bound().value(),
         .new_tree_root = llfs::PackedPageId::from(this->base_checkpoint_.root_id()),
@@ -268,7 +286,76 @@ Status CheckpointGenerator::delete_checkpoint(EditOffset edit_offset) noexcept
     return {batt::StatusCode::kNotFound};
   }
 
+  this->erase_pin(edit_offset.value());
+
   return OkStatus();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Status CheckpointGenerator::pin_checkpoint(EditOffset edit_offset) noexcept
+{
+  std::lock_guard<std::mutex> lock{this->checkpoint_mutex_};
+
+  if (!this->active_checkpoints_.find(edit_offset.value())) {
+    return {batt::StatusCode::kNotFound};
+  }
+
+  if (this->is_pinned(edit_offset.value())) {
+    return OkStatus();
+  }
+
+  if (this->pinned_checkpoints_.size() >= MAX_ACTIVE_CHECKPOINTS - 1) {
+    return {batt::StatusCode::kResourceExhausted};
+  }
+
+  this->pinned_checkpoints_.push_back(edit_offset.value());
+
+  return OkStatus();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Status CheckpointGenerator::unpin_checkpoint(EditOffset edit_offset) noexcept
+{
+  std::lock_guard<std::mutex> lock{this->checkpoint_mutex_};
+
+  if (!this->erase_pin(edit_offset.value())) {
+    return {batt::StatusCode::kNotFound};
+  }
+
+  return OkStatus();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+usize CheckpointGenerator::num_pinned_checkpoints() noexcept
+{
+  std::lock_guard<std::mutex> lock{this->checkpoint_mutex_};
+
+  return this->pinned_checkpoints_.size();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+bool CheckpointGenerator::is_pinned(i64 edit_offset) const noexcept
+{
+  return std::find(this->pinned_checkpoints_.begin(),
+                   this->pinned_checkpoints_.end(),
+                   edit_offset) != this->pinned_checkpoints_.end();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+bool CheckpointGenerator::erase_pin(i64 edit_offset) noexcept
+{
+  auto iter =
+      std::find(this->pinned_checkpoints_.begin(), this->pinned_checkpoints_.end(), edit_offset);
+  if (iter == this->pinned_checkpoints_.end()) {
+    return false;
+  }
+  this->pinned_checkpoints_.erase(iter);
+  return true;
 }
 
 }  // namespace turtle_kv

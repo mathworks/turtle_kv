@@ -275,15 +275,38 @@ class KVStore : public Table
 
   /** \brief Forces a checkpoint of all edits up to this point, waits for it to be durably
    * committed, and returns a read-only Snapshot of that checkpoint.
+   *
+   * If `pin` is true, the checkpoint is also pinned (see `pin_snapshot`).  Returns
+   * kResourceExhausted without creating a checkpoint if `MAX_ACTIVE_CHECKPOINTS - 1` checkpoints are
+   * already pinned.
    */
-  StatusOr<Snapshot> create_snapshot() noexcept;
+  StatusOr<Snapshot> create_snapshot(bool pin = false) noexcept;
+
+  /** \brief Pins the snapshot/checkpoint identified by the given EditOffset so that it is not
+   * evicted when new checkpoints are created; the oldest *unpinned* checkpoint is evicted instead.
+   * At most `MAX_ACTIVE_CHECKPOINTS - 1` checkpoints may be pinned at once.  Pinning an
+   * already-pinned checkpoint is a no-op.
+   *
+   * Pins are kept in memory only: they are not persisted, and are lost when the KVStore is
+   * closed/reopened.
+   *
+   * Returns kNotFound if no checkpoint exists at that offset, and kResourceExhausted if the pin
+   * limit has been reached.
+   */
+  Status pin_snapshot(EditOffset checkpoint_edit_offset) noexcept;
+
+  /** \brief Unpins the snapshot/checkpoint identified by the given EditOffset, making it eligible
+   * for eviction again.  Returns kNotFound if it is not pinned.
+   */
+  Status unpin_snapshot(EditOffset checkpoint_edit_offset) noexcept;
 
   /** \brief Returns Snapshots for all currently active checkpoints, ordered oldest to newest.
    */
   StatusOr<std::vector<Snapshot>> get_active_snapshots() noexcept;
 
   /** \brief Deletes the snapshot/checkpoint identified by the given EditOffset.
-   * Returns kNotFound if no checkpoint exists at that offset.
+   * Returns kNotFound if no checkpoint exists at that offset.  If the checkpoint is pinned, its pin
+   * is released.
    *
    * Deletion is lazy: the checkpoint remains visible (e.g. via `get_snapshot`) until the next
    * checkpoint is committed, at which point the deletion takes effect both in memory and durably.

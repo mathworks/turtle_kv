@@ -104,9 +104,27 @@ class CheckpointGenerator
 
   /** \brief Removes the checkpoint identified by `edit_offset` from the active set.  The change is
    * included in the PackedActiveCheckpoints of the next finalized checkpoint, and becomes durable
-   * when that checkpoint is committed.
+   * when that checkpoint is committed.  If the checkpoint is pinned, it is also unpinned.
    */
   Status delete_checkpoint(EditOffset edit_offset) noexcept;
+
+  /** \brief Pins the active checkpoint identified by `edit_offset` so that it is never evicted to
+   * make room for a new checkpoint.  Pinning an already-pinned checkpoint is a no-op.  Pins are
+   * kept in memory only; they are not persisted and are lost on restart.
+   *
+   * Returns kNotFound if the checkpoint is not in the active set, and kResourceExhausted if
+   * `MAX_ACTIVE_CHECKPOINTS - 1` checkpoints are already pinned.
+   */
+  Status pin_checkpoint(EditOffset edit_offset) noexcept;
+
+  /** \brief Unpins the checkpoint identified by `edit_offset`, making it eligible for eviction
+   * again.  Returns kNotFound if the checkpoint is not pinned.
+   */
+  Status unpin_checkpoint(EditOffset edit_offset) noexcept;
+
+  /** \brief Returns the number of currently pinned checkpoints.
+   */
+  usize num_pinned_checkpoints() noexcept;
 
   llfs::PageCacheJob& page_cache_job() const
   {
@@ -138,6 +156,15 @@ class CheckpointGenerator
    * reserve call.
    */
   StatusOr<batt::Grant> reserve_slot_grant_for_checkpoints(usize slot_grant_size);
+
+  /** \brief Returns true if `edit_offset` is pinned.  Caller must hold `checkpoint_mutex_`.
+   */
+  bool is_pinned(i64 edit_offset) const noexcept;
+
+  /** \brief Removes the pin for `edit_offset`, if any.  Returns true if a pin was removed.  Caller
+   * must hold `checkpoint_mutex_`.
+   */
+  bool erase_pin(i64 edit_offset) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -202,8 +229,9 @@ class CheckpointGenerator
   //
   llfs::Volume& checkpoint_volume_;
 
-  // Guards active_checkpoints_, ensuring mutual exclusion between finalize_checkpoint (update
-  // thread) and delete_checkpoint (caller thread).  Should not be held across blocking calls.
+  // Guards active_checkpoints_ and pinned_checkpoints_, ensuring mutual exclusion between
+  // finalize_checkpoint (update thread) and delete/pin/unpin_checkpoint (caller threads).  Should
+  // not be held across blocking calls.
   //
   std::mutex checkpoint_mutex_;
 
@@ -211,6 +239,11 @@ class CheckpointGenerator
   // edit_offset_upper_bound.
   //
   PackedActiveCheckpoints active_checkpoints_{};
+
+  // The edit_offset_upper_bound of each pinned checkpoint in active_checkpoints_ (unordered).  At
+  // most MAX_ACTIVE_CHECKPOINTS - 1 entries, so there is always an unpinned checkpoint to evict.
+  //
+  batt::SmallVec<i64, MAX_ACTIVE_CHECKPOINTS> pinned_checkpoints_;
 
   // Used to cancel pending checkpoint updates on halt().
   //
