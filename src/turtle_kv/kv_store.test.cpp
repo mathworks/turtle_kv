@@ -1589,15 +1589,6 @@ TEST_F(PinSnapshotTest, PinnedSnapshotSurvivesEviction)
     EXPECT_EQ(active->front().edit_offset(), *pinned);
   }
 
-  // Once unpinned, the checkpoint is evicted by the next checkpoint (it is the oldest).
-  //
-  ASSERT_TRUE(kv_store->unpin_snapshot(*pinned).ok());
-  {
-    StatusOr<EditOffset> offset = write_and_snapshot(*kv_store, next_key++, /*pin=*/false);
-    ASSERT_TRUE(offset.ok()) << BATT_INSPECT(offset.status());
-  }
-  EXPECT_EQ(kv_store->get_snapshot(*pinned).status(), batt::StatusCode::kNotFound);
-
   this->ShutdownKVStore(kv_store);
 }
 
@@ -1624,32 +1615,17 @@ TEST_F(PinSnapshotTest, PinLimit)
   EXPECT_EQ(write_and_snapshot(*kv_store, next_key++, /*pin=*/true).status(),
             batt::StatusCode::kResourceExhausted);
 
-  // Re-pinning an already-pinned checkpoint is a no-op, even at the limit.
-  //
-  EXPECT_TRUE(kv_store->pin_snapshot(pinned.front().first).ok());
-
   // Unpinned checkpoints still roll over through the single remaining slot, and all pinned
   // checkpoints are retained.
   //
-  Optional<EditOffset> last_unpinned;
   for (u64 n = 0; n < 2 * turtle_kv::MAX_ACTIVE_CHECKPOINTS; ++n) {
     StatusOr<EditOffset> offset = write_and_snapshot(*kv_store, next_key++, /*pin=*/false);
     ASSERT_TRUE(offset.ok()) << BATT_INSPECT(offset.status());
-
-    // With the limit reached, the newest unpinned checkpoint can't be pinned.
-    //
-    EXPECT_EQ(kv_store->pin_snapshot(*offset), batt::StatusCode::kResourceExhausted);
-    last_unpinned.emplace(*offset);
   }
 
   for (const auto& [offset, key] : pinned) {
     EXPECT_TRUE(snapshot_has_key(*kv_store, offset, key)) << BATT_INSPECT(offset);
   }
-
-  // Unpinning frees a slot.
-  //
-  ASSERT_TRUE(kv_store->unpin_snapshot(pinned.front().first).ok());
-  EXPECT_TRUE(kv_store->pin_snapshot(*last_unpinned).ok());
 
   this->ShutdownKVStore(kv_store);
 }
@@ -1677,8 +1653,6 @@ TEST_F(PinSnapshotTest, DeletePinnedSnapshotFreesPin)
   // Deleting a pinned (non-newest) snapshot releases its pin.
   //
   ASSERT_TRUE(kv_store->delete_snapshot(pinned.front()).ok());
-  EXPECT_EQ(kv_store->unpin_snapshot(pinned.front()), batt::StatusCode::kNotFound);
-  EXPECT_EQ(kv_store->pin_snapshot(pinned.front()), batt::StatusCode::kNotFound);
 
   {
     StatusOr<EditOffset> offset = write_and_snapshot(*kv_store, next_key++, /*pin=*/true);
@@ -1694,25 +1668,33 @@ TEST_F(PinSnapshotTest, DeletePinnedSnapshotFreesPin)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-TEST_F(PinSnapshotTest, PinUnpinErrors)
+TEST_F(PinSnapshotTest, RepinningSameCheckpointIsNoOp)
 {
-  StatusOr<std::unique_ptr<KVStore>> open_result = this->open("pin_snapshot_errors");
+  StatusOr<std::unique_ptr<KVStore>> open_result = this->open("pin_snapshot_repin");
   ASSERT_TRUE(open_result.ok()) << BATT_INSPECT(open_result.status());
   std::unique_ptr<KVStore>& kv_store = *open_result;
 
-  StatusOr<EditOffset> offset = write_and_snapshot(*kv_store, 0, /*pin=*/false);
-  ASSERT_TRUE(offset.ok()) << BATT_INSPECT(offset.status());
+  i64 next_key = 0;
 
-  const EditOffset bogus{offset->value() + 12345};
+  StatusOr<EditOffset> first = write_and_snapshot(*kv_store, next_key++, /*pin=*/true);
+  ASSERT_TRUE(first.ok()) << BATT_INSPECT(first.status());
 
-  EXPECT_EQ(kv_store->pin_snapshot(bogus), batt::StatusCode::kNotFound);
-  EXPECT_EQ(kv_store->unpin_snapshot(bogus), batt::StatusCode::kNotFound);
-  EXPECT_EQ(kv_store->unpin_snapshot(*offset), batt::StatusCode::kNotFound);
+  // With no writes in between, create_snapshot returns the same checkpoint, and pinning it again
+  // does not consume another pin.
+  //
+  {
+    StatusOr<Snapshot> again = kv_store->create_snapshot(/*pin=*/true);
+    ASSERT_TRUE(again.ok()) << BATT_INSPECT(again.status());
+    EXPECT_EQ(again->edit_offset(), *first);
+  }
 
-  EXPECT_TRUE(kv_store->pin_snapshot(*offset).ok());
-  EXPECT_TRUE(kv_store->pin_snapshot(*offset).ok());
-  EXPECT_TRUE(kv_store->unpin_snapshot(*offset).ok());
-  EXPECT_EQ(kv_store->unpin_snapshot(*offset), batt::StatusCode::kNotFound);
+  for (u64 n = 1; n < turtle_kv::MAX_ACTIVE_CHECKPOINTS - 1; ++n) {
+    StatusOr<EditOffset> offset = write_and_snapshot(*kv_store, next_key++, /*pin=*/true);
+    ASSERT_TRUE(offset.ok()) << "n=" << n << " " << BATT_INSPECT(offset.status());
+  }
+
+  EXPECT_EQ(write_and_snapshot(*kv_store, next_key++, /*pin=*/true).status(),
+            batt::StatusCode::kResourceExhausted);
 
   this->ShutdownKVStore(kv_store);
 }

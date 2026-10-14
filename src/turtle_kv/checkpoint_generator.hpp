@@ -24,6 +24,7 @@
 #include <batteries/small_vec.hpp>
 
 #include <mutex>
+#include <unordered_set>
 
 namespace turtle_kv {
 
@@ -157,14 +158,10 @@ class CheckpointGenerator
    */
   StatusOr<batt::Grant> reserve_slot_grant_for_checkpoints(usize slot_grant_size);
 
-  /** \brief Returns true if `edit_offset` is pinned.  Caller must hold `checkpoint_mutex_`.
+  /** \brief If the active set is full, evicts the oldest unpinned checkpoint so that a new
+   * checkpoint can be pushed without evicting a pinned one.  Caller must hold `checkpoint_mutex_`.
    */
-  bool is_pinned(i64 edit_offset) const noexcept;
-
-  /** \brief Removes the pin for `edit_offset`, if any.  Returns true if a pin was removed.  Caller
-   * must hold `checkpoint_mutex_`.
-   */
-  bool erase_pin(i64 edit_offset) noexcept;
+  void make_room_for_new_checkpoint() noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -240,10 +237,10 @@ class CheckpointGenerator
   //
   PackedActiveCheckpoints active_checkpoints_{};
 
-  // The edit_offset_upper_bound of each pinned checkpoint in active_checkpoints_ (unordered).  At
-  // most MAX_ACTIVE_CHECKPOINTS - 1 entries, so there is always an unpinned checkpoint to evict.
+  // The edit_offset_upper_bound of each pinned checkpoint in active_checkpoints_.  At most
+  // MAX_ACTIVE_CHECKPOINTS - 1 entries, so there is always an unpinned checkpoint to evict.
   //
-  batt::SmallVec<i64, MAX_ACTIVE_CHECKPOINTS> pinned_checkpoints_;
+  std::unordered_set<i64> pinned_checkpoints_;
 
   // Used to cancel pending checkpoint updates on halt().
   //
