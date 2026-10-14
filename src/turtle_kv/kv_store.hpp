@@ -284,6 +284,9 @@ class KVStore : public Table
 
   /** \brief Deletes the snapshot/checkpoint identified by the given EditOffset.
    * Returns kNotFound if no checkpoint exists at that offset.
+   *
+   * Deletion is lazy: the checkpoint remains visible (e.g. via `get_snapshot`) until the next
+   * checkpoint is committed, at which point the deletion takes effect both in memory and durably.
    */
   Status delete_snapshot(EditOffset checkpoint_edit_offset) noexcept;
 

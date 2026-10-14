@@ -102,12 +102,11 @@ class CheckpointGenerator
       std::shared_ptr<batt::Grant::Issuer>&& token_issuer,
       llfs::PageCacheOvercommit& overcommit) noexcept;
 
-  /** \brief Removes the checkpoint identified by `edit_offset` from the active set, durably writes
-   * the updated PackedActiveCheckpoints to the checkpoint volume, and returns the new
-   * PackedActiveCheckpoints via `active_checkpoints_out`.
+  /** \brief Removes the checkpoint identified by `edit_offset` from the active set.  The change is
+   * included in the PackedActiveCheckpoints of the next finalized checkpoint, and becomes durable
+   * when that checkpoint is committed.
    */
-  Status delete_checkpoint(EditOffset edit_offset,
-                           PackedActiveCheckpoints& active_checkpoints_out) noexcept;
+  Status delete_checkpoint(EditOffset edit_offset) noexcept;
 
   llfs::PageCacheJob& page_cache_job() const
   {
@@ -203,8 +202,8 @@ class CheckpointGenerator
   //
   llfs::Volume& checkpoint_volume_;
 
-  // Guards active_checkpoints_ and checkpoint volume writes, ensuring mutual exclusion between
-  // finalize_checkpoint (update thread) and delete_checkpoint (caller thread).
+  // Guards active_checkpoints_, ensuring mutual exclusion between finalize_checkpoint (update
+  // thread) and delete_checkpoint (caller thread).  Should not be held across blocking calls.
   //
   std::mutex checkpoint_mutex_;
 

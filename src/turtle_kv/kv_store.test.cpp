@@ -1433,7 +1433,7 @@ TEST_P(DeleteSnapshotTest, DeleteSnapshot)
     EXPECT_FALSE(status.ok()) << "Deleting the newest checkpoint should fail";
   }
 
-  // Delete all non-newest, non-expired checkpoints and verify they are gone.
+  // Delete all non-newest, non-expired checkpoints.
   //
   const u64 newest_cp = total_checkpoints - 1;
   for (u64 cp = num_expired; cp < newest_cp; ++cp) {
@@ -1441,13 +1441,39 @@ TEST_P(DeleteSnapshotTest, DeleteSnapshot)
     ASSERT_TRUE(delete_status.ok())
         << "Failed to delete checkpoint " << cp << ": " << delete_status;
 
+    // Deletion is lazy, so the checkpoint is still queryable until the next checkpoint commits.
+    //
     StatusOr<Snapshot> snapshot = kv_store->get_snapshot(checkpoint_offsets[cp]);
-    EXPECT_FALSE(snapshot.ok()) << "Checkpoint " << cp << " should not be queryable after deletion";
+    EXPECT_TRUE(snapshot.ok()) << "Checkpoint " << cp
+                               << " should be queryable until the next checkpoint commits";
 
     // Re-deleting the same checkpoint should return not-found.
     //
     Status re_delete_status = kv_store->delete_snapshot(checkpoint_offsets[cp]);
-    EXPECT_FALSE(re_delete_status.ok()) << "Re-deleting checkpoint " << cp << " should fail";
+    EXPECT_EQ(re_delete_status, batt::StatusCode::kNotFound)
+        << "Re-deleting checkpoint " << cp << " should fail";
+  }
+
+  // Commit another checkpoint so the deletions take effect.
+  //
+  {
+    Status put_status = kv_store->put(KeyView{make_key(static_cast<i64>(this->num_keys))},
+                                      ValueView::from_str(make_value(0)));
+    ASSERT_TRUE(put_status.ok()) << BATT_INSPECT(put_status);
+
+    StatusOr<EditOffset> checkpoint_offset = kv_store->force_checkpoint();
+    ASSERT_TRUE(checkpoint_offset.ok()) << BATT_INSPECT(checkpoint_offset.status());
+
+    Status wait_status = kv_store->wait_for_checkpoint(*checkpoint_offset);
+    ASSERT_TRUE(wait_status.ok()) << BATT_INSPECT(wait_status);
+  }
+
+  // The deleted checkpoints should now be gone.
+  //
+  for (u64 cp = num_expired; cp < newest_cp; ++cp) {
+    StatusOr<Snapshot> snapshot = kv_store->get_snapshot(checkpoint_offsets[cp]);
+    EXPECT_EQ(snapshot.status(), batt::StatusCode::kNotFound)
+        << "Checkpoint " << cp << " should not be queryable after deletion";
   }
 
   // The newest checkpoint must still be queryable.

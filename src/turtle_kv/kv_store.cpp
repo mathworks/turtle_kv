@@ -1115,21 +1115,12 @@ Status KVStore::delete_snapshot(EditOffset checkpoint_edit_offset) noexcept
   //
   BATT_REQUIRE_OK(this->wait_for_recovery());
 
-  PackedActiveCheckpoints updated_active_checkpoints;
-  BATT_REQUIRE_OK(this->checkpoint_generator_->delete_checkpoint(checkpoint_edit_offset,
-                                                                 updated_active_checkpoints));
-  {
-    batt::Toggle<State>::Writer state_writer{this->state_};
-    const State& old_state = state_writer.old_value();
-    State& new_state = state_writer.new_value();
-
-    new_state.mem_table_ = old_state.mem_table_;
-    new_state.deltas_ = old_state.deltas_;
-    new_state.base_checkpoint_ = old_state.base_checkpoint_;
-    new_state.active_checkpoints_ = updated_active_checkpoints;
-  }
-
-  return OkStatus();
+  // Deletion is lazy: we only remove the checkpoint from the generator's active set.  The next
+  // finalized CheckpointJob picks up the deletion, and State is updated (from that job) when it is
+  // committed.  Updating State here would race with in-flight jobs finalized before the deletion,
+  // whose commit would bring the deleted checkpoint back.
+  //
+  return this->checkpoint_generator_->delete_checkpoint(checkpoint_edit_offset);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
