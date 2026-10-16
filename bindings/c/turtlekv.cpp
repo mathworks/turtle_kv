@@ -27,6 +27,9 @@
 
 using namespace batt::int_types;
 
+using batt::None;
+using batt::Optional;
+
 using turtle_kv::KVStoreConfig;
 using turtle_kv::KVStoreRuntimeOptions;
 
@@ -724,6 +727,44 @@ void turtlekv_kv_store_set_checkpoint_distance(turtlekv_KVStore* kv_store,
   to_kv_store(kv_store)->set_checkpoint_distance(checkpoint_distance);
 }
 
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+extern "C" {
+struct turtlekv_KVStoreContext_ {
+  turtle_kv::KVStore* kv_store;
+  turtle_kv::KVStore::ThreadContext thread_context;
+  Optional<turtle_kv::ValueView> last_value;
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  explicit turtlekv_KVStoreContext_(turtlekv_KVStore* ptr) noexcept
+      : kv_store{to_kv_store(ptr)}
+      , thread_context{this->kv_store}
+      , last_value{None}
+  {
+  }
+
+  turtlekv_KVStoreContext_(const turtlekv_KVStoreContext_&) = delete;
+  turtlekv_KVStoreContext_& operator=(const turtlekv_KVStoreContext_&) = delete;
+};
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+turtlekv_KVStoreContext* turtlekv_kv_store_create_context(turtlekv_KVStore* kv_store)
+{
+  return new turtlekv_KVStoreContext{kv_store};
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+void turtlekv_kv_store_destroy_context(turtlekv_KVStoreContext* context)
+{
+  BATT_CHECK_NOT_NULLPTR(context);
+
+  delete context;
+}
+
 namespace {
 
 /*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -800,16 +841,17 @@ turtlekv_StatusOrValueView from_value(const turtle_kv::ValueView& from)
 
 /*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
  */
-turtlekv_Status turtlekv_kv_store_put(turtlekv_KVStore* kv_store,
+turtlekv_Status turtlekv_kv_store_put(turtlekv_KVStoreContext* context,
                                       turtlekv_KeyView key,
                                       turtlekv_ValueView value)
 {
-  return turtlekv_status_from(to_kv_store(kv_store)->put(to_key(key), to_put_value(value)));
+  return turtlekv_status_from(
+      context->kv_store->put(context->thread_context, to_key(key), to_put_value(value)));
 }
 
 /*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
  */
-turtlekv_StatusOrInt64 turtlekv_kv_store_put_opt(turtlekv_KVStore* kv_store,
+turtlekv_StatusOrInt64 turtlekv_kv_store_put_opt(turtlekv_KVStoreContext* context,
                                                  turtlekv_KeyView key,
                                                  turtlekv_ValueView value,
                                                  const turtlekv_WriteOptions* opt)
@@ -821,8 +863,10 @@ turtlekv_StatusOrInt64 turtlekv_kv_store_put_opt(turtlekv_KVStore* kv_store,
     return result;
   }
 
-  batt::StatusOr<turtle_kv::EditOffset> put_result =
-      to_kv_store(kv_store)->put(to_key(key), to_put_value(value), to_write_options(*opt));
+  batt::StatusOr<turtle_kv::EditOffset> put_result = context->kv_store->put(context->thread_context,
+                                                                            to_key(key),
+                                                                            to_put_value(value),
+                                                                            to_write_options(*opt));
 
   result.status = turtlekv_status_from(put_result.status());
 
@@ -837,14 +881,14 @@ turtlekv_StatusOrInt64 turtlekv_kv_store_put_opt(turtlekv_KVStore* kv_store,
 
 /*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
  */
-turtlekv_Status turtlekv_kv_store_remove(turtlekv_KVStore* kv_store, turtlekv_KeyView key)
+turtlekv_Status turtlekv_kv_store_remove(turtlekv_KVStoreContext* context, turtlekv_KeyView key)
 {
-  return turtlekv_status_from(to_kv_store(kv_store)->remove(to_key(key)));
+  return turtlekv_status_from(context->kv_store->remove(context->thread_context, to_key(key)));
 }
 
 /*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
  */
-turtlekv_StatusOrInt64 turtlekv_kv_store_remove_opt(turtlekv_KVStore* kv_store,
+turtlekv_StatusOrInt64 turtlekv_kv_store_remove_opt(turtlekv_KVStoreContext* context,
                                                     turtlekv_KeyView key,
                                                     const turtlekv_WriteOptions* opt)
 {
@@ -854,19 +898,23 @@ turtlekv_StatusOrInt64 turtlekv_kv_store_remove_opt(turtlekv_KVStore* kv_store,
       .size = 0,
   };
 
-  return turtlekv_kv_store_put_opt(kv_store, key, tombstone, opt);
+  return turtlekv_kv_store_put_opt(context, key, tombstone, opt);
 }
 
 /*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
  */
-turtlekv_StatusOrValueView turtlekv_kv_store_get(turtlekv_KVStore* kv_store, turtlekv_KeyView key)
+turtlekv_StatusOrValueView turtlekv_kv_store_get(turtlekv_KVStoreContext* context,
+                                                 turtlekv_KeyView key)
 {
   turtlekv_StatusOrValueView result;
 
-  batt::StatusOr<turtle_kv::ValueView> value = to_kv_store(kv_store)->get(to_key(key));
+  batt::StatusOr<turtle_kv::ValueView> value =
+      context->kv_store->get(context->thread_context, to_key(key));
+
   result.status = turtlekv_status_from(value.status());
   if (value.ok()) {
-    result = from_value(*value);
+    context->last_value.emplace(*value);
+    result = from_value(*context->last_value);
   }
 
   return result;
@@ -874,11 +922,11 @@ turtlekv_StatusOrValueView turtlekv_kv_store_get(turtlekv_KVStore* kv_store, tur
 
 /*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
  */
-turtlekv_Status turtlekv_kv_store_put_simple(turtlekv_KVStore* kv_store,
+turtlekv_Status turtlekv_kv_store_put_simple(turtlekv_KVStoreContext* context,
                                              const char* key,
                                              const char* value)
 {
-  return turtlekv_kv_store_put(kv_store,
+  return turtlekv_kv_store_put(context,
                                turtlekv_KeyView{
                                    .data = key,
                                    .size = strlen(key),
@@ -892,9 +940,9 @@ turtlekv_Status turtlekv_kv_store_put_simple(turtlekv_KVStore* kv_store,
 
 /*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
  */
-turtlekv_Status turtlekv_kv_store_remove_simple(turtlekv_KVStore* kv_store, const char* key)
+turtlekv_Status turtlekv_kv_store_remove_simple(turtlekv_KVStoreContext* context, const char* key)
 {
-  return turtlekv_kv_store_remove(kv_store,
+  return turtlekv_kv_store_remove(context,
                                   turtlekv_KeyView{
                                       .data = key,
                                       .size = strlen(key),
@@ -903,9 +951,9 @@ turtlekv_Status turtlekv_kv_store_remove_simple(turtlekv_KVStore* kv_store, cons
 
 /*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
  */
-const char* turtlekv_kv_store_get_simple(turtlekv_KVStore* kv_store, const char* key)
+const char* turtlekv_kv_store_get_simple(turtlekv_KVStoreContext* context, const char* key)
 {
-  turtlekv_StatusOrValueView result = turtlekv_kv_store_get(kv_store,
+  turtlekv_StatusOrValueView result = turtlekv_kv_store_get(context,
                                                             turtlekv_KeyView{
                                                                 .data = key,
                                                                 .size = strlen(key),

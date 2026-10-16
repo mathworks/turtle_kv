@@ -316,6 +316,15 @@ TEST(TurtlekvTest, CreateAndOpenKVStore)
   auto on_scope_exit2 = batt::finally([&] {
     turtlekv_kv_store_close(kv_store);
   });
+
+  turtlekv_KVStoreContext* kv_context = turtlekv_kv_store_create_context(kv_store);
+  auto on_scope_exit3 = batt::finally([&] {
+    turtlekv_kv_store_destroy_context(kv_context);
+  });
+
+  EXPECT_EQ(turtlekv_kv_store_get_simple(kv_context, "hello"), nullptr);
+  EXPECT_TRUE(turtlekv_status_is_ok(turtlekv_kv_store_put_simple(kv_context, "hello", "world")));
+  EXPECT_THAT(turtlekv_kv_store_get_simple(kv_context, "hello"), ::testing::StrEq("world"));
 }
 
 }  // namespace

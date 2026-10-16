@@ -420,7 +420,7 @@ turtlekv_StatusOrStrView turtlekv_kv_store_options_get_str_view(
  =#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------*/
 
 typedef struct turtlekv_KVStore_ turtlekv_KVStore;
-typedef struct turtlekv_KVStoreThreadContext_ turtlekv_KVStoreThreadContext;
+typedef struct turtlekv_KVStoreContext_ turtlekv_KVStoreContext;
 typedef struct turtlekv_KVStoreScanner_ turtlekv_KVStoreScanner;
 
 TURTLEKV_DEFINE_STATUS_OR_TYPE(KVStore, turtlekv_KVStore*, kv_store);
@@ -441,6 +441,12 @@ size_t turtlekv_kv_store_get_checkpoint_distance(const turtlekv_KVStore* kv_stor
 void turtlekv_kv_store_set_checkpoint_distance(turtlekv_KVStore* kv_store,
                                                size_t checkpoint_distance);
 
+typedef struct turtlekv_KVStoreContext_ turtlekv_KVStoreContext;
+
+turtlekv_KVStoreContext* turtlekv_kv_store_create_context(turtlekv_KVStore* kv_store);
+
+void turtlekv_kv_store_destroy_context(turtlekv_KVStoreContext* context);
+
 /*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
  */
 typedef struct turtlekv_WriteOptions_ {
@@ -448,22 +454,23 @@ typedef struct turtlekv_WriteOptions_ {
   bool urgent;
 } turtlekv_WriteOptions;
 
-turtlekv_Status turtlekv_kv_store_put(turtlekv_KVStore* kv_store,
+turtlekv_Status turtlekv_kv_store_put(turtlekv_KVStoreContext* context,
                                       turtlekv_KeyView key,
                                       turtlekv_ValueView value);
 
-turtlekv_StatusOrInt64 turtlekv_kv_store_put_opt(turtlekv_KVStore* kv_store,
+turtlekv_StatusOrInt64 turtlekv_kv_store_put_opt(turtlekv_KVStoreContext* context,
                                                  turtlekv_KeyView key,
                                                  turtlekv_ValueView value,
                                                  const turtlekv_WriteOptions* opt);
 
-turtlekv_Status turtlekv_kv_store_remove(turtlekv_KVStore* kv_store, turtlekv_KeyView key);
+turtlekv_Status turtlekv_kv_store_remove(turtlekv_KVStoreContext* context, turtlekv_KeyView key);
 
-turtlekv_StatusOrInt64 turtlekv_kv_store_remove_opt(turtlekv_KVStore* kv_store,
+turtlekv_StatusOrInt64 turtlekv_kv_store_remove_opt(turtlekv_KVStoreContext* context,
                                                     turtlekv_KeyView key,
                                                     const turtlekv_WriteOptions* opt);
 
-turtlekv_StatusOrValueView turtlekv_kv_store_get(turtlekv_KVStore* kv_store, turtlekv_KeyView key);
+turtlekv_StatusOrValueView turtlekv_kv_store_get(turtlekv_KVStoreContext* context,
+                                                 turtlekv_KeyView key);
 
 /*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
  *
@@ -471,13 +478,13 @@ turtlekv_StatusOrValueView turtlekv_kv_store_get(turtlekv_KVStore* kv_store, tur
  *
  *==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -*/
 
-turtlekv_Status turtlekv_kv_store_put_simple(turtlekv_KVStore* kv_store,
+turtlekv_Status turtlekv_kv_store_put_simple(turtlekv_KVStoreContext* context,
                                              const char* key,
                                              const char* value);
 
-turtlekv_Status turtlekv_kv_store_remove_simple(turtlekv_KVStore* kv_store, const char* key);
+turtlekv_Status turtlekv_kv_store_remove_simple(turtlekv_KVStoreContext* context, const char* key);
 
-const char* turtlekv_kv_store_get_simple(turtlekv_KVStore* kv_store, const char* key);
+const char* turtlekv_kv_store_get_simple(turtlekv_KVStoreContext* context, const char* key);
 
 /*=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------*/
 
