@@ -20,9 +20,12 @@
 
 #include <atomic>
 #include <memory>
+#include <mutex>
 #include <unordered_map>
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+
+using namespace batt::int_types;
 
 using turtle_kv::KVStoreConfig;
 using turtle_kv::KVStoreRuntimeOptions;
@@ -112,6 +115,11 @@ class CustomLogHandler : public google::LogSink
   {
   }
 
+  CustomLogHandler(const CustomLogHandler&) = delete;
+  CustomLogHandler& operator=(const CustomLogHandler&) = delete;
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
   void send(google::LogSeverity severity,
             const char* full_filename,
             const char* base_filename,
@@ -143,6 +151,7 @@ class CustomLogHandler : public google::LogSink
     this->handler_fn_(this->handler_data_, event);
   }
 
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
   turtlekv_LogHandler handler_fn_;
   void* handler_data_;
@@ -153,6 +162,7 @@ class CustomLogHandler : public google::LogSink
 extern "C" {
 struct turtlekv_Runtime_ {
   batt::Status status;
+  std::mutex mutex_;
   std::atomic<size_t> next_id;
   std::unordered_map<size_t, std::unique_ptr<CustomLogHandler>> attached_log_handlers;
 };
@@ -165,6 +175,7 @@ turtlekv_Runtime* global_runtime()
 {
   static turtlekv_Runtime instance_{
       .status = batt::StatusCode::kUnknown,
+      .mutex_ = {},
       .next_id = {0},
       .attached_log_handlers = {},
   };
@@ -176,12 +187,16 @@ turtlekv_Runtime* global_runtime()
  */
 turtlekv_StatusOrRuntime turtlekv_runtime_initialize()
 {
-  google::InitGoogleLogging("turtlekv");
-
   turtlekv_StatusOrRuntime result{
       .status = turtlekv_ok_status(),
       .runtime = global_runtime(),
   };
+
+  // If this is the first time initialize has been called, initialize GLOG.
+  //
+  if (result.runtime->status == batt::StatusCode::kUnknown) {
+    google::InitGoogleLogging("turtlekv");
+  }
 
   result.runtime->status = batt::OkStatus();
 
@@ -195,13 +210,22 @@ void turtlekv_runtime_shutdown(turtlekv_Runtime* runtime)
   BATT_CHECK_EQ(runtime, global_runtime());
   runtime->status = batt::StatusCode::kClosed;
 
-  for (const auto& [id, p_sink] : runtime->attached_log_handlers) {
-    google::RemoveLogSink(p_sink.get());
+  std::unordered_map<size_t, std::unique_ptr<CustomLogHandler>> local_log_handlers;
+  {
+    std::scoped_lock<std::mutex> lock{runtime->mutex_};
+
+    local_log_handlers = std::move(runtime->attached_log_handlers);
+    runtime->attached_log_handlers.clear();
   }
 
-  runtime->attached_log_handlers.clear();
+  for (const auto& [id, p_sink] : local_log_handlers) {
+    google::RemoveLogSink(p_sink.get());
+  }
 }
 
+/** \brief Panics if the passed runtime is not the global singleton, or if it is not in an 'ok'
+ * state.
+ */
 #define TURTLEKV_CHECK_RUNTIME(runtime)                                                            \
   BATT_CHECK_EQ(runtime, global_runtime());                                                        \
   BATT_CHECK(runtime->status.ok())
@@ -218,11 +242,15 @@ turtlekv_LogHandlerAttachment turtlekv_runtime_attach_log_handler(turtlekv_Runti
       .id = runtime->next_id.fetch_add(1),
   };
 
-  auto iter = runtime->attached_log_handlers
-                  .emplace(attachment.id, std::make_unique<CustomLogHandler>(handler, handler_data))
-                  .first;
+  auto unique_sink = std::make_unique<CustomLogHandler>(handler, handler_data);
+  CustomLogHandler* sink = unique_sink.get();
+  {
+    std::scoped_lock<std::mutex> lock{runtime->mutex_};
 
-  google::AddLogSink(iter->second.get());
+    runtime->attached_log_handlers.emplace(attachment.id, std::move(unique_sink));
+  }
+
+  google::AddLogSink(sink);
 
   return attachment;
 }
@@ -234,19 +262,25 @@ void turtlekv_runtime_detach_log_handler(turtlekv_Runtime* runtime,
 {
   TURTLEKV_CHECK_RUNTIME(runtime);
 
-  auto iter = runtime->attached_log_handlers.find(attachment.id);
-  if (iter == runtime->attached_log_handlers.end()) {
-    return;
+  CustomLogHandler* sink = nullptr;
+  {
+    std::scoped_lock<std::mutex> lock{runtime->mutex_};
+
+    auto iter = runtime->attached_log_handlers.find(attachment.id);
+    if (iter != runtime->attached_log_handlers.end()) {
+      sink = iter->second.get();
+      runtime->attached_log_handlers.erase(iter);
+    }
   }
 
-  google::RemoveLogSink(iter->second.get());
-
-  runtime->attached_log_handlers.erase(iter);
+  google::RemoveLogSink(sink);
 }
 
 /*=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
  */
 extern "C" {
+// This struct must be defined privately since it contains C++-only types.
+//
 struct turtlekv_KVStoreOptions_ {
   KVStoreConfig config;
   KVStoreRuntimeOptions runtime_options;
@@ -274,6 +308,325 @@ void turtlekv_kv_store_options_destroy(turtlekv_KVStoreOptions* options)
 
 /*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
  */
+size_t turtlekv_kv_store_get_num_options()
+{
+  return turtle_kv::num_config_params();
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+const char* turtlekv_kv_store_option_name_for_index(size_t index)
+{
+  const turtle_kv::ConfigParam* param = turtle_kv::get_config_param_for_index(index);
+  if (param == nullptr) {
+    return nullptr;
+  }
+
+  return param->name().c_str();
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+turtlekv_StatusOrUInt64 turtlekv_kv_store_option_index_for_name(const char* name)
+{
+  turtlekv_StatusOrUInt64 result;
+
+  const auto status = [&]() -> batt::Status {
+    BATT_ASSIGN_OK_RESULT(result.n, turtle_kv::get_index_for_config_param_name(name));
+    return batt::OkStatus();
+  }();
+
+  result.status = turtlekv_status_from(status);
+
+  return result;
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+turtlekv_StatusOrUInt64 turtlekv_kv_store_options_format(const turtlekv_KVStoreOptions* options,
+                                                         size_t index,
+                                                         char* value_buffer,
+                                                         size_t value_buffer_size)
+{
+  turtlekv_StatusOrUInt64 result;
+
+  const turtle_kv::ConfigParam* param = turtle_kv::get_config_param_for_index(index);
+
+  if (param == nullptr) {
+    result.status = turtlekv_status_from(batt::Status{batt::StatusCode::kNotFound});
+    return result;
+  }
+
+  batt::StatusOr<std::string> formatted_str =
+      param->string_value(&options->config, &options->runtime_options);
+
+  result.status = turtlekv_status_from(formatted_str.status());
+
+  if (!formatted_str.ok()) {
+    return result;
+  }
+
+  result.n = std::min<usize>(value_buffer_size, formatted_str->size());
+  std::memcpy(value_buffer, formatted_str->data(), result.n);
+
+  return result;
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+turtlekv_Status turtlekv_kv_store_options_parse(turtlekv_KVStoreOptions* options,
+                                                const char* name,
+                                                const char* value)
+{
+  batt::StatusOr<usize> index = turtle_kv::get_index_for_config_param_name(name);
+  if (!index.ok()) {
+    return turtlekv_status_from(index.status());
+  }
+
+  const turtle_kv::ConfigParam* param = turtle_kv::get_config_param_for_index(*index);
+  if (param == nullptr) {
+    return turtlekv_status_from(batt::Status{batt::StatusCode::kNotFound});
+  }
+
+  return turtlekv_status_from(
+      param->parse_and_set(std::string_view{value}, &options->config, &options->runtime_options));
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+turtlekv_StatusOrConfigOptionType turtlekv_get_config_option_type(const char* name)
+{
+  turtlekv_StatusOrConfigOptionType result;
+
+  const auto status = [&]() -> batt::Status {
+    BATT_ASSIGN_OK_RESULT(usize index, turtle_kv::get_index_for_config_param_name(name));
+
+    const turtle_kv::ConfigParam* param = turtle_kv::get_config_param_for_index(index);
+    BATT_CHECK_NOT_NULLPTR(param);
+
+    result.type_ = batt::case_of(
+        param->value_type_id(),
+        [](batt::StaticType<std::string>) {
+          return TURTLEKV_CONFIG_OPTION_STRING;
+        },
+        [](batt::StaticType<i64>) {
+          return TURTLEKV_CONFIG_OPTION_INT64;
+        },
+        [](batt::StaticType<u64>) {
+          return TURTLEKV_CONFIG_OPTION_UINT64;
+        },
+        [](batt::StaticType<double>) {
+          return TURTLEKV_CONFIG_OPTION_DOUBLE;
+        },
+        [](batt::StaticType<bool>) {
+          return TURTLEKV_CONFIG_OPTION_BOOL;
+        });
+
+    return batt::OkStatus();
+  }();
+
+  result.status = turtlekv_status_from(status);
+
+  return result;
+}
+
+namespace {
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+void set_result(turtlekv_StatusOrStrView& dst, const std::string_view& src)
+{
+  dst.str.data = src.data();
+  dst.str.size = src.size();
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+void set_result(turtlekv_StatusOrInt64& dst, i64 i)
+{
+  dst.i = i;
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+void set_result(turtlekv_StatusOrUInt64& dst, u64 n)
+{
+  dst.n = n;
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+void set_result(turtlekv_StatusOrDouble& dst, double d)
+{
+  dst.d = d;
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+void set_result(turtlekv_StatusOrBool& dst, bool b)
+{
+  dst.b = b;
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+template <typename ReturnT, typename ValueT>
+ReturnT get_option_impl(const turtlekv_KVStoreOptions* options,
+                        const char* name,
+                        ValueT default_value)
+{
+  ReturnT result;
+
+  const auto status = [&]() -> batt::Status {
+    BATT_ASSIGN_OK_RESULT(usize index, turtle_kv::get_index_for_config_param_name(name));
+
+    const turtle_kv::ConfigParam* param = turtle_kv::get_config_param_for_index(index);
+    BATT_CHECK_NOT_NULLPTR(param);
+
+    batt::Status local_status = batt::OkStatus();
+
+    set_result(result,
+               batt::case_of(
+                   param->typed_value(&options->config, &options->runtime_options),
+                   [](ValueT b) {
+                     return b;
+                   },
+                   [&local_status, &default_value](auto) {
+                     local_status = batt::StatusCode::kInvalidArgument;
+                     return default_value;
+                   }));
+
+    return local_status;
+  }();
+
+  result.status = turtlekv_status_from(status);
+
+  return result;
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+template <typename ValueT>
+turtlekv_Status set_option_impl(turtlekv_KVStoreOptions* options, const char* name, ValueT value)
+{
+  const auto status = [&]() -> batt::Status {
+    BATT_ASSIGN_OK_RESULT(usize index, turtle_kv::get_index_for_config_param_name(name));
+
+    const turtle_kv::ConfigParam* param = turtle_kv::get_config_param_for_index(index);
+    BATT_CHECK_NOT_NULLPTR(param);
+
+    return param->set(value, &options->config, &options->runtime_options);
+  }();
+
+  return turtlekv_status_from(status);
+}
+
+}  // namespace
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+turtlekv_StatusOrInt64 turtlekv_kv_store_options_get_int64(const turtlekv_KVStoreOptions* options,
+                                                           const char* name)
+{
+  return get_option_impl<turtlekv_StatusOrInt64, i64>(options, name, 0);
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+turtlekv_Status turtlekv_kv_store_options_set_int64(turtlekv_KVStoreOptions* options,
+                                                    const char* name,
+                                                    i64 value)
+{
+  return set_option_impl<i64>(options, name, value);
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+turtlekv_StatusOrUInt64 turtlekv_kv_store_options_get_uint64(const turtlekv_KVStoreOptions* options,
+                                                             const char* name)
+{
+  return get_option_impl<turtlekv_StatusOrUInt64, u64>(options, name, 0);
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+turtlekv_Status turtlekv_kv_store_options_set_uint64(turtlekv_KVStoreOptions* options,
+                                                     const char* name,
+                                                     u64 value)
+{
+  return set_option_impl<u64>(options, name, value);
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+turtlekv_StatusOrBool turtlekv_kv_store_options_get_bool(const turtlekv_KVStoreOptions* options,
+                                                         const char* name)
+{
+  return get_option_impl<turtlekv_StatusOrBool, bool>(options, name, false);
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+turtlekv_Status turtlekv_kv_store_options_set_bool(turtlekv_KVStoreOptions* options,
+                                                   const char* name,
+                                                   bool value)
+{
+  return set_option_impl<bool>(options, name, value);
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+turtlekv_StatusOrDouble turtlekv_kv_store_options_get_double(const turtlekv_KVStoreOptions* options,
+                                                             const char* name)
+{
+  return get_option_impl<turtlekv_StatusOrDouble, double>(options, name, 0);
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+turtlekv_Status turtlekv_kv_store_options_set_double(turtlekv_KVStoreOptions* options,
+                                                     const char* name,
+                                                     u64 value)
+{
+  return set_option_impl<u64>(options, name, value);
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+turtlekv_Status turtlekv_kv_store_options_set_str(turtlekv_KVStoreOptions* options,
+                                                  const char* name,
+                                                  const char* value)
+{
+  const std::string_view view{value};
+
+  const turtlekv_StrView str{
+      .data = view.data(),
+      .size = view.size(),
+  };
+
+  return turtlekv_kv_store_options_set_str_view(options, name, str);
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+turtlekv_Status turtlekv_kv_store_options_set_str_view(turtlekv_KVStoreOptions* options,
+                                                       const char* name,
+                                                       turtlekv_StrView value)
+{
+  return set_option_impl<std::string>(options, name, std::string{value.data, value.size});
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+turtlekv_StatusOrStrView turtlekv_kv_store_options_get_str_view(
+    const turtlekv_KVStoreOptions* options,
+    const char* name)
+{
+  return get_option_impl<turtlekv_StatusOrStrView, std::string>(options, name, "");
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
 turtlekv_Status turtlekv_kv_store_create(turtlekv_Runtime* runtime,
                                          const char* file_path,
                                          const turtlekv_KVStoreOptions* options,
@@ -292,6 +645,24 @@ turtlekv_Status turtlekv_kv_store_create(turtlekv_Runtime* runtime,
 
   return turtlekv_status_from(create_status);
 }
+
+namespace {
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+turtle_kv::KVStore* to_kv_store(turtlekv_KVStore* ptr) noexcept
+{
+  return reinterpret_cast<turtle_kv::KVStore*>(ptr);
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+const turtle_kv::KVStore* to_kv_store(const turtlekv_KVStore* ptr) noexcept
+{
+  return reinterpret_cast<const turtle_kv::KVStore*>(ptr);
+}
+
+}  // namespace
 
 /*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
  */
@@ -335,9 +706,223 @@ void turtlekv_kv_store_close(turtlekv_KVStore* kv_store)
 {
   // Create a local unique_ptr and just let it go out of scope.
   //
-  std::unique_ptr<turtle_kv::KVStore> local_kv_store{
-      reinterpret_cast<turtle_kv::KVStore*>(kv_store)};
+  std::unique_ptr<turtle_kv::KVStore> local_kv_store{to_kv_store(kv_store)};
 }
 
 /*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
  */
+size_t turtlekv_kv_store_get_checkpoint_distance(const turtlekv_KVStore* kv_store)
+{
+  return to_kv_store(kv_store)->get_checkpoint_distance();
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+void turtlekv_kv_store_set_checkpoint_distance(turtlekv_KVStore* kv_store,
+                                               size_t checkpoint_distance)
+{
+  to_kv_store(kv_store)->set_checkpoint_distance(checkpoint_distance);
+}
+
+namespace {
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+turtle_kv::KVStore::WriteOptions to_write_options(const turtlekv_WriteOptions& from)
+{
+  return turtle_kv::KVStore::WriteOptions{
+      .sync = from.sync,
+      .urgent_sync = from.urgent,
+  };
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+turtle_kv::KeyView to_key(const turtlekv_KeyView& from)
+{
+  return {from.data, from.size};
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+turtle_kv::ValueView to_put_value(const turtlekv_ValueView& from)
+{
+  switch (from.kind) {
+    case TURTLEKV_VALUE_KIND_PUT:
+      return turtle_kv::ValueView::from_str(std::string_view{from.data, from.size});
+
+    case TURTLEKV_VALUE_KIND_DELETE:
+      return turtle_kv::ValueView::deleted();
+
+    default:
+      break;
+  }
+
+  BATT_PANIC() << "unhandled case!" << (int)from.kind;
+  BATT_UNREACHABLE();
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+turtlekv_StatusOrValueView from_value(const turtle_kv::ValueView& from)
+{
+  turtlekv_StatusOrValueView result;
+
+  result.status = turtlekv_ok_status();
+
+  switch (from.op()) {
+    case turtle_kv::ValueView::OpCode::OP_DELETE:
+      result.value.kind = TURTLEKV_VALUE_KIND_DELETE;
+      result.value.data = nullptr;
+      result.value.size = 0;
+      break;
+
+    case turtle_kv::ValueView::OpCode::OP_WRITE:
+      result.value.kind = TURTLEKV_VALUE_KIND_PUT;
+      result.value.data = from.data();
+      result.value.size = from.size();
+      break;
+
+    case turtle_kv::ValueView::OpCode::OP_NOOP:
+    case turtle_kv::ValueView::OpCode::OP_ADD_I32:
+    case turtle_kv::ValueView::OpCode::OP_PAGE_SLICE:
+    case turtle_kv::ValueView::OpCode::BEGIN_OP_UNDEFINED:
+    case turtle_kv::ValueView::OpCode::END_OP_UNDEFINED:
+    default:
+      result.status = turtlekv_status_from(TURTLEKV_STATUS_CODE_UNIMPLEMENTED);
+      break;
+  }
+
+  return result;
+}
+
+}  // namespace
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+turtlekv_Status turtlekv_kv_store_put(turtlekv_KVStore* kv_store,
+                                      turtlekv_KeyView key,
+                                      turtlekv_ValueView value)
+{
+  return turtlekv_status_from(to_kv_store(kv_store)->put(to_key(key), to_put_value(value)));
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+turtlekv_StatusOrInt64 turtlekv_kv_store_put_opt(turtlekv_KVStore* kv_store,
+                                                 turtlekv_KeyView key,
+                                                 turtlekv_ValueView value,
+                                                 const turtlekv_WriteOptions* opt)
+{
+  turtlekv_StatusOrInt64 result;
+
+  if (opt == nullptr) {
+    result.status = turtlekv_status_from(TURTLEKV_STATUS_CODE_INVALID_ARGUMENT);
+    return result;
+  }
+
+  batt::StatusOr<turtle_kv::EditOffset> put_result =
+      to_kv_store(kv_store)->put(to_key(key), to_put_value(value), to_write_options(*opt));
+
+  result.status = turtlekv_status_from(put_result.status());
+
+  if (!put_result.ok()) {
+    return result;
+  }
+
+  result.i = put_result->value();
+
+  return result;
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+turtlekv_Status turtlekv_kv_store_remove(turtlekv_KVStore* kv_store, turtlekv_KeyView key)
+{
+  return turtlekv_status_from(to_kv_store(kv_store)->remove(to_key(key)));
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+turtlekv_StatusOrInt64 turtlekv_kv_store_remove_opt(turtlekv_KVStore* kv_store,
+                                                    turtlekv_KeyView key,
+                                                    const turtlekv_WriteOptions* opt)
+{
+  static const turtlekv_ValueView tombstone{
+      .kind = TURTLEKV_VALUE_KIND_DELETE,
+      .data = nullptr,
+      .size = 0,
+  };
+
+  return turtlekv_kv_store_put_opt(kv_store, key, tombstone, opt);
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+turtlekv_StatusOrValueView turtlekv_kv_store_get(turtlekv_KVStore* kv_store, turtlekv_KeyView key)
+{
+  turtlekv_StatusOrValueView result;
+
+  batt::StatusOr<turtle_kv::ValueView> value = to_kv_store(kv_store)->get(to_key(key));
+  result.status = turtlekv_status_from(value.status());
+  if (value.ok()) {
+    result = from_value(*value);
+  }
+
+  return result;
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+turtlekv_Status turtlekv_kv_store_put_simple(turtlekv_KVStore* kv_store,
+                                             const char* key,
+                                             const char* value)
+{
+  return turtlekv_kv_store_put(kv_store,
+                               turtlekv_KeyView{
+                                   .data = key,
+                                   .size = strlen(key),
+                               },
+                               turtlekv_ValueView{
+                                   .kind = TURTLEKV_VALUE_KIND_PUT,
+                                   .data = value,
+                                   .size = strlen(value),
+                               });
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+turtlekv_Status turtlekv_kv_store_remove_simple(turtlekv_KVStore* kv_store, const char* key)
+{
+  return turtlekv_kv_store_remove(kv_store,
+                                  turtlekv_KeyView{
+                                      .data = key,
+                                      .size = strlen(key),
+                                  });
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+const char* turtlekv_kv_store_get_simple(turtlekv_KVStore* kv_store, const char* key)
+{
+  turtlekv_StatusOrValueView result = turtlekv_kv_store_get(kv_store,
+                                                            turtlekv_KeyView{
+                                                                .data = key,
+                                                                .size = strlen(key),
+                                                            });
+
+  if (!turtlekv_status_is_ok(result.status) || result.value.kind != TURTLEKV_VALUE_KIND_PUT) {
+    return nullptr;
+  }
+
+  thread_local batt::SmallVec<char, 64> value_str_buffer;
+
+  if (value_str_buffer.size() < result.value.size + 1) {
+    value_str_buffer.resize(result.value.size + 1);
+  }
+
+  memcpy(value_str_buffer.data(), result.value.data, result.value.size);
+  value_str_buffer[result.value.size] = '\0';
+
+  return value_str_buffer.data();
+}
