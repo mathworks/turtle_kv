@@ -46,6 +46,11 @@ struct PackedActiveCheckpoints {
   // Linear search that looks for an exact match for `edit_offset`. Returns `nullptr` if not found.
   //
   const PackedCheckpoint* find(i64 edit_offset) const;
+
+  // Removes the checkpoint with the given `edit_offset` from the active set, shifting subsequent
+  // elements down. Returns true if the checkpoint was found and removed, false otherwise.
+  //
+  bool erase(i64 edit_offset);
 };
 
 BATT_STATIC_ASSERT_EQ(sizeof(PackedActiveCheckpoints),

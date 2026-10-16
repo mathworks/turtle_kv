@@ -1057,6 +1057,20 @@ StatusOr<Snapshot> KVStore::get_snapshot(EditOffset checkpoint_edit_offset) noex
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+StatusOr<Snapshot> KVStore::create_snapshot() noexcept
+{
+  BATT_ASSIGN_OK_RESULT(EditOffset checkpoint_edit_offset, this->force_checkpoint());
+
+  // force_checkpoint only finalizes the active MemTable; the checkpoint itself is committed
+  // asynchronously, so wait for it to become active before looking it up.
+  //
+  BATT_REQUIRE_OK(this->wait_for_checkpoint(checkpoint_edit_offset));
+
+  return this->get_snapshot(checkpoint_edit_offset);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 StatusOr<std::vector<Snapshot>> KVStore::get_active_snapshots() noexcept
 {
   std::vector<PackedCheckpoint> packed_checkpoints;
@@ -1090,6 +1104,23 @@ StatusOr<std::vector<Snapshot>> KVStore::get_active_snapshots() noexcept
   }
 
   return snapshots;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Status KVStore::delete_snapshot(EditOffset checkpoint_edit_offset) noexcept
+{
+  // TODO: [Gabe Bornstein 10/12/26] commit_checkpoint does this. Do we need delete_snapshot to do
+  // it too?
+  //
+  BATT_REQUIRE_OK(this->wait_for_recovery());
+
+  // Deletion is lazy: we only remove the checkpoint from the generator's active set.  The next
+  // finalized CheckpointJob picks up the deletion, and State is updated (from that job) when it is
+  // committed.  Updating State here would race with in-flight jobs finalized before the deletion,
+  // whose commit would bring the deleted checkpoint back.
+  //
+  return this->checkpoint_generator_->delete_checkpoint(checkpoint_edit_offset);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -1484,9 +1515,9 @@ void KVStore::mem_table_batch_scanner_thread_main()
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename Fn>
-requires std::invocable<Fn, std::unique_ptr<DeltaBatch>> Status
-KVStore::scan_mem_table_to_build_batches(boost::intrusive_ptr<MemTable>&& mem_table,
-                                         Fn&& consume_fn)
+  requires std::invocable<Fn, std::unique_ptr<DeltaBatch>>
+Status KVStore::scan_mem_table_to_build_batches(boost::intrusive_ptr<MemTable>&& mem_table,
+                                                Fn&& consume_fn)
 {
   MemTable::BatchCompactor batch_compactor{*mem_table,
                                            /*byte_size_limit=*/this->tree_options_.flush_size()};
