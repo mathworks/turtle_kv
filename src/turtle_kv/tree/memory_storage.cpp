@@ -1,7 +1,6 @@
 #include <turtle_kv/tree/memory_storage.hpp>
 //
 
-#include <turtle_kv/tree/config.hpp>
 #include <turtle_kv/tree/storage_config.hpp>
 
 #include <turtle_kv/import/logging.hpp>
@@ -18,6 +17,10 @@ std::shared_ptr<llfs::PageCache> make_memory_page_cache(batt::TaskScheduler& sch
                                                         const TreeOptions& opts,
                                                         usize byte_capacity)
 {
+  // The utilization ratio between the smallest allowed (non-root) node and the largest.
+  //
+  constexpr unsigned kMaxNodeUtilizationRatio = 3;
+
   const auto n_leaf_pages =
       llfs::PageCount{(byte_capacity + opts.leaf_size() - 1) / opts.leaf_size()};
 
