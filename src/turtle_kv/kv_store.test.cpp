@@ -63,6 +63,8 @@ using turtle_kv::testing::RandomStringGenerator;
 using turtle_kv::testing::run_workload;
 using turtle_kv::testing::SequentialStringGenerator;
 
+constexpr bool kQuiet = true;
+
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 // Base test fixture with common KVStore setup and teardown
 //
@@ -193,9 +195,27 @@ class KVStoreTest : public ::testing::Test
     }
   }
 
+  std::map<std::string, double> CollectStatsMap(const KVStore& kv_store)
+  {
+    std::map<std::string, double> m;
+    kv_store.collect_stats([&m](std::string_view name, double value) {
+      m.emplace(name, value);
+    });
+    return m;
+  }
+
   void ShutdownKVStore(std::unique_ptr<KVStore>& kv_store)
   {
     if (kv_store) {
+      auto stats = this->CollectStatsMap(*kv_store);
+      EXPECT_FALSE(stats.empty());
+
+      if constexpr (!kQuiet) {
+        for (const auto& [name, value] : stats) {
+          LOG(INFO) << name << " = " << value;
+        }
+      }
+
       kv_store->halt();
       kv_store->join();
       kv_store.reset();
@@ -217,8 +237,6 @@ class KVStoreTest : public ::testing::Test
 //
 TEST_F(KVStoreTest, CreateAndOpen)
 {
-  constexpr bool kQuiet = true;
-
   batt::StatusOr<std::filesystem::path> root = turtle_kv::data_root();
   ASSERT_TRUE(root.ok());
 
