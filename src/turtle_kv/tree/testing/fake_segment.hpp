@@ -15,6 +15,7 @@
 #include <turtle_kv/core/packed_key_value.hpp>
 
 #include <turtle_kv/util/piecewise_filter.hpp>
+#include <turtle_kv/util/piecewise_filter.ipp>
 
 #include <turtle_kv/import/bit_ops.hpp>
 #include <turtle_kv/import/int_types.hpp>
@@ -102,11 +103,11 @@ struct FakeSegment {
   {
     const bool inactive = this->active_pivots_.is_empty();
     if (inactive) {
-    Slice<const Interval<u32>> live_ranges = this->filter_.live();
-    BATT_CHECK_EQ(live_ranges.size(), 1) << BATT_INSPECT(live_ranges);
-    BATT_CHECK_EQ(live_ranges[0].upper_bound, PiecewiseFilter<u32>::kMaxUpperBound)
-        << BATT_INSPECT(live_ranges);
-  }
+      Slice<const Interval<u32>> live_ranges = this->filter_.live();
+      BATT_CHECK_EQ(live_ranges.size(), 1) << BATT_INSPECT(live_ranges);
+      BATT_CHECK_EQ(live_ranges[0].upper_bound, PiecewiseFilter<u32>::kMaxUpperBound)
+          << BATT_INSPECT(live_ranges);
+    }
     return inactive;
   }
 
