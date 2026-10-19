@@ -11,6 +11,7 @@
 
 #include <turtle_kv/kv_store.hpp>
 #include <turtle_kv/kv_store_config.hpp>
+#include <turtle_kv/kv_store_scanner.hpp>
 
 #include <batteries/status.hpp>
 
@@ -841,6 +842,32 @@ turtlekv_StatusOrValueView from_value(const turtle_kv::ValueView& from)
 
 /*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
  */
+turtlekv_Status turtlekv_kv_store_sync(turtlekv_KVStoreContext* context,
+                                       i64 edit_offset,
+                                       const turtlekv_WriteOptions* opt)
+{
+  Optional<turtle_kv::KVStore::WriteOptions> write_options;
+  if (opt) {
+    write_options.emplace(to_write_options(*opt));
+  }
+
+  return turtlekv_status_from(
+      context->kv_store->sync(turtle_kv::EditOffset{edit_offset}, write_options));
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+turtlekv_Status turtlekv_kv_store_sync_all(turtlekv_KVStoreContext* context, bool urgent)
+{
+  return turtlekv_status_from(context->kv_store->sync(/*upper_bound=*/None,
+                                                      turtle_kv::KVStore::WriteOptions{
+                                                          .sync = true,
+                                                          .urgent_sync = urgent,
+                                                      }));
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
 turtlekv_Status turtlekv_kv_store_put(turtlekv_KVStoreContext* context,
                                       turtlekv_KeyView key,
                                       turtlekv_ValueView value)
@@ -973,4 +1000,122 @@ const char* turtlekv_kv_store_get_simple(turtlekv_KVStoreContext* context, const
   value_str_buffer[result.value.size] = '\0';
 
   return value_str_buffer.data();
+}
+
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+//
+extern "C" {
+struct turtlekv_KVStoreScanner_ {
+  turtlekv_KVStoreContext* context;
+  turtle_kv::KVStoreScanner scanner;
+};
+}
+
+namespace {
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+bool from_item(turtlekv_KVStoreContext* context,
+               const Optional<turtle_kv::EditView>& edit,
+               turtlekv_ItemView* item_out)
+{
+  if (!edit) {
+    return false;
+  }
+
+  context->last_value = edit->value;
+  turtlekv_StatusOrValueView value_out = from_value(*context->last_value);
+  if (!turtlekv_status_is_ok(value_out.status)) {
+    return false;
+  }
+
+  item_out->key.data = edit->key.data();
+  item_out->key.size = edit->key.size();
+  item_out->value = value_out.value;
+
+  return true;
+}
+
+}  // namespace
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+turtlekv_KVStoreScanner* turtlekv_kv_store_create_scanner(turtlekv_KVStoreContext* context,
+                                                          turtlekv_KeyView min_key)
+{
+  return new turtlekv_KVStoreScanner{
+      .context = context,
+      .scanner =
+          turtle_kv::KVStoreScanner{
+              *context->kv_store,
+              context->thread_context,
+              to_key(min_key),
+          },
+  };
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+void turtlekv_kv_store_destroy_scanner(turtlekv_KVStoreScanner* ptr)
+{
+  if (ptr) {
+    delete ptr;
+  }
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+turtlekv_Status turtlekv_kv_store_scanner_start(turtlekv_KVStoreScanner* ptr)
+{
+  return turtlekv_status_from(ptr->scanner.start());
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+bool turtlekv_kv_store_scanner_peek(turtlekv_KVStoreScanner* ptr, turtlekv_ItemView* item_out)
+{
+  return from_item(ptr->context, ptr->scanner.peek(), item_out);
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+bool turtlekv_kv_store_scanner_next(turtlekv_KVStoreScanner* ptr, turtlekv_ItemView* item_out)
+{
+  return from_item(ptr->context, ptr->scanner.next(), item_out);
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+turtlekv_Status turtlekv_kv_store_scanner_status(turtlekv_KVStoreScanner* ptr)
+{
+  return turtlekv_status_from(ptr->scanner.status());
+}
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ */
+turtlekv_StatusOrUInt64 turtlekv_kv_store_scanner_read(turtlekv_KVStoreScanner* ptr,
+                                                       turtlekv_ItemView* item_buffer,
+                                                       size_t max_items)
+{
+  turtlekv_StatusOrUInt64 result{
+      .status = turtlekv_status_from(ptr->scanner.status()),
+      .n = 0,
+  };
+
+  if (!turtlekv_status_is_ok(result.status)) {
+    return result;
+  }
+
+  while (max_items != 0) {
+    if (!from_item(ptr->context, ptr->scanner.next(), item_buffer)) {
+      result.status = turtlekv_status_from(ptr->scanner.status());
+      break;
+    }
+
+    ++item_buffer;
+    ++result.n;
+    --max_items;
+  }
+
+  return result;
 }

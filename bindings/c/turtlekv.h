@@ -454,6 +454,12 @@ typedef struct turtlekv_WriteOptions_ {
   bool urgent;
 } turtlekv_WriteOptions;
 
+turtlekv_Status turtlekv_kv_store_sync(turtlekv_KVStoreContext* context,
+                                       int64_t edit_offset,
+                                       const turtlekv_WriteOptions* opt);
+
+turtlekv_Status turtlekv_kv_store_sync_all(turtlekv_KVStoreContext* context, bool urgent);
+
 turtlekv_Status turtlekv_kv_store_put(turtlekv_KVStoreContext* context,
                                       turtlekv_KeyView key,
                                       turtlekv_ValueView value);
@@ -478,6 +484,16 @@ turtlekv_StatusOrValueView turtlekv_kv_store_get(turtlekv_KVStoreContext* contex
  *
  *==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -*/
 
+/** \brief Inserts or updates the specified key.
+ *
+ * > Note: the updated key is not immediately flushed to storage by this function; see
+ * > turtlekv_kv_store_sync for details.
+ *
+ * \param key Null-terminated key string
+ * \param value Null-terminated value string
+ *
+ * \return TURTLEKV_STATUS_CODE_OK on success; error code otherwise
+ */
 turtlekv_Status turtlekv_kv_store_put_simple(turtlekv_KVStoreContext* context,
                                              const char* key,
                                              const char* value);
@@ -485,6 +501,31 @@ turtlekv_Status turtlekv_kv_store_put_simple(turtlekv_KVStoreContext* context,
 turtlekv_Status turtlekv_kv_store_remove_simple(turtlekv_KVStoreContext* context, const char* key);
 
 const char* turtlekv_kv_store_get_simple(turtlekv_KVStoreContext* context, const char* key);
+
+/*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+ *
+ * KVStore Scanner
+ *
+ *==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -*/
+
+typedef struct turtlekv_KVStoreScanner_ turtlekv_KVStoreScanner;
+
+turtlekv_KVStoreScanner* turtlekv_kv_store_create_scanner(turtlekv_KVStoreContext* context,
+                                                          turtlekv_KeyView min_key);
+
+void turtlekv_kv_store_destroy_scanner(turtlekv_KVStoreScanner* scanner);
+
+turtlekv_Status turtlekv_kv_store_scanner_start(turtlekv_KVStoreScanner* scanner);
+
+bool turtlekv_kv_store_scanner_peek(turtlekv_KVStoreScanner* scanner, turtlekv_ItemView* item_out);
+
+bool turtlekv_kv_store_scanner_next(turtlekv_KVStoreScanner* scanner, turtlekv_ItemView* item_out);
+
+turtlekv_Status turtlekv_kv_store_scanner_status(turtlekv_KVStoreScanner* scanner);
+
+turtlekv_StatusOrUInt64 turtlekv_kv_store_scanner_read(turtlekv_KVStoreScanner* scanner,
+                                                       turtlekv_ItemView* item_buffer,
+                                                       size_t max_items);
 
 /*=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------*/
 
