@@ -56,16 +56,17 @@ TurtleKVCBindingEnvironment* const test_env = static_cast<TurtleKVCBindingEnviro
  */
 TEST(TurtlekvTest, StatusGetMessage)
 {
-  char buffer[TURTLEKV_STATUS_MESSAGE_MAX_SIZE];
-  turtlekv_StatusOrUInt64 result;
   turtlekv_Status status;
 
   //----- --- -- -  -  -   -
   const auto verify_case = [&](turtlekv_StatusCode code, const char* expect_message) {
-    memset(buffer, 0, sizeof(buffer));
     status.code = code;
-    result = turtlekv_status_get_message(status, buffer, sizeof(buffer));
-    EXPECT_THAT((const char*)buffer, ::testing::StrEq(expect_message));
+    turtlekv_StrView actual_message = turtlekv_status_get_message(status);
+    EXPECT_THAT((std::string_view{
+                    actual_message.data,
+                    actual_message.size,
+                }),
+                ::testing::StrEq(expect_message));
   };
   //----- --- -- -  -  -   -
 

@@ -86,22 +86,20 @@ typedef turtlekv_StatusOrUint64 turtlekv_StatusOrUInt64;
 
 /*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
  */
-/** \brief The size to allocate for a buffer to receive turtlekv_Status message strings.
+/** \brief A non-owning view of a byte string.  Note: the string is not necessarily null-terminated.
  */
-#define TURTLEKV_STATUS_MESSAGE_MAX_SIZE 256
+typedef struct turtlekv_StrView_ {
+  const char* data;
+  size_t size;
+} turtlekv_StrView;
+
+TURTLEKV_DEFINE_STATUS_OR_TYPE(StrView, turtlekv_StrView, str);
 
 /*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
  */
-/** \brief Writes a human-readable message, null-terminated string for the passed status into the
- * passed buffer.
- *
- * If the buffer is too small, returns a status with code TURTLEKV_STATUS_CODE_OUT_OF_RANGE; in
- * this case, the `n` data member is set to the required buffer size so the caller can allocate
- * and try again.
+/** \brief Returns user-readable message for the passed status.
  */
-turtlekv_StatusOrUInt64 turtlekv_status_get_message(turtlekv_Status status,
-                                                    char* buffer,
-                                                    size_t buffer_size);
+turtlekv_StrView turtlekv_status_get_message(turtlekv_Status status);
 
 /*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
  */
@@ -260,16 +258,7 @@ TURTLEKV_DEFINE_STATUS_OR_TYPE(ConfigOptionType, turtlekv_ConfigOptionType, type
 
 /*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
  */
-/** \brief A non-owning view of a byte string.  Note: the string is not necessarily null-terminated.
- */
-typedef struct turtlekv_StrView_ {
-  const char* data;
-  size_t size;
-} turtlekv_StrView;
-
 typedef turtlekv_StrView turtlekv_KeyView;
-
-TURTLEKV_DEFINE_STATUS_OR_TYPE(StrView, turtlekv_StrView, str);
 TURTLEKV_DEFINE_STATUS_OR_TYPE(KeyView, turtlekv_KeyView, key);
 
 /*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

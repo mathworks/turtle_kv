@@ -74,31 +74,17 @@ turtlekv_Status turtlekv_status_from(batt::Status status)
 
 /*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
  */
-turtlekv_StatusOrUInt64 turtlekv_status_get_message(turtlekv_Status status,
-                                                    char* buffer,
-                                                    size_t buffer_size)
+turtlekv_StrView turtlekv_status_get_message(turtlekv_Status status)
 {
-  turtlekv_StatusOrUInt64 result{
-      .status = turtlekv_ok_status(),
-      .n = 0,
-  };
-
   BATT_CHECK_EQ(batt::OkStatus().code(), 0);
 
   const std::string_view message =
       batt::Status{static_cast<batt::StatusCode>(status.code)}.message();
 
-  result.n = message.size() + 1;
-
-  if (message.size() + 1 > buffer_size) {
-    result.status.code = TURTLEKV_STATUS_CODE_OUT_OF_RANGE;
-    return result;
-  }
-
-  memcpy(buffer, message.data(), message.size());
-  buffer[message.size()] = '\0';
-
-  return result;
+  return turtlekv_StrView{
+      .data = message.data(),
+      .size = message.size(),
+  };
 }
 
 /*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
