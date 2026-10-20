@@ -1057,7 +1057,7 @@ StatusOr<Snapshot> KVStore::get_snapshot(EditOffset checkpoint_edit_offset) noex
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<Snapshot> KVStore::create_snapshot() noexcept
+StatusOr<EditOffset> KVStore::create_snapshot() noexcept
 {
   BATT_ASSIGN_OK_RESULT(EditOffset checkpoint_edit_offset, this->force_checkpoint());
 
@@ -1066,7 +1066,7 @@ StatusOr<Snapshot> KVStore::create_snapshot() noexcept
   //
   BATT_REQUIRE_OK(this->wait_for_checkpoint(checkpoint_edit_offset));
 
-  return this->get_snapshot(checkpoint_edit_offset);
+  return checkpoint_edit_offset;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

@@ -274,9 +274,10 @@ class KVStore : public Table
   StatusOr<Snapshot> get_snapshot(EditOffset checkpoint_edit_offset) noexcept;
 
   /** \brief Forces a checkpoint of all edits up to this point, waits for it to be durably
-   * committed, and returns a read-only Snapshot of that checkpoint.
+   * committed, and returns the EditOffset identifying that checkpoint.  Pass the returned offset
+   * to `get_snapshot` to obtain a read-only Snapshot.
    */
-  StatusOr<Snapshot> create_snapshot() noexcept;
+  StatusOr<EditOffset> create_snapshot() noexcept;
 
   /** \brief Returns Snapshots for all currently active checkpoints, ordered oldest to newest.
    */

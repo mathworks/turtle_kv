@@ -712,9 +712,9 @@ class CheckpointReadOldKeysTest
 
   void do_checkpoint(KVStore& kv_store, std::vector<EditOffset>& checkpoint_offsets_out)
   {
-    StatusOr<Snapshot> snapshot = kv_store.create_snapshot();
-    ASSERT_TRUE(snapshot.ok()) << BATT_INSPECT(snapshot.status());
-    checkpoint_offsets_out.push_back(snapshot->edit_offset());
+    StatusOr<EditOffset> snapshot_edit_offset = kv_store.create_snapshot();
+    ASSERT_TRUE(snapshot_edit_offset.ok()) << BATT_INSPECT(snapshot_edit_offset.status());
+    checkpoint_offsets_out.push_back(*snapshot_edit_offset);
   }
 
   // Returns the number of expired (evicted) checkpoints.
@@ -1281,7 +1281,10 @@ TEST_F(KVStoreTest, SnapshotScan)
 
   std::map<std::string, std::string> scanned;
   {
-    StatusOr<Snapshot> snapshot = kv_store->create_snapshot();
+    StatusOr<EditOffset> snapshot_edit_offset = kv_store->create_snapshot();
+    ASSERT_TRUE(snapshot_edit_offset.ok()) << BATT_INSPECT(snapshot_edit_offset.status());
+
+    StatusOr<Snapshot> snapshot = kv_store->get_snapshot(*snapshot_edit_offset);
     ASSERT_TRUE(snapshot.ok()) << BATT_INSPECT(snapshot.status());
 
     turtle_kv::KVStoreScanner scanner{*snapshot, KeyView{}};
@@ -1399,7 +1402,10 @@ TEST_P(DeleteSnapshotTest, DeleteSnapshot)
       ASSERT_TRUE(put_status.ok()) << BATT_INSPECT(put_status);
     }
 
-    StatusOr<Snapshot> snapshot = kv_store->create_snapshot();
+    StatusOr<EditOffset> snapshot_edit_offset = kv_store->create_snapshot();
+    ASSERT_TRUE(snapshot_edit_offset.ok()) << BATT_INSPECT(snapshot_edit_offset.status());
+
+    StatusOr<Snapshot> snapshot = kv_store->get_snapshot(*snapshot_edit_offset);
     ASSERT_TRUE(snapshot.ok()) << BATT_INSPECT(snapshot.status());
 
     // The new snapshot should see the batch we just wrote.
