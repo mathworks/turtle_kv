@@ -1,16 +1,27 @@
 package turtle_kv
 
-//
-//
-
-// #cgo CFLAGS: -march=native -I../install/include
-// #cgo LDFLAGS: -L../install/lib -lturtlekv_bundle -lm -lstdc++
+// #cgo pkg-config: turtlekv
 // #include "turtlekv.h"
 //
 import "C"
-import "unsafe"
-import "fmt"
-import "errors"
+import (
+	"errors"
+	"fmt"
+	"iter"
+	"unsafe"
+)
+
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+// TODO [tastolfi 2026-10-20] Remaining Features:
+//
+//  - Log event handler callbacks (see https://stackoverflow.com/questions/37157379/passing-function-pointer-to-the-c-code-using-cgo for the general idea)
+//  - Zero-copy KVStore ops using byte slices
+//  - Support Scanner read (again, using slices)
+//  - Maybe a nicer config options interface?  Define a struct in Go as native type?
+//  - Doc comments for everything in this file
+//  - README.md in this directory
+//
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 
 type StrView = C.turtlekv_StrView
 
@@ -18,7 +29,19 @@ func ToGoString(str StrView) string {
 	return string(C.GoBytes(unsafe.Pointer(str.data), (C.int)(str.size)))
 }
 
+func KeyToGoString(key StrView) string {
+	return ToGoString(key)
+}
+
+func ValueToGoString(value C.turtlekv_ValueView) string {
+	if value.kind == C.TURTLEKV_VALUE_KIND_PUT {
+		return string(C.GoBytes(unsafe.Pointer(value.data), (C.int)(value.size)))
+	}
+	return ""
+}
+
 // ==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+
 type Status struct {
 	impl C.turtlekv_Status
 }
@@ -64,6 +87,87 @@ func (status Status) Error() string {
 // ==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 
 const STATUS_CODE_OK = C.TURTLEKV_STATUS_CODE_OK
+const STATUS_CODE_CANCELLED = C.TURTLEKV_STATUS_CODE_CANCELLED
+const STATUS_CODE_UNKNOWN = C.TURTLEKV_STATUS_CODE_UNKNOWN
+const STATUS_CODE_INVALID_ARGUMENT = C.TURTLEKV_STATUS_CODE_INVALID_ARGUMENT
+const STATUS_CODE_DEADLINE_EXCEEDED = C.TURTLEKV_STATUS_CODE_DEADLINE_EXCEEDED
+const STATUS_CODE_NOT_FOUND = C.TURTLEKV_STATUS_CODE_NOT_FOUND
+const STATUS_CODE_ALREADY_EXISTS = C.TURTLEKV_STATUS_CODE_ALREADY_EXISTS
+const STATUS_CODE_PERMISSION_DENIED = C.TURTLEKV_STATUS_CODE_PERMISSION_DENIED
+const STATUS_CODE_RESOURCE_EXHAUSTED = C.TURTLEKV_STATUS_CODE_RESOURCE_EXHAUSTED
+const STATUS_CODE_FAILED_PRECONDITION = C.TURTLEKV_STATUS_CODE_FAILED_PRECONDITION
+const STATUS_CODE_ABORTED = C.TURTLEKV_STATUS_CODE_ABORTED
+const STATUS_CODE_OUT_OF_RANGE = C.TURTLEKV_STATUS_CODE_OUT_OF_RANGE
+const STATUS_CODE_UNIMPLEMENTED = C.TURTLEKV_STATUS_CODE_UNIMPLEMENTED
+const STATUS_CODE_INTERNAL = C.TURTLEKV_STATUS_CODE_INTERNAL
+const STATUS_CODE_UNAVAILABLE = C.TURTLEKV_STATUS_CODE_UNAVAILABLE
+const STATUS_CODE_DATA_LOSS = C.TURTLEKV_STATUS_CODE_DATA_LOSS
+const STATUS_CODE_UNAUTHENTICATED = C.TURTLEKV_STATUS_CODE_UNAUTHENTICATED
+const STATUS_CODE_CLOSED = C.TURTLEKV_STATUS_CODE_CLOSED
+const STATUS_CODE_GRANT_UNAVAILABLE = C.TURTLEKV_STATUS_CODE_GRANT_UNAVAILABLE
+const STATUS_CODE_LOOP_BREAK = C.TURTLEKV_STATUS_CODE_LOOP_BREAK
+const STATUS_CODE_END_OF_STREAM = C.TURTLEKV_STATUS_CODE_END_OF_STREAM
+const STATUS_CODE_CLOSED_BEFORE_END_OF_STREAM = C.TURTLEKV_STATUS_CODE_CLOSED_BEFORE_END_OF_STREAM
+const STATUS_CODE_GRANT_REVOKED = C.TURTLEKV_STATUS_CODE_GRANT_REVOKED
+const STATUS_CODE_POKE = C.TURTLEKV_STATUS_CODE_POKE
+
+// ==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+
+func ConvertStatus(status C.turtlekv_Status) error {
+	if status.code == STATUS_CODE_OK {
+		return nil
+	}
+	return NewStatus(status.code).ToError()
+}
+
+func ConvertStatusOrInt64(result C.turtlekv_StatusOrInt64) (int64, error) {
+	if result.status.code == STATUS_CODE_OK {
+		return (int64)(result.i), nil
+	}
+	return (int64)(-1), NewStatus(result.status.code).ToError()
+}
+
+func ConvertStatusOrUInt64(result C.turtlekv_StatusOrUInt64) (uint64, error) {
+	if result.status.code == STATUS_CODE_OK {
+		return (uint64)(result.n), nil
+	}
+	return (uint64)(0), NewStatus(result.status.code).ToError()
+}
+
+func ConvertStatusOrDouble(result C.turtlekv_StatusOrDouble) (float64, error) {
+	if result.status.code == STATUS_CODE_OK {
+		return (float64)(result.d), nil
+	}
+	return (float64)(0), NewStatus(result.status.code).ToError()
+}
+
+func ConvertStatusOrBool(result C.turtlekv_StatusOrBool) (bool, error) {
+	if result.status.code == STATUS_CODE_OK {
+		return (bool)(result.b), nil
+	}
+	return false, NewStatus(result.status.code).ToError()
+}
+
+func ConvertStatusOrStrView(result C.turtlekv_StatusOrStrView) (string, error) {
+	if result.status.code == STATUS_CODE_OK {
+		return ToGoString(result.str), nil
+	}
+	return "", NewStatus(result.status.code).ToError()
+}
+
+func ConvertStatusOrValueView(result C.turtlekv_StatusOrValueView) (string, error) {
+	if result.status.code == STATUS_CODE_OK {
+		return string(C.GoBytes(unsafe.Pointer(result.value.data), (C.int)(result.value.size))), nil
+	}
+	return "", NewStatus(result.status.code).ToError()
+}
+
+func StrToKey(str string) C.turtlekv_KeyView {
+	var key C.turtlekv_KeyView
+	key.data = C.CString(str)
+	key.size = (C.size_t)(len(str))
+	return key
+}
 
 // ==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -85,28 +189,214 @@ func (options KVStoreOptions) Name(i int) string {
 	return C.GoString(C.turtlekv_kv_store_option_name_for_index((C.size_t)(i)))
 }
 
-func (options KVStoreOptions) Get(name string) (string, error) {
-	index_for_name := C.turtlekv_kv_store_option_index_for_name(C.CString(name))
-	if !NewStatus(index_for_name.status).Ok() {
-		return "", NewStatus(index_for_name.status).ToError()
-	}
-	return "foo", nil
+func (options KVStoreOptions) GetStr(name string) (string, error) {
+	return ConvertStatusOrStrView(C.turtlekv_kv_store_options_get_str_view(options.impl, C.CString(name)))
 }
 
-func (result C.turtlekv_StatusOrInt64) ConvertResult() (int64, error) {
+func (options KVStoreOptions) GetInt(name string) (int64, error) {
+	return ConvertStatusOrInt64(C.turtlekv_kv_store_options_get_int64(options.impl, C.CString(name)))
+}
+
+func (options KVStoreOptions) GetUInt(name string) (uint64, error) {
+	return ConvertStatusOrUInt64(C.turtlekv_kv_store_options_get_uint64(options.impl, C.CString(name)))
+}
+
+func (options KVStoreOptions) GetFloat(name string) (float64, error) {
+	return ConvertStatusOrDouble(C.turtlekv_kv_store_options_get_double(options.impl, C.CString(name)))
+}
+
+func (options KVStoreOptions) GetBool(name string) (bool, error) {
+	return ConvertStatusOrBool(C.turtlekv_kv_store_options_get_bool(options.impl, C.CString(name)))
+}
+
+func (options KVStoreOptions) SetStr(name string, value string) error {
+	return ConvertStatus(C.turtlekv_kv_store_options_set_str(options.impl, C.CString(name), C.CString(value)))
+}
+
+func (options KVStoreOptions) SetInt(name string, value int64) error {
+	return ConvertStatus(C.turtlekv_kv_store_options_set_int64(options.impl, C.CString(name), (C.int64_t)(value)))
+}
+
+func (options KVStoreOptions) SetUInt(name string, value uint64) error {
+	return ConvertStatus(C.turtlekv_kv_store_options_set_uint64(options.impl, C.CString(name), (C.uint64_t)(value)))
+}
+
+func (options KVStoreOptions) SetFloat(name string, value float64) error {
+	return ConvertStatus(C.turtlekv_kv_store_options_set_double(options.impl, C.CString(name), (C.double)(value)))
+}
+
+func (options KVStoreOptions) SetBool(name string, value bool) error {
+	return ConvertStatus(C.turtlekv_kv_store_options_set_bool(options.impl, C.CString(name), (C.bool)(value)))
+}
+
+// ==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+
+type Runtime struct {
+	impl *C.turtlekv_Runtime
+}
+
+func NewRuntime(impl *C.turtlekv_Runtime) Runtime {
+	var runtime Runtime
+	runtime.impl = impl
+	return runtime
+}
+
+func InitRuntime() (Runtime, error) {
+	var result C.turtlekv_StatusOrRuntime
+	result = C.turtlekv_runtime_initialize()
 	if result.status.code == STATUS_CODE_OK {
-		return (int64)(result.status.i), nil
+		return NewRuntime(result.runtime), nil
 	}
-	return (int64)(-1), NewStatus(result.status.code).ToError()
+	return NewRuntime(nil), NewStatus(result.status.code).ToError()
+}
+
+func (runtime Runtime) Close() {
+	C.turtlekv_runtime_shutdown(runtime.impl)
 }
 
 // ==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 
 type KVStore struct {
-	impl C.turtlekv_KVStore
+	impl *C.turtlekv_KVStore
 }
 
-func Hello(name string) string {
-	message := fmt.Sprintf("Hi, %v! from TurtleKV", name)
-	return message
+func (runtime Runtime) CreateKVStore(file_path string, options KVStoreOptions, remove_existing bool) error {
+	var result C.turtlekv_Status
+	result = C.turtlekv_kv_store_create(runtime.impl, C.CString(file_path), options.impl, (C.bool)(remove_existing))
+	return ConvertStatus(result)
+}
+
+func (runtime Runtime) OpenKVStore(file_path string, options KVStoreOptions) (KVStore, error) {
+	var kv KVStore
+	var result C.turtlekv_StatusOrKVStore
+
+	kv.impl = nil
+	result = C.turtlekv_kv_store_open(runtime.impl, C.CString(file_path), options.impl)
+	if result.status.code == STATUS_CODE_OK {
+		kv.impl = result.kv_store
+		return kv, nil
+	}
+	return kv, NewStatus(result.status.code).ToError()
+}
+
+func (kv KVStore) Close() {
+	C.turtlekv_kv_store_close(kv.impl)
+}
+
+func (kv KVStore) GetCheckpointDistance() int {
+	return (int)(C.turtlekv_kv_store_get_checkpoint_distance(kv.impl))
+}
+
+func (kv KVStore) SetCheckpointDistance(n_leaves int) {
+	C.turtlekv_kv_store_set_checkpoint_distance(kv.impl, (C.size_t)(n_leaves))
+}
+
+// ==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+
+type KVStoreContext struct {
+	impl *C.turtlekv_KVStoreContext
+}
+
+func (kv KVStore) CreateContext() KVStoreContext {
+	var ctx KVStoreContext
+	ctx.impl = C.turtlekv_kv_store_create_context(kv.impl)
+	return ctx
+}
+
+func (ctx KVStoreContext) Close() {
+	if ctx.impl != nil {
+		C.turtlekv_kv_store_destroy_context(ctx.impl)
+	}
+}
+
+type WriteOptions struct {
+	sync   bool
+	urgent bool
+}
+
+func (ctx KVStoreContext) Sync(edit_offset int64, write_opts WriteOptions) error {
+	var c_opts C.turtlekv_WriteOptions
+	c_opts.sync = (C.bool)(write_opts.sync)
+	c_opts.urgent = (C.bool)(write_opts.urgent)
+
+	return ConvertStatus(C.turtlekv_kv_store_sync(ctx.impl, (C.int64_t)(edit_offset), &c_opts))
+}
+
+func (ctx KVStoreContext) SyncAll(urgent bool) error {
+	return ConvertStatus(C.turtlekv_kv_store_sync_all(ctx.impl, (C.bool)(urgent)))
+}
+
+func (ctx KVStoreContext) Put(key string, value string) error {
+	return ConvertStatus(C.turtlekv_kv_store_put_simple(ctx.impl, C.CString(key), C.CString(value)))
+}
+
+func (ctx KVStoreContext) Remove(key string) error {
+	return ConvertStatus(C.turtlekv_kv_store_remove_simple(ctx.impl, C.CString(key)))
+}
+
+func (ctx KVStoreContext) Get(key string) (string, error) {
+	return ConvertStatusOrValueView(C.turtlekv_kv_store_get(ctx.impl, StrToKey(key)))
+}
+
+// ==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+
+type KVStoreScanner struct {
+	impl *C.turtlekv_KVStoreScanner
+}
+
+func (ctx KVStoreContext) CreateScanner(min_key string) (KVStoreScanner, error) {
+	var scanner KVStoreScanner
+	scanner.impl = C.turtlekv_kv_store_create_scanner(ctx.impl, StrToKey(min_key))
+
+	status := C.turtlekv_kv_store_scanner_start(scanner.impl)
+	if status.code != STATUS_CODE_OK {
+		C.turtlekv_kv_store_destroy_scanner(scanner.impl)
+		scanner.impl = nil
+		return scanner, NewStatus(status.code).ToError()
+	}
+
+	return scanner, nil
+}
+
+func (scanner KVStoreScanner) Close() {
+	if scanner.impl != nil {
+		C.turtlekv_kv_store_destroy_scanner(scanner.impl)
+	}
+}
+
+type KVPair struct {
+	Key   string
+	Value string
+}
+
+func (kvp KVPair) Parts() (string, string) {
+	return kvp.Key, kvp.Value
+}
+
+func (ctx KVStoreContext) Scan(min_key string) iter.Seq2[KVPair, error] {
+	return func(yield func(KVPair, error) bool) {
+		scanner, err := ctx.CreateScanner(min_key)
+		defer scanner.Close()
+
+		var item C.turtlekv_ItemView
+
+		for {
+			if err != nil {
+				yield(KVPair{Key: "", Value: ""}, err)
+				return
+			}
+
+			if !(bool)(C.turtlekv_kv_store_scanner_next(scanner.impl, &item)) {
+				err = ConvertStatus(C.turtlekv_kv_store_scanner_status(scanner.impl))
+				if err != nil {
+					yield(KVPair{Key: "", Value: ""}, err)
+				}
+				return
+			}
+
+			if !yield(KVPair{Key: KeyToGoString(item.key), Value: ValueToGoString(item.value)}, nil) {
+				return
+			}
+		}
+	}
 }

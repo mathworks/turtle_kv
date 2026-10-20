@@ -576,9 +576,9 @@ turtlekv_StatusOrDouble turtlekv_kv_store_options_get_double(const turtlekv_KVSt
  */
 turtlekv_Status turtlekv_kv_store_options_set_double(turtlekv_KVStoreOptions* options,
                                                      const char* name,
-                                                     u64 value)
+                                                     double value)
 {
-  return set_option_impl<u64>(options, name, value);
+  return set_option_impl<double>(options, name, value);
 }
 
 /*==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
