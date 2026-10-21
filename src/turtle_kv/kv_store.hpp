@@ -47,6 +47,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <thread>
 #include <utility>
 
@@ -282,9 +283,10 @@ class KVStore : public Table
    * returns kResourceExhausted without creating a checkpoint if that limit has been reached.
    *
    * Pins are durable: the pinned flag is recorded with the checkpoint itself, so it is persisted
-   * when the checkpoint is committed and survives the KVStore being closed/reopened.  If there are
-   * no edits since the latest checkpoint, no new checkpoint is created; the latest checkpoint is
-   * returned if it is already pinned, otherwise kFailedPrecondition is returned.
+   * when the checkpoint is committed and survives the KVStore being closed/reopened.  Pinned calls
+   * are serialized, and each one pins exactly the checkpoint created from the active MemTable.  If
+   * there are no edits since the latest checkpoint, no checkpoint is created or pinned and
+   * kFailedPrecondition is returned.
    */
   StatusOr<Snapshot> create_snapshot(bool pin = false) noexcept;
 
@@ -541,6 +543,11 @@ class KVStore : public Table
   Optional<CheckpointGenerator> checkpoint_generator_;
 
   usize checkpoint_batch_count_;
+
+  // Serializes `create_snapshot(/*pin=*/true)` calls, so at most one pin request is ever attached
+  // to a given MemTable (and therefore to a given checkpoint).
+  //
+  std::mutex create_pinned_snapshot_mutex_;
 
   //----- --- -- -  -  -   -
   // Checkpoint Flush State.

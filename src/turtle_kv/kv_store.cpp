@@ -1071,6 +1071,9 @@ StatusOr<Snapshot> KVStore::create_snapshot(bool pin) noexcept
   }
 
   BATT_REQUIRE_OK(this->wait_for_recovery());
+
+  std::unique_lock<std::mutex> lock{this->create_pinned_snapshot_mutex_};
+
   BATT_REQUIRE_OK(this->checkpoint_generator_->reserve_pin());
 
   // Attach the pin request to the active MemTable; it applies to exactly the checkpoint created
@@ -1093,24 +1096,11 @@ StatusOr<Snapshot> KVStore::create_snapshot(bool pin) noexcept
     }
   }
 
-  // If the active MemTable is empty, there is no new checkpoint to pin.  We can only return the
-  // latest checkpoint if it is already (durably) pinned.
+  // If the active MemTable is empty, there is no new checkpoint to pin.
   //
   if (!pin_requested) {
     this->checkpoint_generator_->release_pin_reservation();
-
-    const EditOffset checkpoint_edit_offset = mem_table->edit_offset_lower_bound();
-    BATT_REQUIRE_OK(this->wait_for_checkpoint(checkpoint_edit_offset));
-    {
-      batt::Toggle<State>::Reader state_reader{this->state_};
-
-      const PackedCheckpoint* found =
-          state_reader->active_checkpoints_.find(checkpoint_edit_offset.value());
-      if (!found || !found->is_pinned()) {
-        return {batt::StatusCode::kFailedPrecondition};
-      }
-    }
-    return this->get_snapshot(checkpoint_edit_offset);
+    return {batt::StatusCode::kFailedPrecondition};
   }
 
   // Finalize the MemTable to force a checkpoint, then wait for that checkpoint (and therefore its
@@ -1693,6 +1683,10 @@ StatusOr<std::unique_ptr<CheckpointJob>> KVStore::apply_batch_to_checkpoint(
   //
   const usize pin_request_count =
       (checkpoint_after == BoolStatus::kTrue) ? delta_batch->pin_request_count() : 0;
+
+  // create_snapshot(/*pin=*/true) is serialized, so a MemTable carries at most one pin request.
+  //
+  BATT_CHECK_LE(pin_request_count, 1u);
 
   // Allow the page cache to be temporarily overcommitted so we don't deadlock; but if overcommit is
   // triggered, we immediately truncate the checkpoint to try to unpin pages ASAP.

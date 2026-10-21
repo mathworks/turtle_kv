@@ -1668,7 +1668,7 @@ TEST_F(PinSnapshotTest, DeletePinnedSnapshotFreesPin)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-TEST_F(PinSnapshotTest, RepinningSameCheckpointIsNoOp)
+TEST_F(PinSnapshotTest, PinWithNoNewEditsFails)
 {
   StatusOr<std::unique_ptr<KVStore>> open_result = this->open("pin_snapshot_repin");
   ASSERT_TRUE(open_result.ok()) << BATT_INSPECT(open_result.status());
@@ -1679,14 +1679,11 @@ TEST_F(PinSnapshotTest, RepinningSameCheckpointIsNoOp)
   StatusOr<EditOffset> first = write_and_snapshot(*kv_store, next_key++, /*pin=*/true);
   ASSERT_TRUE(first.ok()) << BATT_INSPECT(first.status());
 
-  // With no writes in between, create_snapshot returns the same checkpoint, and pinning it again
-  // does not consume another pin.
+  // With no writes in between, there is no new checkpoint to pin, so create_snapshot fails without
+  // consuming a pin.
   //
-  {
-    StatusOr<Snapshot> again = kv_store->create_snapshot(/*pin=*/true);
-    ASSERT_TRUE(again.ok()) << BATT_INSPECT(again.status());
-    EXPECT_EQ(again->edit_offset(), *first);
-  }
+  EXPECT_EQ(kv_store->create_snapshot(/*pin=*/true).status(),
+            batt::StatusCode::kFailedPrecondition);
 
   for (u64 n = 1; n < turtle_kv::MAX_ACTIVE_CHECKPOINTS - 1; ++n) {
     StatusOr<EditOffset> offset = write_and_snapshot(*kv_store, next_key++, /*pin=*/true);
