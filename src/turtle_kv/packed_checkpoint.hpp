@@ -74,11 +74,6 @@ struct PackedActiveCheckpoints {
   //
   const PackedCheckpoint* find(i64 edit_offset) const;
 
-  // Returns the oldest checkpoint whose edit_offset_upper_bound is at least `edit_offset`, or
-  // `nullptr` if there is none.
-  //
-  const PackedCheckpoint* find_at_or_after(i64 edit_offset) const;
-
   // Returns the number of pinned checkpoints in the active set.
   //
   usize num_pinned() const;

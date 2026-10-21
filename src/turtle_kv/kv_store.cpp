@@ -1071,31 +1071,24 @@ StatusOr<Snapshot> KVStore::create_snapshot(bool pin) noexcept
   }
 
   BATT_REQUIRE_OK(this->wait_for_recovery());
+  BATT_REQUIRE_OK(this->checkpoint_generator_->reserve_pin());
 
-  // Register a pin request for the checkpoint that will contain the active MemTable: the first
-  // checkpoint finalized with an upper bound past the MemTable's lower bound.  If that checkpoint
-  // was already finalized (another thread sealed the MemTable first), request_pin returns kAborted
-  // and we retry against the new active MemTable.
+  // Attach the pin request to the active MemTable; it applies to exactly the checkpoint created
+  // from that MemTable.  request_pin only fails if the MemTable was finalized after we observed it
+  // (nothing is recorded in that case), so retry with the new active MemTable.
   //
   boost::intrusive_ptr<MemTable> mem_table;
-  EditOffset min_edit_offset = EditOffset::starting_value();
+  bool pin_requested = false;
   for (;;) {
     {
       batt::Toggle<State>::Reader state_reader{this->state_};
       mem_table = state_reader->mem_table_;
     }
-
     if (mem_table->empty()) {
-      min_edit_offset = mem_table->edit_offset_lower_bound();
-      mem_table = nullptr;
       break;
     }
-
-    min_edit_offset = EditOffset{mem_table->edit_offset_lower_bound().value() + 1};
-
-    Status status = this->checkpoint_generator_->request_pin(min_edit_offset);
-    if (status != batt::StatusCode::kAborted) {
-      BATT_REQUIRE_OK(status);
+    if (mem_table->request_pin()) {
+      pin_requested = true;
       break;
     }
   }
@@ -1103,51 +1096,55 @@ StatusOr<Snapshot> KVStore::create_snapshot(bool pin) noexcept
   // If the active MemTable is empty, there is no new checkpoint to pin.  We can only return the
   // latest checkpoint if it is already (durably) pinned.
   //
-  if (!mem_table) {
-    BATT_REQUIRE_OK(this->wait_for_checkpoint(min_edit_offset));
+  if (!pin_requested) {
+    this->checkpoint_generator_->release_pin_reservation();
 
-    Optional<EditOffset> checkpoint_edit_offset;
+    const EditOffset checkpoint_edit_offset = mem_table->edit_offset_lower_bound();
+    BATT_REQUIRE_OK(this->wait_for_checkpoint(checkpoint_edit_offset));
     {
       batt::Toggle<State>::Reader state_reader{this->state_};
 
       const PackedCheckpoint* found =
-          state_reader->active_checkpoints_.find_at_or_after(min_edit_offset.value());
+          state_reader->active_checkpoints_.find(checkpoint_edit_offset.value());
       if (!found || !found->is_pinned()) {
         return {batt::StatusCode::kFailedPrecondition};
       }
-      checkpoint_edit_offset.emplace(found->edit_offset_upper_bound);
     }
-
-    return this->get_snapshot(*checkpoint_edit_offset);
+    return this->get_snapshot(checkpoint_edit_offset);
   }
 
-  // Seal the MemTable to force a checkpoint, then wait for that checkpoint (and therefore its pin)
-  // to be durably committed.
+  // Finalize the MemTable to force a checkpoint, then wait for that checkpoint (and therefore its
+  // pin) to be durably committed.
   //
   StatusOr<Snapshot> snapshot = [&]() -> StatusOr<Snapshot> {
     BATT_REQUIRE_OK(this->finalize_mem_table(batt::make_copy(mem_table)));
-    BATT_REQUIRE_OK(this->wait_for_checkpoint(mem_table->edit_offset_upper_bound()));
 
-    // With checkpoint_distance > 1, the checkpoint may roll up several MemTables, so its upper
-    // bound can be greater than our MemTable's.
-    //
-    Optional<EditOffset> checkpoint_edit_offset;
+    const EditOffset checkpoint_edit_offset = mem_table->edit_offset_upper_bound();
+    BATT_REQUIRE_OK(this->wait_for_checkpoint(checkpoint_edit_offset));
     {
       batt::Toggle<State>::Reader state_reader{this->state_};
 
       const PackedCheckpoint* found =
-          state_reader->active_checkpoints_.find_at_or_after(min_edit_offset.value());
+          state_reader->active_checkpoints_.find(checkpoint_edit_offset.value());
       if (!found || !found->is_pinned()) {
         return {batt::StatusCode::kNotFound};
       }
-      checkpoint_edit_offset.emplace(found->edit_offset_upper_bound);
     }
-
-    return this->get_snapshot(*checkpoint_edit_offset);
+    return this->get_snapshot(checkpoint_edit_offset);
   }();
 
   if (!snapshot.ok()) {
-    this->checkpoint_generator_->cancel_pin_request(min_edit_offset);
+    if (mem_table->cancel_pin_request()) {
+      // The MemTable was never finalized, so the reservation will not be consumed.
+      //
+      this->checkpoint_generator_->release_pin_reservation();
+    } else if (mem_table->is_finalized()) {
+      // The pin was (or will be) applied when the MemTable's checkpoint is finalized.  If that
+      // already happened, unpin it; otherwise (e.g. the KVStore is halting) it may remain pinned.
+      //
+      this->checkpoint_generator_->unpin_checkpoint(mem_table->edit_offset_upper_bound())
+          .IgnoreError();
+    }
   }
   return snapshot;
 }
@@ -1692,6 +1689,11 @@ StatusOr<std::unique_ptr<CheckpointJob>> KVStore::apply_batch_to_checkpoint(
       delta_batch ? batt::bool_status_from(delta_batch->batch_id().is_last_in_group())
                   : BoolStatus::kUnknown;
 
+  // Pin requests on a MemTable apply to the checkpoint that includes its last batch.
+  //
+  const usize pin_request_count =
+      (checkpoint_after == BoolStatus::kTrue) ? delta_batch->pin_request_count() : 0;
+
   // Allow the page cache to be temporarily overcommitted so we don't deadlock; but if overcommit is
   // triggered, we immediately truncate the checkpoint to try to unpin pages ASAP.
   //
@@ -1752,7 +1754,8 @@ StatusOr<std::unique_ptr<CheckpointJob>> KVStore::apply_batch_to_checkpoint(
                                 this->checkpoint_generator_->finalize_checkpoint(
                                     std::move(checkpoint_token),
                                     batt::make_copy(this->checkpoint_token_pool_),
-                                    overcommit));
+                                    overcommit,
+                                    pin_request_count));
 
   BATT_REQUIRE_OK(checkpoint_job);
 

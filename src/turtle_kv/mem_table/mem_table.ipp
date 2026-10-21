@@ -202,6 +202,11 @@ template <MemTableStorage StorageT, MemTableAllocationTracker AllocationTrackerT
 bool BasicMemTable<StorageT, AllocationTrackerT>::finalize(
     const SmallFn<EditOffset()>& get_next_edit_offset) noexcept
 {
+  // Stop accepting pin requests; any request accepted before this point will be handed off to the
+  // checkpoint pipeline along with this MemTable.
+  //
+  this->pin_requests_.fetch_or(Self::kPinRequestsClosed);
+
   // Update committed_bytes_total first, so that if prepared_bytes_total_ is observed to have the
   // kFinalizedMask bit set, we can assume committed_bytes_total_ does too.
   //
@@ -275,6 +280,41 @@ bool BasicMemTable<StorageT, AllocationTrackerT>::is_finalized() const
 {
   return (this->committed_bytes_total_->load() & Self::kFinalizedMask) != 0 &&
          this->edit_offset_lower_bound_ <= EditOffset{this->edit_offset_upper_bound_.load()};
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <MemTableStorage StorageT, MemTableAllocationTracker AllocationTrackerT>
+bool BasicMemTable<StorageT, AllocationTrackerT>::request_pin() noexcept
+{
+  u32 observed = this->pin_requests_.load();
+  for (;;) {
+    if ((observed & Self::kPinRequestsClosed) != 0) {
+      return false;
+    }
+    if (this->pin_requests_.compare_exchange_weak(observed,
+                                                  observed + Self::kPinRequestIncrement)) {
+      return true;
+    }
+  }
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <MemTableStorage StorageT, MemTableAllocationTracker AllocationTrackerT>
+bool BasicMemTable<StorageT, AllocationTrackerT>::cancel_pin_request() noexcept
+{
+  u32 observed = this->pin_requests_.load();
+  for (;;) {
+    if ((observed & Self::kPinRequestsClosed) != 0) {
+      return false;
+    }
+    BATT_CHECK_GE(observed, Self::kPinRequestIncrement);
+    if (this->pin_requests_.compare_exchange_weak(observed,
+                                                  observed - Self::kPinRequestIncrement)) {
+      return true;
+    }
+  }
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
