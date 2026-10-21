@@ -12,14 +12,11 @@ import (
 )
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
-// TODO [tastolfi 2026-10-20] Remaining Features:
+//  TODO [tastolfi 2026-10-20] Remaining Features:
 //
 //  - Log event handler callbacks (see https://stackoverflow.com/questions/37157379/passing-function-pointer-to-the-c-code-using-cgo for the general idea)
-//  - Zero-copy KVStore ops using byte slices
 //  - Support Scanner read (again, using slices)
-//  - Maybe a nicer config options interface?  Define a struct in Go as native type?
 //  - Doc comments for everything in this file
-//  - README.md in this directory
 //
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 
@@ -29,8 +26,16 @@ func ToGoString(str StrView) string {
 	return string(C.GoBytes(unsafe.Pointer(str.data), (C.int)(str.size)))
 }
 
+func ToGoSlice(str StrView) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(str.data)), (int)(str.size))
+}
+
 func KeyToGoString(key StrView) string {
 	return ToGoString(key)
+}
+
+func KeyToGoSlice(key StrView) []byte {
+	return ToGoSlice(key)
 }
 
 func ValueToGoString(value C.turtlekv_ValueView) string {
@@ -38,6 +43,35 @@ func ValueToGoString(value C.turtlekv_ValueView) string {
 		return string(C.GoBytes(unsafe.Pointer(value.data), (C.int)(value.size)))
 	}
 	return ""
+}
+
+func ValueToGoSlice(value C.turtlekv_ValueView) []byte {
+	if value.kind == C.TURTLEKV_VALUE_KIND_PUT {
+		return unsafe.Slice((*byte)(unsafe.Pointer(value.data)), (int)(value.size))
+	}
+	return nil
+}
+
+func StrToKey(str string) C.turtlekv_KeyView {
+	var key C.turtlekv_KeyView
+	key.data = C.CString(str)
+	key.size = (C.size_t)(len(str))
+	return key
+}
+
+func BytesToKey(raw_bytes []byte) C.turtlekv_KeyView {
+	var key C.turtlekv_KeyView
+	key.data = (*C.char)(unsafe.Pointer(&raw_bytes[0]))
+	key.size = (C.size_t)(len(raw_bytes))
+	return key
+}
+
+func BytesToValue(raw_bytes []byte) C.turtlekv_ValueView {
+	var value C.turtlekv_ValueView
+	value.kind = C.TURTLEKV_VALUE_KIND_PUT
+	value.data = (*C.char)(unsafe.Pointer(&raw_bytes[0]))
+	value.size = (C.size_t)(len(raw_bytes))
+	return value
 }
 
 // ==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -162,13 +196,6 @@ func ConvertStatusOrValueView(result C.turtlekv_StatusOrValueView) (string, erro
 	return "", NewStatus(result.status.code).ToError()
 }
 
-func StrToKey(str string) C.turtlekv_KeyView {
-	var key C.turtlekv_KeyView
-	key.data = C.CString(str)
-	key.size = (C.size_t)(len(str))
-	return key
-}
-
 // ==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 
 type KVStoreOptions struct {
@@ -179,6 +206,13 @@ func DefaultOptions() KVStoreOptions {
 	var options KVStoreOptions
 	options.impl = C.turtlekv_kv_store_options_create_default()
 	return options
+}
+
+func (options KVStoreOptions) Close() {
+	if options.impl != nil {
+		C.turtlekv_kv_store_options_destroy(options.impl)
+		options.impl = nil
+	}
 }
 
 func (options KVStoreOptions) Len() int {
@@ -229,6 +263,295 @@ func (options KVStoreOptions) SetBool(name string, value bool) error {
 	return ConvertStatus(C.turtlekv_kv_store_options_set_bool(options.impl, C.CString(name), (C.bool)(value)))
 }
 
+func (options KVStoreOptions) GetBTreeMode() bool {
+	b, err := options.GetBool("b_tree_mode")
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+func (options KVStoreOptions) SetBTreeMode(b bool) {
+	err := options.SetBool("b_tree_mode", b)
+	if err != nil {
+		panic(err)
+	}
+}
+func (options KVStoreOptions) GetBufferLevelTrim() uint64 {
+	n, err := options.GetUInt("buffer_level_trim")
+	if err != nil {
+		panic(err)
+	}
+	return n
+}
+func (options KVStoreOptions) SetBufferLevelTrim(n uint64) {
+	err := options.SetUInt("buffer_level_trim", n)
+	if err != nil {
+		panic(err)
+	}
+}
+func (options KVStoreOptions) GetCacheSizeBytes() uint64 {
+	n, err := options.GetUInt("cache_size_bytes")
+	if err != nil {
+		panic(err)
+	}
+	return n
+}
+func (options KVStoreOptions) SetCacheSizeBytes(n uint64) {
+	err := options.SetUInt("cache_size_bytes", n)
+	if err != nil {
+		panic(err)
+	}
+}
+func (options KVStoreOptions) GetCacheSizeMB() uint64 {
+	n, err := options.GetUInt("cache_size_mb")
+	if err != nil {
+		panic(err)
+	}
+	return n
+}
+func (options KVStoreOptions) SetCacheSizeMB(n uint64) {
+	err := options.SetUInt("cache_size_mb", n)
+	if err != nil {
+		panic(err)
+	}
+}
+func (options KVStoreOptions) GetCheckpointDistance() uint64 {
+	n, err := options.GetUInt("chi")
+	if err != nil {
+		panic(err)
+	}
+	return n
+}
+func (options KVStoreOptions) SetCheckpointDistance(n uint64) {
+	err := options.SetUInt("chi", n)
+	if err != nil {
+		panic(err)
+	}
+}
+func (options KVStoreOptions) GetCheckpointPipeline() bool {
+	b, err := options.GetBool("checkpoint_pipeline")
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+func (options KVStoreOptions) SetCheckpointPipeline(b bool) {
+	err := options.SetBool("checkpoint_pipeline", b)
+	if err != nil {
+		panic(err)
+	}
+}
+func (options KVStoreOptions) GetFilterBits() uint64 {
+	n, err := options.GetUInt("filter_bits")
+	if err != nil {
+		panic(err)
+	}
+	return n
+}
+func (options KVStoreOptions) SetFilterBits(n uint64) {
+	err := options.SetUInt("filter_bits", n)
+	if err != nil {
+		panic(err)
+	}
+}
+func (options KVStoreOptions) GetInitialCapacityBytes() uint64 {
+	n, err := options.GetUInt("initial_capacity_bytes")
+	if err != nil {
+		panic(err)
+	}
+	return n
+}
+func (options KVStoreOptions) SetInitialCapacityBytes(n uint64) {
+	err := options.SetUInt("initial_capacity_bytes", n)
+	if err != nil {
+		panic(err)
+	}
+}
+func (options KVStoreOptions) GetInitialCapacityGB() uint64 {
+	n, err := options.GetUInt("initial_capacity_gb")
+	if err != nil {
+		panic(err)
+	}
+	return n
+}
+func (options KVStoreOptions) SetInitialCapacityGB(n uint64) {
+	err := options.SetUInt("initial_capacity_gb", n)
+	if err != nil {
+		panic(err)
+	}
+}
+func (options KVStoreOptions) GetKeySizeHint() uint64 {
+	n, err := options.GetUInt("key_size_hint")
+	if err != nil {
+		panic(err)
+	}
+	return n
+}
+func (options KVStoreOptions) SetKeySizeHint(n uint64) {
+	err := options.SetUInt("key_size_hint", n)
+	if err != nil {
+		panic(err)
+	}
+}
+func (options KVStoreOptions) GetLeafSizeBytes() uint64 {
+	n, err := options.GetUInt("leaf_size")
+	if err != nil {
+		panic(err)
+	}
+	return n
+}
+func (options KVStoreOptions) SetLeafSizeBytes(n uint64) {
+	err := options.SetUInt("leaf_size", n)
+	if err != nil {
+		panic(err)
+	}
+}
+func (options KVStoreOptions) GetLeafSizeKB() uint64 {
+	n, err := options.GetUInt("leaf_size_kb")
+	if err != nil {
+		panic(err)
+	}
+	return n
+}
+func (options KVStoreOptions) SetLeafSizeKB(n uint64) {
+	err := options.SetUInt("leaf_size_kb", n)
+	if err != nil {
+		panic(err)
+	}
+}
+func (options KVStoreOptions) GetMaxCapacityBytes() uint64 {
+	n, err := options.GetUInt("max_capacity_bytes")
+	if err != nil {
+		panic(err)
+	}
+	return n
+}
+func (options KVStoreOptions) SetMaxCapacityBytes(n uint64) {
+	err := options.SetUInt("max_capacity_bytes", n)
+	if err != nil {
+		panic(err)
+	}
+}
+func (options KVStoreOptions) GetMaxCapacityGB() uint64 {
+	n, err := options.GetUInt("max_capacity_gb")
+	if err != nil {
+		panic(err)
+	}
+	return n
+}
+func (options KVStoreOptions) SetMaxCapacityGB(n uint64) {
+	err := options.SetUInt("max_capacity_gb", n)
+	if err != nil {
+		panic(err)
+	}
+}
+func (options KVStoreOptions) GetMaxFlush() float64 {
+	d, err := options.GetFloat("max_flush")
+	if err != nil {
+		panic(err)
+	}
+	return d
+}
+func (options KVStoreOptions) SetMaxFlush(d float64) {
+	err := options.SetFloat("max_flush", d)
+	if err != nil {
+		panic(err)
+	}
+}
+func (options KVStoreOptions) GetMinFlush() float64 {
+	d, err := options.GetFloat("min_flush")
+	if err != nil {
+		panic(err)
+	}
+	return d
+}
+func (options KVStoreOptions) SetMinFlush(d float64) {
+	err := options.SetFloat("min_flush", d)
+	if err != nil {
+		panic(err)
+	}
+}
+func (options KVStoreOptions) GetNodeSizeBytes() uint64 {
+	n, err := options.GetUInt("node_size")
+	if err != nil {
+		panic(err)
+	}
+	return n
+}
+func (options KVStoreOptions) SetNodeSizeBytes(n uint64) {
+	err := options.SetUInt("node_size", n)
+	if err != nil {
+		panic(err)
+	}
+}
+func (options KVStoreOptions) GetNodeSizeKB() uint64 {
+	n, err := options.GetUInt("node_size_kb")
+	if err != nil {
+		panic(err)
+	}
+	return n
+}
+func (options KVStoreOptions) SetNodeSizeKB(n uint64) {
+	err := options.SetUInt("node_size_kb", n)
+	if err != nil {
+		panic(err)
+	}
+}
+func (options KVStoreOptions) GetSizeTiered() bool {
+	b, err := options.GetBool("size_tiered")
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+func (options KVStoreOptions) SetSizeTiered(b bool) {
+	err := options.SetBool("size_tiered", b)
+	if err != nil {
+		panic(err)
+	}
+}
+func (options KVStoreOptions) GetValueSizeHint() uint64 {
+	n, err := options.GetUInt("value_size_hint")
+	if err != nil {
+		panic(err)
+	}
+	return n
+}
+func (options KVStoreOptions) SetValueSizeHint(n uint64) {
+	err := options.SetUInt("value_size_hint", n)
+	if err != nil {
+		panic(err)
+	}
+}
+func (options KVStoreOptions) GetWALSizeBytes() uint64 {
+	n, err := options.GetUInt("wal_size_bytes")
+	if err != nil {
+		panic(err)
+	}
+	return n
+}
+func (options KVStoreOptions) SetWALSizeBytes(n uint64) {
+	err := options.SetUInt("wal_size_bytes", n)
+	if err != nil {
+		panic(err)
+	}
+}
+func (options KVStoreOptions) GetWALSizeMB() uint64 {
+	n, err := options.GetUInt("wal_size_mb")
+	if err != nil {
+		panic(err)
+	}
+	return n
+}
+func (options KVStoreOptions) SetWALSizeMB(n uint64) {
+	err := options.SetUInt("wal_size_mb", n)
+	if err != nil {
+		panic(err)
+	}
+}
+
+// TODO [tastolfi 2026-10-21] fill in the rest of these.
+
 // ==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 
 type Runtime struct {
@@ -251,7 +574,10 @@ func InitRuntime() (Runtime, error) {
 }
 
 func (runtime Runtime) Close() {
-	C.turtlekv_runtime_shutdown(runtime.impl)
+	if runtime.impl != nil {
+		C.turtlekv_runtime_shutdown(runtime.impl)
+		runtime.impl = nil
+	}
 }
 
 // ==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -280,7 +606,10 @@ func (runtime Runtime) OpenKVStore(file_path string, options KVStoreOptions) (KV
 }
 
 func (kv KVStore) Close() {
-	C.turtlekv_kv_store_close(kv.impl)
+	if kv.impl != nil {
+		C.turtlekv_kv_store_close(kv.impl)
+		kv.impl = nil
+	}
 }
 
 func (kv KVStore) GetCheckpointDistance() int {
@@ -306,6 +635,7 @@ func (kv KVStore) CreateContext() KVStoreContext {
 func (ctx KVStoreContext) Close() {
 	if ctx.impl != nil {
 		C.turtlekv_kv_store_destroy_context(ctx.impl)
+		ctx.impl = nil
 	}
 }
 
@@ -330,12 +660,29 @@ func (ctx KVStoreContext) Put(key string, value string) error {
 	return ConvertStatus(C.turtlekv_kv_store_put_simple(ctx.impl, C.CString(key), C.CString(value)))
 }
 
+func (ctx KVStoreContext) PutBytes(key []byte, value []byte) error {
+	return ConvertStatus(C.turtlekv_kv_store_put(ctx.impl, BytesToKey(key), BytesToValue(value)))
+}
+
 func (ctx KVStoreContext) Remove(key string) error {
 	return ConvertStatus(C.turtlekv_kv_store_remove_simple(ctx.impl, C.CString(key)))
 }
 
 func (ctx KVStoreContext) Get(key string) (string, error) {
 	return ConvertStatusOrValueView(C.turtlekv_kv_store_get(ctx.impl, StrToKey(key)))
+}
+
+// Zero-copy version of Get.  The returned byte slice is valid until
+// the next operation on the current KVStoreContext, or until
+// KVStoreContext.Close() is called.
+// .
+func (ctx KVStoreContext) GetBytes(key []byte) ([]byte, error) {
+	var result C.turtlekv_StatusOrValueView
+	result = C.turtlekv_kv_store_get(ctx.impl, BytesToKey(key))
+	if result.status.code != STATUS_CODE_OK {
+		return nil, ConvertStatus(result.status)
+	}
+	return ValueToGoSlice(result.value), nil
 }
 
 // ==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -361,6 +708,7 @@ func (ctx KVStoreContext) CreateScanner(min_key string) (KVStoreScanner, error) 
 func (scanner KVStoreScanner) Close() {
 	if scanner.impl != nil {
 		C.turtlekv_kv_store_destroy_scanner(scanner.impl)
+		scanner.impl = nil
 	}
 }
 
