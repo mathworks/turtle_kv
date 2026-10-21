@@ -11,6 +11,7 @@ std::ostream& operator<<(std::ostream& out, const PackedCheckpoint& t)
   return out << "PackedCheckpoint{"                                         //
              << ", .edit_offset_upper_bound=" << t.edit_offset_upper_bound  //
              << ", .tree_root=" << t.new_tree_root                          //
+             << ", .pinned=" << t.is_pinned()                               //
              << ",}";
 }
 
@@ -62,6 +63,27 @@ const PackedCheckpoint* PackedActiveCheckpoints::find(i64 edit_offset) const
     }
   }
   return nullptr;
+}
+
+const PackedCheckpoint* PackedActiveCheckpoints::find_at_or_after(i64 edit_offset) const
+{
+  for (u8 i = 0; i < this->num_active_checkpoints; ++i) {
+    if (this->checkpoints[i].edit_offset_upper_bound >= edit_offset) {
+      return &this->checkpoints[i];
+    }
+  }
+  return nullptr;
+}
+
+usize PackedActiveCheckpoints::num_pinned() const
+{
+  usize count = 0;
+  for (u8 i = 0; i < this->num_active_checkpoints; ++i) {
+    if (this->checkpoints[i].is_pinned()) {
+      ++count;
+    }
+  }
+  return count;
 }
 
 bool PackedActiveCheckpoints::erase(i64 edit_offset)

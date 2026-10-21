@@ -281,8 +281,10 @@ class KVStore : public Table
    * `delete_snapshot`.  At most `MAX_ACTIVE_CHECKPOINTS - 1` checkpoints may be pinned at once;
    * returns kResourceExhausted without creating a checkpoint if that limit has been reached.
    *
-   * Pins are kept in memory only: they are not persisted, and are lost when the KVStore is
-   * closed/reopened.
+   * Pins are durable: the pinned flag is recorded with the checkpoint itself, so it is persisted
+   * when the checkpoint is committed and survives the KVStore being closed/reopened.  If there are
+   * no edits since the latest checkpoint, no new checkpoint is created; the latest checkpoint is
+   * returned if it is already pinned, otherwise kFailedPrecondition is returned.
    */
   StatusOr<Snapshot> create_snapshot(bool pin = false) noexcept;
 
@@ -475,19 +477,6 @@ class KVStore : public Table
   /** \brief Blocks the caller until recovery has either finished or failed.
    */
   Status wait_for_recovery() const noexcept;
-
-  /** \brief Pins the snapshot/checkpoint identified by the given EditOffset (see
-   * `create_snapshot`).  Pinning an already-pinned checkpoint is a no-op.
-   *
-   * Returns kNotFound if no checkpoint exists at that offset, and kResourceExhausted if the pin
-   * limit has been reached.
-   */
-  Status pin_snapshot(EditOffset checkpoint_edit_offset) noexcept;
-
-  /** \brief Unpins the snapshot/checkpoint identified by the given EditOffset, making it eligible
-   * for eviction again.  Returns kNotFound if it is not pinned.
-   */
-  Status unpin_snapshot(EditOffset checkpoint_edit_offset) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 

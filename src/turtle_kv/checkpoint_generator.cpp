@@ -7,6 +7,8 @@
 #include <batteries/env.hpp>
 #include <batteries/status.hpp>
 
+#include <algorithm>
+
 namespace turtle_kv {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -208,11 +210,26 @@ StatusOr<std::unique_ptr<CheckpointJob>> CheckpointGenerator::finalize_checkpoin
   {
     std::lock_guard<std::mutex> lock{this->checkpoint_mutex_};
 
+    const i64 new_edit_offset = this->base_checkpoint_.edit_offset_upper_bound().value();
+
+    // Satisfy all pending pin requests that this checkpoint covers.  Several requests may be
+    // satisfied by the same checkpoint; they share a single pin.
+    //
+    const auto satisfied = std::remove_if(this->pending_pins_.begin(),
+                                          this->pending_pins_.end(),
+                                          [new_edit_offset](i64 min_edit_offset) {
+                                            return min_edit_offset <= new_edit_offset;
+                                          });
+    const bool pinned = (satisfied != this->pending_pins_.end());
+    this->pending_pins_.erase(satisfied, this->pending_pins_.end());
+
     this->make_room_for_new_checkpoint();
 
     this->active_checkpoints_.push_back(PackedCheckpoint{
-        .edit_offset_upper_bound = this->base_checkpoint_.edit_offset_upper_bound().value(),
+        .edit_offset_upper_bound = new_edit_offset,
         .new_tree_root = llfs::PackedPageId::from(this->base_checkpoint_.root_id()),
+        .flags = pinned ? PackedCheckpoint::kFlagPinned : u8{0},
+        .reserved_ = {},
     });
 
     checkpoint_job->active_checkpoints.emplace(
@@ -270,54 +287,57 @@ Status CheckpointGenerator::delete_checkpoint(EditOffset edit_offset) noexcept
     return {batt::StatusCode::kNotFound};
   }
 
-  this->pinned_checkpoints_.erase(edit_offset.value());
-
   return OkStatus();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status CheckpointGenerator::pin_checkpoint(EditOffset edit_offset) noexcept
+Status CheckpointGenerator::request_pin(EditOffset min_edit_offset) noexcept
 {
   std::lock_guard<std::mutex> lock{this->checkpoint_mutex_};
 
-  if (!this->active_checkpoints_.find(edit_offset.value())) {
-    return {batt::StatusCode::kNotFound};
+  // If a checkpoint at or past `min_edit_offset` has already been finalized, the targeted
+  // checkpoint can no longer be pinned at finalize time.  The newest checkpoint is never deleted or
+  // evicted without being replaced by a newer one, so checking it is sufficient.
+  //
+  if (this->active_checkpoints_.num_active_checkpoints > 0 &&
+      this->active_checkpoints_.newest().edit_offset_upper_bound >= min_edit_offset.value()) {
+    return {batt::StatusCode::kAborted};
   }
 
-  if (this->pinned_checkpoints_.contains(edit_offset.value())) {
-    return OkStatus();
-  }
-
-  if (this->pinned_checkpoints_.size() >= MAX_ACTIVE_CHECKPOINTS - 1) {
+  if (this->active_checkpoints_.num_pinned() + this->pending_pins_.size() >=
+      MAX_ACTIVE_CHECKPOINTS - 1) {
     return {batt::StatusCode::kResourceExhausted};
   }
 
-  this->pinned_checkpoints_.insert(edit_offset.value());
+  this->pending_pins_.push_back(min_edit_offset.value());
 
   return OkStatus();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status CheckpointGenerator::unpin_checkpoint(EditOffset edit_offset) noexcept
+void CheckpointGenerator::cancel_pin_request(EditOffset min_edit_offset) noexcept
 {
   std::lock_guard<std::mutex> lock{this->checkpoint_mutex_};
 
-  if (this->pinned_checkpoints_.erase(edit_offset.value()) == 0) {
-    return {batt::StatusCode::kNotFound};
+  const auto pending =
+      std::find(this->pending_pins_.begin(), this->pending_pins_.end(), min_edit_offset.value());
+  if (pending != this->pending_pins_.end()) {
+    this->pending_pins_.erase(pending);
+    return;
   }
 
-  return OkStatus();
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-usize CheckpointGenerator::num_pinned_checkpoints() noexcept
-{
-  std::lock_guard<std::mutex> lock{this->checkpoint_mutex_};
-
-  return this->pinned_checkpoints_.size();
+  // The request was already satisfied; unpin the checkpoint it pinned (the oldest one at or after
+  // `min_edit_offset`).
+  //
+  for (u8 i = 0; i < this->active_checkpoints_.num_active_checkpoints; ++i) {
+    PackedCheckpoint& checkpoint = this->active_checkpoints_.checkpoints[i];
+    if (checkpoint.edit_offset_upper_bound >= min_edit_offset.value()) {
+      checkpoint.set_pinned(false);
+      return;
+    }
+  }
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -333,7 +353,7 @@ void CheckpointGenerator::make_room_for_new_checkpoint() noexcept
   //
   for (u8 i = 0; i < MAX_ACTIVE_CHECKPOINTS; ++i) {
     const i64 offset = this->active_checkpoints_.checkpoints[i].edit_offset_upper_bound;
-    if (!this->pinned_checkpoints_.contains(offset)) {
+    if (!this->active_checkpoints_.checkpoints[i].is_pinned()) {
       BATT_CHECK(this->active_checkpoints_.erase(offset));
       return;
     }

@@ -24,7 +24,6 @@
 #include <batteries/small_vec.hpp>
 
 #include <mutex>
-#include <unordered_set>
 
 namespace turtle_kv {
 
@@ -105,27 +104,31 @@ class CheckpointGenerator
 
   /** \brief Removes the checkpoint identified by `edit_offset` from the active set.  The change is
    * included in the PackedActiveCheckpoints of the next finalized checkpoint, and becomes durable
-   * when that checkpoint is committed.  If the checkpoint is pinned, it is also unpinned.
+   * when that checkpoint is committed.  If the checkpoint is pinned, its pin is released.
    */
   Status delete_checkpoint(EditOffset edit_offset) noexcept;
 
-  /** \brief Pins the active checkpoint identified by `edit_offset` so that it is never evicted to
-   * make room for a new checkpoint.  Pinning an already-pinned checkpoint is a no-op.  Pins are
-   * kept in memory only; they are not persisted and are lost on restart.
+  /** \brief Requests that the next finalized checkpoint whose edit_offset_upper_bound is at least
+   * `min_edit_offset` be pinned, so that it is never evicted to make room for a new checkpoint.
+   * The pinned flag is set when that checkpoint is finalized, so it is included in the
+   * checkpoint's own PackedActiveCheckpoints record and becomes durable when it is committed.
    *
-   * Returns kNotFound if the checkpoint is not in the active set, and kResourceExhausted if
-   * `MAX_ACTIVE_CHECKPOINTS - 1` checkpoints are already pinned.
+   * The request must be made before the checkpoint it targets can be finalized (i.e., before the
+   * MemTable containing `min_edit_offset` is sealed).  A request that is never satisfied must be
+   * released via `cancel_pin_request`.
+   *
+   * Returns kAborted if a checkpoint at or past `min_edit_offset` has already been finalized (the
+   * caller lost a race with the MemTable being sealed, and may retry), and kResourceExhausted if
+   * the number of pinned checkpoints plus pending requests has reached
+   * `MAX_ACTIVE_CHECKPOINTS - 1`.
    */
-  Status pin_checkpoint(EditOffset edit_offset) noexcept;
+  Status request_pin(EditOffset min_edit_offset) noexcept;
 
-  /** \brief Unpins the checkpoint identified by `edit_offset`, making it eligible for eviction
-   * again.  Returns kNotFound if the checkpoint is not pinned.
+  /** \brief Releases a pin requested via `request_pin(min_edit_offset)`.  If the request is still
+   * pending, it is dropped.  Otherwise the checkpoint it pinned is unpinned; like deletion, this
+   * becomes durable when the next checkpoint is committed.
    */
-  Status unpin_checkpoint(EditOffset edit_offset) noexcept;
-
-  /** \brief Returns the number of currently pinned checkpoints.
-   */
-  usize num_pinned_checkpoints() noexcept;
+  void cancel_pin_request(EditOffset min_edit_offset) noexcept;
 
   llfs::PageCacheJob& page_cache_job() const
   {
@@ -226,21 +229,22 @@ class CheckpointGenerator
   //
   llfs::Volume& checkpoint_volume_;
 
-  // Guards active_checkpoints_ and pinned_checkpoints_, ensuring mutual exclusion between
-  // finalize_checkpoint (update thread) and delete/pin/unpin_checkpoint (caller threads).  Should
-  // not be held across blocking calls.
+  // Guards active_checkpoints_ and pending_pins_, ensuring mutual exclusion between
+  // finalize_checkpoint (update thread) and delete_checkpoint/request_pin/cancel_pin_request
+  // (caller threads).  Should not be held across blocking calls.
   //
   std::mutex checkpoint_mutex_;
 
   // The set of currently active (retained) checkpoints, in sorted order by
-  // edit_offset_upper_bound.
+  // edit_offset_upper_bound.  Pinned checkpoints are marked via PackedCheckpoint::flags.
   //
   PackedActiveCheckpoints active_checkpoints_{};
 
-  // The edit_offset_upper_bound of each pinned checkpoint in active_checkpoints_.  At most
-  // MAX_ACTIVE_CHECKPOINTS - 1 entries, so there is always an unpinned checkpoint to evict.
+  // The `min_edit_offset` of each pending `request_pin` call.  The number of pinned checkpoints
+  // plus pending requests is at most MAX_ACTIVE_CHECKPOINTS - 1, so there is always an unpinned
+  // checkpoint to evict.
   //
-  std::unordered_set<i64> pinned_checkpoints_;
+  batt::SmallVec<i64, MAX_ACTIVE_CHECKPOINTS> pending_pins_;
 
   // Used to cancel pending checkpoint updates on halt().
   //

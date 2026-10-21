@@ -1698,3 +1698,64 @@ TEST_F(PinSnapshotTest, RepinningSameCheckpointIsNoOp)
 
   this->ShutdownKVStore(kv_store);
 }
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+TEST_F(PinSnapshotTest, PinsSurviveRecovery)
+{
+  std::filesystem::path test_kv_store_dir =
+      this->data_root / "turtle_kv_Test" / "pin_snapshot_recovery";
+
+  i64 next_key = 0;
+  const i64 pinned_key = 1;
+  Optional<EditOffset> pinned;
+
+  {
+    StatusOr<std::unique_ptr<KVStore>> open_result = this->open("pin_snapshot_recovery");
+    ASSERT_TRUE(open_result.ok()) << BATT_INSPECT(open_result.status());
+    std::unique_ptr<KVStore>& kv_store = *open_result;
+
+    StatusOr<EditOffset> unpinned = write_and_snapshot(*kv_store, next_key++, /*pin=*/false);
+    ASSERT_TRUE(unpinned.ok()) << BATT_INSPECT(unpinned.status());
+
+    StatusOr<EditOffset> offset = write_and_snapshot(*kv_store, next_key++, /*pin=*/true);
+    ASSERT_TRUE(offset.ok()) << BATT_INSPECT(offset.status());
+    pinned = *offset;
+
+    this->ShutdownKVStore(kv_store);
+  }
+
+  // Recover; the pin must have been persisted with the checkpoint.
+  //
+  {
+    StatusOr<std::unique_ptr<KVStore>> recovered_kv_store =
+        turtle_kv::KVStore::open(test_kv_store_dir,
+                                 this->kv_store_config.tree_options,
+                                 this->runtime_options);
+    ASSERT_TRUE(recovered_kv_store.ok()) << BATT_INSPECT(recovered_kv_store.status());
+    std::unique_ptr<KVStore>& kv_store = *recovered_kv_store;
+
+    kv_store->set_checkpoint_distance(99999999);
+
+    // Roll over the active set; the recovered pinned checkpoint is retained.
+    //
+    for (u64 n = 0; n < 2 * turtle_kv::MAX_ACTIVE_CHECKPOINTS; ++n) {
+      StatusOr<EditOffset> offset = write_and_snapshot(*kv_store, next_key++, /*pin=*/false);
+      ASSERT_TRUE(offset.ok()) << BATT_INSPECT(offset.status());
+    }
+
+    EXPECT_TRUE(snapshot_has_key(*kv_store, *pinned, pinned_key));
+
+    // The recovered pin still counts against the pin limit.
+    //
+    for (u64 n = 1; n < turtle_kv::MAX_ACTIVE_CHECKPOINTS - 1; ++n) {
+      StatusOr<EditOffset> offset = write_and_snapshot(*kv_store, next_key++, /*pin=*/true);
+      ASSERT_TRUE(offset.ok()) << "n=" << n << " " << BATT_INSPECT(offset.status());
+    }
+
+    EXPECT_EQ(write_and_snapshot(*kv_store, next_key++, /*pin=*/true).status(),
+              batt::StatusCode::kResourceExhausted);
+
+    this->ShutdownKVStore(kv_store);
+  }
+}
