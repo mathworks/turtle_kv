@@ -64,18 +64,26 @@ const PackedCheckpoint* PackedActiveCheckpoints::find(i64 edit_offset) const
   return nullptr;
 }
 
-bool PackedActiveCheckpoints::erase(i64 edit_offset)
+batt::Status PackedActiveCheckpoints::erase(i64 edit_offset)
 {
+  if (this->num_active_checkpoints == 0) {
+    return {batt::StatusCode::kNotFound};
+  }
+
+  if (edit_offset == this->newest().edit_offset_upper_bound) {
+    return {batt::StatusCode::kFailedPrecondition};
+  }
+
   for (u8 i = 0; i < this->num_active_checkpoints; ++i) {
     if (this->checkpoints[i].edit_offset_upper_bound == edit_offset) {
       for (u8 j = i; j + 1 < this->num_active_checkpoints; ++j) {
         this->checkpoints[j] = this->checkpoints[j + 1];
       }
       this->num_active_checkpoints = this->num_active_checkpoints - 1;
-      return true;
+      return batt::OkStatus();
     }
   }
-  return false;
+  return {batt::StatusCode::kNotFound};
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

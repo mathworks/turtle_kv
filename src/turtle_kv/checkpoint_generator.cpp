@@ -256,17 +256,7 @@ Status CheckpointGenerator::delete_checkpoint(EditOffset edit_offset) noexcept
 {
   std::lock_guard<std::mutex> lock{this->checkpoint_mutex_};
 
-  if (this->active_checkpoints_.num_active_checkpoints == 0) {
-    return {batt::StatusCode::kNotFound};
-  }
-
-  if (edit_offset.value() == this->active_checkpoints_.newest().edit_offset_upper_bound) {
-    return {batt::StatusCode::kFailedPrecondition};
-  }
-
-  if (!this->active_checkpoints_.erase(edit_offset.value())) {
-    return {batt::StatusCode::kNotFound};
-  }
+  BATT_REQUIRE_OK(this->active_checkpoints_.erase(edit_offset.value()));
 
   return OkStatus();
 }

@@ -50,7 +50,7 @@ struct PackedActiveCheckpoints {
   // Removes the checkpoint with the given `edit_offset` from the active set, shifting subsequent
   // elements down. Returns true if the checkpoint was found and removed, false otherwise.
   //
-  bool erase(i64 edit_offset);
+  batt::Status erase(i64 edit_offset);
 };
 
 BATT_STATIC_ASSERT_EQ(sizeof(PackedActiveCheckpoints),
