@@ -98,14 +98,15 @@ class CheckpointGenerator
    * `push_batch` MUST be called at least once after construction and before this call, and at least
    * once in between calls to `finalize_checkpoint` so that we have a new checkpoint to finalize.
    *
-   * `pin_request_count` is the number of pin requests (see `reserve_pin`) satisfied by this
-   * checkpoint; if non-zero, the checkpoint is pinned.
+   * If `pin` is true, the checkpoint is pinned, unless `MAX_ACTIVE_CHECKPOINTS - 1` checkpoints
+   * are already pinned (only possible if a pin was requested past `check_pin_limit`, e.g. by a
+   * failed `create_snapshot` during shutdown), in which case it is left unpinned.
    */
   StatusOr<std::unique_ptr<CheckpointJob>> finalize_checkpoint(
       batt::Grant&& token,
       std::shared_ptr<batt::Grant::Issuer>&& token_issuer,
       llfs::PageCacheOvercommit& overcommit,
-      usize pin_request_count = 0) noexcept;
+      bool pin = false) noexcept;
 
   /** \brief Removes the checkpoint identified by `edit_offset` from the active set.  The change is
    * included in the PackedActiveCheckpoints of the next finalized checkpoint, and becomes durable
@@ -113,18 +114,11 @@ class CheckpointGenerator
    */
   Status delete_checkpoint(EditOffset edit_offset) noexcept;
 
-  /** \brief Reserves one pin against the pin limit, ahead of a pin request being attached to a
-   * MemTable.  The reservation is consumed when the checkpoint created from that MemTable is
-   * finalized (see `finalize_checkpoint`), or must be released via `release_pin_reservation`.
-   *
-   * Returns kResourceExhausted if the number of pinned checkpoints plus outstanding reservations
-   * has reached `MAX_ACTIVE_CHECKPOINTS - 1`.
+  /** \brief Returns kResourceExhausted if `MAX_ACTIVE_CHECKPOINTS - 1` checkpoints are already
+   * pinned, so no more can be pinned.  The limit is enforced authoritatively by
+   * `finalize_checkpoint`; this lets callers fail early, before forcing a checkpoint.
    */
-  Status reserve_pin() noexcept;
-
-  /** \brief Releases a reservation made by `reserve_pin` that will not be consumed.
-   */
-  void release_pin_reservation() noexcept;
+  Status check_pin_limit() noexcept;
 
   /** \brief Unpins the checkpoint identified by `edit_offset`.  Like deletion, this becomes
    * durable when the next checkpoint is committed.  Returns kNotFound if the checkpoint is not in
@@ -231,22 +225,16 @@ class CheckpointGenerator
   //
   llfs::Volume& checkpoint_volume_;
 
-  // Guards active_checkpoints_ and pending_pin_count_, ensuring mutual exclusion between
-  // finalize_checkpoint (update thread) and delete_checkpoint/reserve_pin/unpin_checkpoint
-  // (caller threads).  Should not be held across blocking calls.
+  // Guards active_checkpoints_, ensuring mutual exclusion between finalize_checkpoint (update
+  // thread) and delete_checkpoint/check_pin_limit/unpin_checkpoint (caller threads).  Should not be held across blocking calls.
   //
   std::mutex checkpoint_mutex_;
 
   // The set of currently active (retained) checkpoints, in sorted order by
-  // edit_offset_upper_bound.  Pinned checkpoints are marked via PackedCheckpoint::flags.
+  // edit_offset_upper_bound.  Pinned checkpoints are marked via PackedCheckpoint::flags.  At most
+  // MAX_ACTIVE_CHECKPOINTS - 1 are pinned, so there is always an unpinned checkpoint to evict.
   //
   PackedActiveCheckpoints active_checkpoints_{};
-
-  // The number of outstanding `reserve_pin` reservations.  The number of pinned checkpoints plus
-  // this count is at most MAX_ACTIVE_CHECKPOINTS - 1, so there is always an unpinned checkpoint to
-  // evict.
-  //
-  usize pending_pin_count_ = 0;
 
   // Used to cancel pending checkpoint updates on halt().
   //

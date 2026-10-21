@@ -93,12 +93,12 @@ class DeltaBatch
     return *this->mem_table_;
   }
 
-  /** \brief Returns the number of pin requests recorded on this batch's MemTable (see
+  /** \brief Returns whether a pin request was recorded on this batch's MemTable (see
    * MemTable::request_pin).
    */
-  usize pin_request_count() const noexcept
+  bool has_pin_request() const noexcept
   {
-    return this->mem_table_->pin_request_count();
+    return this->mem_table_->has_pin_request();
   }
 
   /** \brief Returns whether the batch contains page references ("big" values).

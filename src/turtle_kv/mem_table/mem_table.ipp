@@ -202,10 +202,10 @@ template <MemTableStorage StorageT, MemTableAllocationTracker AllocationTrackerT
 bool BasicMemTable<StorageT, AllocationTrackerT>::finalize(
     const SmallFn<EditOffset()>& get_next_edit_offset) noexcept
 {
-  // Stop accepting pin requests; any request accepted before this point will be handed off to the
+  // Stop accepting pin requests; a request accepted before this point will be handed off to the
   // checkpoint pipeline along with this MemTable.
   //
-  this->pin_requests_.fetch_or(Self::kPinRequestsClosed);
+  this->pin_state_.fetch_or(Self::kPinRequestsClosed);
 
   // Update committed_bytes_total first, so that if prepared_bytes_total_ is observed to have the
   // kFinalizedMask bit set, we can assume committed_bytes_total_ does too.
@@ -287,16 +287,15 @@ bool BasicMemTable<StorageT, AllocationTrackerT>::is_finalized() const
 template <MemTableStorage StorageT, MemTableAllocationTracker AllocationTrackerT>
 bool BasicMemTable<StorageT, AllocationTrackerT>::request_pin() noexcept
 {
-  u32 observed = this->pin_requests_.load();
-  for (;;) {
-    if ((observed & Self::kPinRequestsClosed) != 0) {
-      return false;
-    }
-    if (this->pin_requests_.compare_exchange_weak(observed,
-                                                  observed + Self::kPinRequestIncrement)) {
-      return true;
-    }
+  u32 expected = 0;
+  if (this->pin_state_.compare_exchange_strong(expected, Self::kPinRequested)) {
+    return true;
   }
+
+  // Only finalize() can race with us; there is never more than one pin request per MemTable.
+  //
+  BATT_CHECK_EQ(expected, Self::kPinRequestsClosed);
+  return false;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -304,17 +303,15 @@ bool BasicMemTable<StorageT, AllocationTrackerT>::request_pin() noexcept
 template <MemTableStorage StorageT, MemTableAllocationTracker AllocationTrackerT>
 bool BasicMemTable<StorageT, AllocationTrackerT>::cancel_pin_request() noexcept
 {
-  u32 observed = this->pin_requests_.load();
-  for (;;) {
-    if ((observed & Self::kPinRequestsClosed) != 0) {
-      return false;
-    }
-    BATT_CHECK_GE(observed, Self::kPinRequestIncrement);
-    if (this->pin_requests_.compare_exchange_weak(observed,
-                                                  observed - Self::kPinRequestIncrement)) {
-      return true;
-    }
+  u32 expected = Self::kPinRequested;
+  if (this->pin_state_.compare_exchange_strong(expected, 0)) {
+    return true;
   }
+
+  // Only finalize() can race with us.
+  //
+  BATT_CHECK_EQ(expected, Self::kPinRequested | Self::kPinRequestsClosed);
+  return false;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

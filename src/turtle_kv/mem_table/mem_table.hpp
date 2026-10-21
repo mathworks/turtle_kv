@@ -137,15 +137,14 @@ class BasicMemTable : public MemTableBase
   static constexpr i64 kFinalizedMask = i64{1} << 62;  // single bit, non-negative.
   static_assert(kFinalizedMask > 0);
 
-  /** \brief Bit set in MemTable::pin_requests_ by MemTable::finalize(); once set, no more pin
-   * requests are accepted.
+  /** \brief Bit set in MemTable::pin_state_ by MemTable::finalize(); once set, the pin request
+   * can no longer be made or withdrawn.
    */
   static constexpr u32 kPinRequestsClosed = 1;
 
-  /** \brief Amount added to MemTable::pin_requests_ for each pin request (the count is stored
-   * above the kPinRequestsClosed bit).
+  /** \brief Bit set in MemTable::pin_state_ by MemTable::request_pin().
    */
-  static constexpr u32 kPinRequestIncrement = 2;
+  static constexpr u32 kPinRequested = 2;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -220,22 +219,23 @@ class BasicMemTable : public MemTableBase
   /** \brief Requests that the checkpoint created from this MemTable be pinned.  Returns false
    * (recording nothing) if the MemTable has already been finalized.
    *
-   * Requests are accepted and closed atomically with respect to `finalize()`, so a successful
-   * request is always seen by the checkpoint pipeline via `pin_request_count()`.
+   * The request is accepted and closed atomically with respect to `finalize()`, so a successful
+   * request is always seen by the checkpoint pipeline via `has_pin_request()`.  At most one pin
+   * request may be made per MemTable (callers are serialized; see KVStore::create_snapshot).
    */
   [[nodiscard]] bool request_pin() noexcept;
 
-  /** \brief Withdraws one request made by `request_pin()`.  Returns false if the MemTable has
+  /** \brief Withdraws the request made by `request_pin()`.  Returns false if the MemTable has
    * already been finalized, in which case the request can no longer be withdrawn.
    */
   [[nodiscard]] bool cancel_pin_request() noexcept;
 
-  /** \brief Returns the number of pin requests accepted before this MemTable was finalized.  Only
+  /** \brief Returns whether a pin request was accepted before this MemTable was finalized.  Only
    * meaningful after `finalize()` has been called.
    */
-  usize pin_request_count() const noexcept
+  bool has_pin_request() const noexcept
   {
-    return this->pin_requests_.load() / Self::kPinRequestIncrement;
+    return (this->pin_state_.load() & Self::kPinRequested) != 0;
   }
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -357,10 +357,10 @@ class BasicMemTable : public MemTableBase
   //
   std::atomic<i64> edit_offset_upper_bound_{this->edit_offset_lower_bound_.value() - 1};
 
-  // The kPinRequestsClosed bit is set by finalize(); the remaining bits count the pin requests
-  // accepted before then (see request_pin).
+  // The kPinRequestsClosed bit is set by finalize(); the kPinRequested bit is set if a pin request
+  // was accepted before then (see request_pin).
   //
-  std::atomic<u32> pin_requests_{0};
+  std::atomic<u32> pin_state_{0};
 
   // The maximum size of a batch (produced post-finalization by MemTable::BatchCompactor).  Passed
   // in at construction time; used to calculate when the MemTable is full.

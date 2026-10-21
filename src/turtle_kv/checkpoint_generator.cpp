@@ -175,7 +175,7 @@ StatusOr<std::unique_ptr<CheckpointJob>> CheckpointGenerator::finalize_checkpoin
     batt::Grant&& token,
     std::shared_ptr<batt::Grant::Issuer>&& token_issuer,
     llfs::PageCacheOvercommit& overcommit,
-    usize pin_request_count) noexcept
+    bool pin) noexcept
 {
   VLOG(1) << "CheckpointGenerator::finalize_checkpoint()";
 
@@ -209,18 +209,24 @@ StatusOr<std::unique_ptr<CheckpointJob>> CheckpointGenerator::finalize_checkpoin
   {
     std::lock_guard<std::mutex> lock{this->checkpoint_mutex_};
 
-    // Consume the reservations for the pin requests this checkpoint satisfies.  Several requests
-    // may be satisfied by the same checkpoint; they share a single pin.
+    // Enforce the pin limit, so that make_room_for_new_checkpoint can always evict an unpinned
+    // checkpoint.  create_snapshot checks the limit up front, so this only fails if a pin request
+    // outlived a failed create_snapshot (e.g. during shutdown); that caller has already reported
+    // failure, so leaving the checkpoint unpinned is safe.
     //
-    BATT_CHECK_LE(pin_request_count, this->pending_pin_count_);
-    this->pending_pin_count_ -= pin_request_count;
+    const bool pinned =
+        pin && this->active_checkpoints_.num_pinned() < MAX_ACTIVE_CHECKPOINTS - 1;
+    if (pin && !pinned) {
+      LOG(WARNING) << "Pin limit reached; checkpoint will not be pinned: "
+                   << BATT_INSPECT(edit_offset_upper_bound);
+    }
 
     this->make_room_for_new_checkpoint();
 
     this->active_checkpoints_.push_back(PackedCheckpoint{
         .edit_offset_upper_bound = this->base_checkpoint_.edit_offset_upper_bound().value(),
         .new_tree_root = llfs::PackedPageId::from(this->base_checkpoint_.root_id()),
-        .flags = (pin_request_count > 0) ? PackedCheckpoint::kFlagPinned : u8{0},
+        .flags = pinned ? PackedCheckpoint::kFlagPinned : u8{0},
         .reserved_ = {},
     });
 
@@ -284,28 +290,15 @@ Status CheckpointGenerator::delete_checkpoint(EditOffset edit_offset) noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status CheckpointGenerator::reserve_pin() noexcept
+Status CheckpointGenerator::check_pin_limit() noexcept
 {
   std::lock_guard<std::mutex> lock{this->checkpoint_mutex_};
 
-  if (this->active_checkpoints_.num_pinned() + this->pending_pin_count_ >=
-      MAX_ACTIVE_CHECKPOINTS - 1) {
+  if (this->active_checkpoints_.num_pinned() >= MAX_ACTIVE_CHECKPOINTS - 1) {
     return {batt::StatusCode::kResourceExhausted};
   }
 
-  this->pending_pin_count_ += 1;
-
   return OkStatus();
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-void CheckpointGenerator::release_pin_reservation() noexcept
-{
-  std::lock_guard<std::mutex> lock{this->checkpoint_mutex_};
-
-  BATT_CHECK_GT(this->pending_pin_count_, 0u);
-  this->pending_pin_count_ -= 1;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

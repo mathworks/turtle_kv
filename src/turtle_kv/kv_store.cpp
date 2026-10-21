@@ -1072,9 +1072,11 @@ StatusOr<Snapshot> KVStore::create_snapshot(bool pin) noexcept
 
   BATT_REQUIRE_OK(this->wait_for_recovery());
 
+  // Serialized, so the previous call's pin (if any) is already in the active set and counted.
+  //
   std::unique_lock<std::mutex> lock{this->create_pinned_snapshot_mutex_};
 
-  BATT_REQUIRE_OK(this->checkpoint_generator_->reserve_pin());
+  BATT_REQUIRE_OK(this->checkpoint_generator_->check_pin_limit());
 
   // Attach the pin request to the active MemTable; it applies to exactly the checkpoint created
   // from that MemTable.  request_pin only fails if the MemTable was finalized after we observed it
@@ -1099,7 +1101,6 @@ StatusOr<Snapshot> KVStore::create_snapshot(bool pin) noexcept
   // If the active MemTable is empty, there is no new checkpoint to pin.
   //
   if (!pin_requested) {
-    this->checkpoint_generator_->release_pin_reservation();
     return {batt::StatusCode::kFailedPrecondition};
   }
 
@@ -1123,18 +1124,13 @@ StatusOr<Snapshot> KVStore::create_snapshot(bool pin) noexcept
     return this->get_snapshot(checkpoint_edit_offset);
   }();
 
-  if (!snapshot.ok()) {
-    if (mem_table->cancel_pin_request()) {
-      // The MemTable was never finalized, so the reservation will not be consumed.
-      //
-      this->checkpoint_generator_->release_pin_reservation();
-    } else if (mem_table->is_finalized()) {
-      // The pin was (or will be) applied when the MemTable's checkpoint is finalized.  If that
-      // already happened, unpin it; otherwise (e.g. the KVStore is halting) it may remain pinned.
-      //
-      this->checkpoint_generator_->unpin_checkpoint(mem_table->edit_offset_upper_bound())
-          .IgnoreError();
-    }
+  // On failure, withdraw the pin request.  If that fails, the MemTable was already finalized, so
+  // the pin was (or will be) applied when its checkpoint is finalized.  If that already happened,
+  // unpin it; otherwise (e.g. the KVStore is halting) it may remain pinned.
+  //
+  if (!snapshot.ok() && !mem_table->cancel_pin_request()) {
+    this->checkpoint_generator_->unpin_checkpoint(mem_table->edit_offset_upper_bound())
+        .IgnoreError();
   }
   return snapshot;
 }
@@ -1679,14 +1675,9 @@ StatusOr<std::unique_ptr<CheckpointJob>> KVStore::apply_batch_to_checkpoint(
       delta_batch ? batt::bool_status_from(delta_batch->batch_id().is_last_in_group())
                   : BoolStatus::kUnknown;
 
-  // Pin requests on a MemTable apply to the checkpoint that includes its last batch.
+  // A pin request on a MemTable applies to the checkpoint that includes its last batch.
   //
-  const usize pin_request_count =
-      (checkpoint_after == BoolStatus::kTrue) ? delta_batch->pin_request_count() : 0;
-
-  // create_snapshot(/*pin=*/true) is serialized, so a MemTable carries at most one pin request.
-  //
-  BATT_CHECK_LE(pin_request_count, 1u);
+  const bool pin = (checkpoint_after == BoolStatus::kTrue) && delta_batch->has_pin_request();
 
   // Allow the page cache to be temporarily overcommitted so we don't deadlock; but if overcommit is
   // triggered, we immediately truncate the checkpoint to try to unpin pages ASAP.
@@ -1749,7 +1740,7 @@ StatusOr<std::unique_ptr<CheckpointJob>> KVStore::apply_batch_to_checkpoint(
                                     std::move(checkpoint_token),
                                     batt::make_copy(this->checkpoint_token_pool_),
                                     overcommit,
-                                    pin_request_count));
+                                    pin));
 
   BATT_REQUIRE_OK(checkpoint_job);
 
