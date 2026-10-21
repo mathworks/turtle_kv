@@ -23,6 +23,8 @@
 #include <batteries/metrics/metric_collectors.hpp>
 #include <batteries/small_vec.hpp>
 
+#include <mutex>
+
 namespace turtle_kv {
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
@@ -99,6 +101,12 @@ class CheckpointGenerator
       batt::Grant&& token,
       std::shared_ptr<batt::Grant::Issuer>&& token_issuer,
       llfs::PageCacheOvercommit& overcommit) noexcept;
+
+  /** \brief Removes the checkpoint identified by `edit_offset` from the active set.  The change is
+   * included in the PackedActiveCheckpoints of the next finalized checkpoint, and becomes durable
+   * when that checkpoint is committed.
+   */
+  Status delete_checkpoint(EditOffset edit_offset) noexcept;
 
   llfs::PageCacheJob& page_cache_job() const
   {
@@ -193,6 +201,11 @@ class CheckpointGenerator
   // Used to allocate grants directly from checkpoint_volume.
   //
   llfs::Volume& checkpoint_volume_;
+
+  // Guards active_checkpoints_, ensuring mutual exclusion between finalize_checkpoint (update
+  // thread) and delete_checkpoint (caller thread).  Should not be held across blocking calls.
+  //
+  std::mutex checkpoint_mutex_;
 
   // The set of currently active (retained) checkpoints, in sorted order by
   // edit_offset_upper_bound.
