@@ -428,7 +428,7 @@ u64 query_page_loader_reset_every_n()
       this->tree_options_,
       this->page_cache(),
       batt::make_copy(this->filter_page_write_state_),
-      batt::Toggle<State>::Reader { this->state_ } -> base_checkpoint_->clone(),
+      batt::Toggle<State>::Reader{this->state_}->base_checkpoint_->clone(),
       *this->checkpoint_volume_,
       recovered_active_checkpoints);
 
@@ -647,7 +647,8 @@ boost::intrusive_ptr<MemTable> KVStore::create_mem_table(EditOffset edit_offset_
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<EditOffset> KVStore::put(const KeyView& key,
+StatusOr<EditOffset> KVStore::put(ThreadContext& thread_context,
+                                  const KeyView& key,
                                   const ValueView& value,
                                   Optional<WriteOptions> write_options) noexcept
 {
@@ -668,7 +669,6 @@ StatusOr<EditOffset> KVStore::put(const KeyView& key,
       batt::Toggle<State>::Reader state_reader{this->state_};
 
       MemTable* const observed_mem_table = state_reader->mem_table_.get();
-      ThreadContext& thread_context = this->per_thread_.get(this);
 
 #if TURTLE_KV_PROFILE_UPDATES
       LatencyTimer put_mem_table_timer{Every2ToTheConst<8>{}, this->metrics_.put_memtable_latency};
@@ -738,9 +738,11 @@ StatusOr<EditOffset> KVStore::put(const KeyView& key,
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status KVStore::put(const KeyView& key, const ValueView& value) noexcept /*override*/
+Status KVStore::put(ThreadContext& thread_context,
+                    const KeyView& key,
+                    const ValueView& value) noexcept /*override*/
 {
-  return this->put(key, value, /*write_options=*/None).status();
+  return this->put(thread_context, key, value, /*write_options=*/None).status();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -927,7 +929,12 @@ llfs::PageLoader& KVStore::ThreadContext::get_page_loader()
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<ValueView> KVStore::get(const KeyView& key) noexcept /*override*/
+template <typename GetThreadContextFn>
+  requires(std::is_invocable_v<GetThreadContextFn> &&
+           std::is_convertible_v<std::invoke_result_t<GetThreadContextFn>, KVStore::ThreadContext&>)
+StatusOr<ValueView> KVStore::get_impl(
+    const KeyView& key,
+    GetThreadContextFn&& get_thread_context_fn) noexcept /*override*/
 {
   batt::Toggle<State>::Reader state_reader{this->state_};
   const State& state = *state_reader;
@@ -987,7 +994,7 @@ StatusOr<ValueView> KVStore::get(const KeyView& key) noexcept /*override*/
 
   // If we haven't resolved the query by this point, we must search the current checkpoint tree.
   //
-  ThreadContext& thread_context = this->per_thread_.get(this);
+  ThreadContext& thread_context = BATT_FORWARD(get_thread_context_fn)();
 
   ++thread_context.query_count;
   thread_context.query_result_storage.emplace();
@@ -1022,6 +1029,25 @@ StatusOr<ValueView> KVStore::get(const KeyView& key) noexcept /*override*/
   // Failed to find a value for the key.
   //
   return value_from_checkpoint.status();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+StatusOr<ValueView> KVStore::get(const KeyView& key) noexcept /*override*/
+{
+  return this->get_impl(key, [this]() -> ThreadContext& {
+    return this->per_thread_.get(this);
+  });
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+StatusOr<ValueView> KVStore::get(ThreadContext& thread_context,
+                                 const KeyView& key) noexcept /*override*/
+{
+  return this->get_impl(key, [&thread_context]() -> ThreadContext& {
+    return thread_context;
+  });
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -1128,7 +1154,14 @@ StatusOr<usize> KVStore::scan_keys(const KeyView& min_key,
 //
 Status KVStore::remove(const KeyView& key) noexcept /*override*/
 {
-  return this->put(key, ValueView::deleted());
+  return this->remove(this->per_thread_.get(this), key);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Status KVStore::remove(ThreadContext& thread_context, const KeyView& key) noexcept /*override*/
+{
+  return this->put(thread_context, key, ValueView::deleted());
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -1136,7 +1169,16 @@ Status KVStore::remove(const KeyView& key) noexcept /*override*/
 StatusOr<EditOffset> KVStore::remove(const KeyView& key,
                                      Optional<WriteOptions> write_options) noexcept
 {
-  return this->put(key, ValueView::deleted(), write_options);
+  return this->remove(this->per_thread_.get(this), key, write_options);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+StatusOr<EditOffset> KVStore::remove(ThreadContext& thread_context,
+                                     const KeyView& key,
+                                     Optional<WriteOptions> write_options) noexcept
+{
+  return this->put(thread_context, key, ValueView::deleted(), write_options);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -1484,9 +1526,9 @@ void KVStore::mem_table_batch_scanner_thread_main()
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename Fn>
-requires std::invocable<Fn, std::unique_ptr<DeltaBatch>> Status
-KVStore::scan_mem_table_to_build_batches(boost::intrusive_ptr<MemTable>&& mem_table,
-                                         Fn&& consume_fn)
+  requires std::invocable<Fn, std::unique_ptr<DeltaBatch>>
+Status KVStore::scan_mem_table_to_build_batches(boost::intrusive_ptr<MemTable>&& mem_table,
+                                                Fn&& consume_fn)
 {
   MemTable::BatchCompactor batch_compactor{*mem_table,
                                            /*byte_size_limit=*/this->tree_options_.flush_size()};
@@ -1874,7 +1916,7 @@ void KVStore::collect_stats(
             "016mb",
             "032mb",
             "064mb",
-        };
+    };
 
     auto& page_device = llfs::PageDeviceMetrics::instance();
 
