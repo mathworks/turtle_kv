@@ -1072,7 +1072,7 @@ StatusOr<Snapshot> KVStore::create_snapshot(bool pin) noexcept
 
   BATT_REQUIRE_OK(this->wait_for_recovery());
 
-  // Serialized, so the previous call's pin (if any) is already in the active set and counted.
+  // Prevent multiple pins_requests on a single MemTable by making this a critical section.
   //
   std::unique_lock<std::mutex> lock{this->create_pinned_snapshot_mutex_};
 
@@ -1090,6 +1090,9 @@ StatusOr<Snapshot> KVStore::create_snapshot(bool pin) noexcept
       mem_table = state_reader->mem_table_;
     }
     if (mem_table->empty()) {
+      // TODO: [Gabe Bornstein 10/22/26] Is it better to continue looping, and wait for a put, or to
+      // break and fail here?
+      //
       break;
     }
     if (mem_table->request_pin()) {
@@ -1109,6 +1112,7 @@ StatusOr<Snapshot> KVStore::create_snapshot(bool pin) noexcept
   //
   StatusOr<Snapshot> snapshot = [&]() -> StatusOr<Snapshot> {
     BATT_REQUIRE_OK(this->finalize_mem_table(batt::make_copy(mem_table)));
+    BATT_CHECK(mem_table->is_finalized());
 
     const EditOffset checkpoint_edit_offset = mem_table->edit_offset_upper_bound();
     BATT_REQUIRE_OK(this->wait_for_checkpoint(checkpoint_edit_offset));
@@ -1124,11 +1128,11 @@ StatusOr<Snapshot> KVStore::create_snapshot(bool pin) noexcept
     return this->get_snapshot(checkpoint_edit_offset);
   }();
 
-  // On failure, withdraw the pin request.  If that fails, the MemTable was already finalized, so
-  // the pin was (or will be) applied when its checkpoint is finalized.  If that already happened,
-  // unpin it; otherwise (e.g. the KVStore is halting) it may remain pinned.
+  // finalize_mem_table always finalizes the MemTable (closing its pin request) before it can fail,
+  // so the pin was (or will be) applied when its checkpoint is finalized.  If that already
+  // happened, unpin it; otherwise (e.g. the KVStore is halting) it may remain pinned.
   //
-  if (!snapshot.ok() && !mem_table->cancel_pin_request()) {
+  if (!snapshot.ok()) {
     this->checkpoint_generator_->unpin_checkpoint(mem_table->edit_offset_upper_bound())
         .IgnoreError();
   }

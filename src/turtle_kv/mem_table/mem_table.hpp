@@ -220,15 +220,11 @@ class BasicMemTable : public MemTableBase
    * (recording nothing) if the MemTable has already been finalized.
    *
    * The request is accepted and closed atomically with respect to `finalize()`, so a successful
-   * request is always seen by the checkpoint pipeline via `has_pin_request()`.  At most one pin
+   * request is always seen by the checkpoint pipeline via `has_pin_request()`.  A request cannot
+   * be withdrawn.  At most one pin
    * request may be made per MemTable (callers are serialized; see KVStore::create_snapshot).
    */
   [[nodiscard]] bool request_pin() noexcept;
-
-  /** \brief Withdraws the request made by `request_pin()`.  Returns false if the MemTable has
-   * already been finalized, in which case the request can no longer be withdrawn.
-   */
-  [[nodiscard]] bool cancel_pin_request() noexcept;
 
   /** \brief Returns whether a pin request was accepted before this MemTable was finalized.  Only
    * meaningful after `finalize()` has been called.

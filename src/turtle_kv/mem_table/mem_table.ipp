@@ -301,22 +301,6 @@ bool BasicMemTable<StorageT, AllocationTrackerT>::request_pin() noexcept
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <MemTableStorage StorageT, MemTableAllocationTracker AllocationTrackerT>
-bool BasicMemTable<StorageT, AllocationTrackerT>::cancel_pin_request() noexcept
-{
-  u32 expected = Self::kPinRequested;
-  if (this->pin_state_.compare_exchange_strong(expected, 0)) {
-    return true;
-  }
-
-  // Only finalize() can race with us.
-  //
-  BATT_CHECK_EQ(expected, Self::kPinRequested | Self::kPinRequestsClosed);
-  return false;
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-template <MemTableStorage StorageT, MemTableAllocationTracker AllocationTrackerT>
 Status BasicMemTable<StorageT, AllocationTrackerT>::put_recovered_slot(
     FirstVisitToBlock first_visit,
     StorageBlockBuffer* block_buffer,
