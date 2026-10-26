@@ -1113,7 +1113,7 @@ Status KVStore::delete_snapshot(EditOffset checkpoint_edit_offset) noexcept
   // TODO: [Gabe Bornstein 10/12/26] commit_checkpoint does this. Do we need delete_snapshot to do
   // it too?
   //
-  BATT_REQUIRE_OK(this->wait_for_recovery());
+  BATT_CHECK_OK(this->wait_for_recovery());
 
   // Deletion is lazy: we only remove the checkpoint from the generator's active set.  The next
   // finalized CheckpointJob picks up the deletion, and State is updated (from that job) when it is

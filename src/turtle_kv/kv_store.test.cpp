@@ -1350,9 +1350,9 @@ class DeleteSnapshotTest
  public:
   void SetUp() override
   {
-    KVStoreTest::SetUp();
+    this->KVStoreTest::SetUp();
 
-    DeleteSnapshotParams params = GetParam();
+    DeleteSnapshotParams params = this->GetParam();
     this->num_keys = params.num_keys;
     this->num_checkpoints = params.num_checkpoints;
   }
@@ -1436,7 +1436,8 @@ TEST_P(DeleteSnapshotTest, DeleteSnapshot)
   //
   {
     Status status = kv_store->delete_snapshot(checkpoint_offsets.back());
-    EXPECT_FALSE(status.ok()) << "Deleting the newest checkpoint should fail";
+    EXPECT_EQ(status, batt::StatusCode::kFailedPrecondition)
+        << "Deleting the newest checkpoint should fail";
   }
 
   // Delete all non-newest, non-expired checkpoints.
