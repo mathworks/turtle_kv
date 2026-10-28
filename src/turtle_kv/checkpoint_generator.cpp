@@ -209,26 +209,24 @@ StatusOr<std::unique_ptr<CheckpointJob>> CheckpointGenerator::finalize_checkpoin
   {
     std::lock_guard<std::mutex> lock{this->checkpoint_mutex_};
 
-    // Enforce the pin limit, so that make_room_for_new_checkpoint can always evict an unpinned
-    // checkpoint.  create_snapshot checks the limit up front, so this only fails if a pin request
-    // outlived a failed create_snapshot (e.g. during shutdown); that caller has already reported
-    // failure, so leaving the checkpoint unpinned is safe.
-    //
-    const bool pinned =
-        pin && this->active_checkpoints_.num_pinned() < MAX_ACTIVE_CHECKPOINTS - 1;
-    if (pin && !pinned) {
-      LOG(WARNING) << "Pin limit reached; checkpoint will not be pinned: "
-                   << BATT_INSPECT(edit_offset_upper_bound);
-    }
-
-    this->make_room_for_new_checkpoint();
-
-    this->active_checkpoints_.push_back(PackedCheckpoint{
+    const PackedCheckpoint new_checkpoint{
         .edit_offset_upper_bound = this->base_checkpoint_.edit_offset_upper_bound().value(),
         .new_tree_root = llfs::PackedPageId::from(this->base_checkpoint_.root_id()),
-        .flags = pinned ? PackedCheckpoint::kFlagPinned : u8{0},
-        .reserved_ = {},
-    });
+    };
+
+    BATT_REQUIRE_OK(this->active_checkpoints_.set_base_checkpoint(new_checkpoint));
+
+    // create_snapshot checks the pin limit up front, so this only fails if a pin request outlived
+    // a failed create_snapshot (e.g. during shutdown); that caller has already reported failure,
+    // so leaving the checkpoint unpinned is safe.
+    //
+    if (pin) {
+      Status pin_status = this->active_checkpoints_.pin(new_checkpoint);
+      if (!pin_status.ok()) {
+        LOG(WARNING) << "Failed to pin checkpoint; it will not be pinned: "
+                     << BATT_INSPECT(edit_offset_upper_bound) << BATT_INSPECT(pin_status);
+      }
+    }
 
     checkpoint_job->active_checkpoints.emplace(
         llfs::PackAsVariant<CheckpointLogEvent, PackedActiveCheckpoints>{
@@ -273,19 +271,7 @@ Status CheckpointGenerator::delete_checkpoint(EditOffset edit_offset) noexcept
 {
   std::lock_guard<std::mutex> lock{this->checkpoint_mutex_};
 
-  if (this->active_checkpoints_.num_active_checkpoints == 0) {
-    return {batt::StatusCode::kNotFound};
-  }
-
-  if (edit_offset.value() == this->active_checkpoints_.newest().edit_offset_upper_bound) {
-    return {batt::StatusCode::kFailedPrecondition};
-  }
-
-  if (!this->active_checkpoints_.erase(edit_offset.value())) {
-    return {batt::StatusCode::kNotFound};
-  }
-
-  return OkStatus();
+  return this->active_checkpoints_.unpin(edit_offset.value());
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -294,50 +280,11 @@ Status CheckpointGenerator::check_pin_limit() noexcept
 {
   std::lock_guard<std::mutex> lock{this->checkpoint_mutex_};
 
-  if (this->active_checkpoints_.num_pinned() >= MAX_ACTIVE_CHECKPOINTS - 1) {
+  if (this->active_checkpoints_.is_pin_limit_reached()) {
     return {batt::StatusCode::kResourceExhausted};
   }
 
   return OkStatus();
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-Status CheckpointGenerator::unpin_checkpoint(EditOffset edit_offset) noexcept
-{
-  std::lock_guard<std::mutex> lock{this->checkpoint_mutex_};
-
-  for (u8 i = 0; i < this->active_checkpoints_.num_active_checkpoints; ++i) {
-    PackedCheckpoint& checkpoint = this->active_checkpoints_.checkpoints[i];
-    if (checkpoint.edit_offset_upper_bound == edit_offset.value() && checkpoint.is_pinned()) {
-      checkpoint.set_pinned(false);
-      return OkStatus();
-    }
-  }
-
-  return {batt::StatusCode::kNotFound};
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-void CheckpointGenerator::make_room_for_new_checkpoint() noexcept
-{
-  if (this->active_checkpoints_.num_active_checkpoints < MAX_ACTIVE_CHECKPOINTS) {
-    return;
-  }
-
-  // Evict the oldest *unpinned* checkpoint ourselves, so that push_back doesn't evict the oldest
-  // one (which may be pinned).
-  //
-  for (u8 i = 0; i < MAX_ACTIVE_CHECKPOINTS; ++i) {
-    const i64 offset = this->active_checkpoints_.checkpoints[i].edit_offset_upper_bound;
-    if (!this->active_checkpoints_.checkpoints[i].is_pinned()) {
-      BATT_CHECK(this->active_checkpoints_.erase(offset));
-      return;
-    }
-  }
-
-  BATT_PANIC() << "There must always be at least one unpinned checkpoint";
 }
 
 }  // namespace turtle_kv

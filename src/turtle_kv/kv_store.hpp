@@ -269,34 +269,33 @@ class KVStore : public Table
    */
   Status wait_for_checkpoint(EditOffset target) noexcept;
 
-  /** \brief Returns a read-only Snapshot for the checkpoint identified by the given EditOffset.
-   * Returns kNotFound if no checkpoint exists at that offset.
+  /** \brief Returns a read-only Snapshot for the pinned checkpoint (i.e. one created by
+   * `create_snapshot`) identified by the given EditOffset.  Returns kNotFound if no such checkpoint
+   * exists.
    */
   StatusOr<Snapshot> get_snapshot(EditOffset checkpoint_edit_offset) noexcept;
 
-  /** \brief Forces a checkpoint of all edits up to this point, waits for it to be durably
-   * committed, and returns a read-only Snapshot of that checkpoint.
+  /** \brief Forces a checkpoint of all edits up to this point, pins it, waits for it to be
+   * durably committed, and returns a read-only Snapshot of that checkpoint.
    *
-   * If `pin` is true, the checkpoint is also pinned: it is not evicted when new checkpoints are
-   * created (the oldest *unpinned* checkpoint is evicted instead) until it is deleted via
-   * `delete_snapshot`.  At most `MAX_ACTIVE_CHECKPOINTS - 1` checkpoints may be pinned at once;
-   * returns kResourceExhausted without creating a checkpoint if that limit has been reached.
+   * A pinned checkpoint is retained when new checkpoints are created, until it is deleted via
+   * `delete_snapshot`.  At most `MAX_PINNED_CHECKPOINTS` checkpoints may be pinned at once; returns
+   * kResourceExhausted without creating a checkpoint if that limit has been reached.
    *
-   * Pins are durable: the pinned flag is recorded with the checkpoint itself, so it is persisted
-   * when the checkpoint is committed and survives the KVStore being closed/reopened.  Pinned calls
-   * are serialized, and each one pins exactly the checkpoint created from the active MemTable.  If
-   * there are no edits since the latest checkpoint, no checkpoint is created or pinned and
-   * kFailedPrecondition is returned.
+   * Pins are durable: the pinned checkpoint is recorded in the same PackedActiveCheckpoints record
+   * as the checkpoint itself, so it is persisted when the checkpoint is committed and survives the
+   * KVStore being closed/reopened.  Calls are serialized, and each one pins exactly the checkpoint
+   * created from the active MemTable.  If there are no edits since the latest checkpoint, no
+   * checkpoint is created or pinned and kFailedPrecondition is returned.
    */
-  StatusOr<Snapshot> create_snapshot(bool pin = false) noexcept;
+  StatusOr<Snapshot> create_snapshot() noexcept;
 
-  /** \brief Returns Snapshots for all currently active checkpoints, ordered oldest to newest.
+  /** \brief Returns Snapshots for all pinned checkpoints, ordered oldest to newest.
    */
   StatusOr<std::vector<Snapshot>> get_active_snapshots() noexcept;
 
-  /** \brief Deletes the snapshot/checkpoint identified by the given EditOffset.
-   * Returns kNotFound if no checkpoint exists at that offset.  If the checkpoint is pinned, its pin
-   * is released.
+  /** \brief Deletes (unpins) the snapshot identified by the given EditOffset.  Returns kNotFound
+   * if no pinned checkpoint exists at that offset.
    *
    * Deletion is lazy: the checkpoint remains visible (e.g. via `get_snapshot`) until the next
    * checkpoint is committed, at which point the deletion takes effect both in memory and durably.
@@ -350,7 +349,8 @@ class KVStore : public Table
      */
     Optional<Checkpoint> base_checkpoint_;
 
-    /** \brief The set of all active (retained) packed checkpoints.
+    /** \brief The base checkpoint and the pinned checkpoints, as of the latest committed
+     * checkpoint.
      */
     PackedActiveCheckpoints active_checkpoints_;
 
@@ -544,10 +544,10 @@ class KVStore : public Table
 
   usize checkpoint_batch_count_;
 
-  // Serializes `create_snapshot(/*pin=*/true)` calls, so at most one pin request is ever attached
-  // to a given MemTable (and therefore to a given checkpoint).
+  // Serializes `create_snapshot` calls, so at most one pin request is ever attached to a given
+  // MemTable (and therefore to a given checkpoint).
   //
-  std::mutex create_pinned_snapshot_mutex_;
+  std::mutex create_snapshot_mutex_;
 
   //----- --- -- -  -  -   -
   // Checkpoint Flush State.

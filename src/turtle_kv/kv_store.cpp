@@ -1033,11 +1033,11 @@ StatusOr<Snapshot> KVStore::get_snapshot(EditOffset checkpoint_edit_offset) noex
   {
     batt::Toggle<State>::Reader state_reader{this->state_};
 
-    const PackedCheckpoint* found =
-        state_reader->active_checkpoints_.find(checkpoint_edit_offset.value());
-    if (!found) {
+    StatusOr<PackedCheckpoint> found =
+        state_reader->active_checkpoints_.find_pinned(checkpoint_edit_offset.value());
+    if (!found.ok()) {
       VLOG(1) << "Checkpoint with EditOffset: " << checkpoint_edit_offset << " does not exist.";
-      return {batt::StatusCode::kNotFound};
+      return found.status();
     }
     packed = *found;
 
@@ -1057,24 +1057,13 @@ StatusOr<Snapshot> KVStore::get_snapshot(EditOffset checkpoint_edit_offset) noex
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<Snapshot> KVStore::create_snapshot(bool pin) noexcept
+StatusOr<Snapshot> KVStore::create_snapshot() noexcept
 {
-  if (!pin) {
-    BATT_ASSIGN_OK_RESULT(EditOffset checkpoint_edit_offset, this->force_checkpoint());
-
-    // force_checkpoint only finalizes the active MemTable; the checkpoint itself is committed
-    // asynchronously, so wait for it to become active before looking it up.
-    //
-    BATT_REQUIRE_OK(this->wait_for_checkpoint(checkpoint_edit_offset));
-
-    return this->get_snapshot(checkpoint_edit_offset);
-  }
-
   BATT_REQUIRE_OK(this->wait_for_recovery());
 
   // Prevent multiple pins_requests on a single MemTable by making this a critical section.
   //
-  std::unique_lock<std::mutex> lock{this->create_pinned_snapshot_mutex_};
+  std::unique_lock<std::mutex> lock{this->create_snapshot_mutex_};
 
   BATT_REQUIRE_OK(this->checkpoint_generator_->check_pin_limit());
 
@@ -1116,15 +1105,9 @@ StatusOr<Snapshot> KVStore::create_snapshot(bool pin) noexcept
 
     const EditOffset checkpoint_edit_offset = mem_table->edit_offset_upper_bound();
     BATT_REQUIRE_OK(this->wait_for_checkpoint(checkpoint_edit_offset));
-    {
-      batt::Toggle<State>::Reader state_reader{this->state_};
 
-      const PackedCheckpoint* found =
-          state_reader->active_checkpoints_.find(checkpoint_edit_offset.value());
-      if (!found || !found->is_pinned()) {
-        return {batt::StatusCode::kNotFound};
-      }
-    }
+    // get_snapshot only finds pinned checkpoints, so this fails if the pin was not applied.
+    //
     return this->get_snapshot(checkpoint_edit_offset);
   }();
 
@@ -1133,7 +1116,7 @@ StatusOr<Snapshot> KVStore::create_snapshot(bool pin) noexcept
   // happened, unpin it; otherwise (e.g. the KVStore is halting) it may remain pinned.
   //
   if (!snapshot.ok()) {
-    this->checkpoint_generator_->unpin_checkpoint(mem_table->edit_offset_upper_bound())
+    this->checkpoint_generator_->delete_checkpoint(mem_table->edit_offset_upper_bound())
         .IgnoreError();
   }
   return snapshot;
@@ -1148,12 +1131,8 @@ StatusOr<std::vector<Snapshot>> KVStore::get_active_snapshots() noexcept
   {
     batt::Toggle<State>::Reader state_reader{this->state_};
 
-    const auto& active = state_reader->active_checkpoints_;
-    packed_checkpoints.reserve(active.num_active_checkpoints);
-
-    for (u8 i = 0; i < active.num_active_checkpoints; ++i) {
-      packed_checkpoints.push_back(active.checkpoints[i]);
-    }
+    const auto pinned = state_reader->active_checkpoints_.pinned();
+    packed_checkpoints.assign(pinned.begin(), pinned.end());
 
     BATT_CHECK(state_reader->base_checkpoint_.has_value());
     checkpoint_lock.emplace(state_reader->base_checkpoint_->clone_checkpoint_lock());
@@ -1185,7 +1164,7 @@ Status KVStore::delete_snapshot(EditOffset checkpoint_edit_offset) noexcept
   //
   BATT_REQUIRE_OK(this->wait_for_recovery());
 
-  // Deletion is lazy: we only remove the checkpoint from the generator's active set.  The next
+  // Deletion is lazy: we only unpin the checkpoint in the generator's active set.  The next
   // finalized CheckpointJob picks up the deletion, and State is updated (from that job) when it is
   // committed.  Updating State here would race with in-flight jobs finalized before the deletion,
   // whose commit would bring the deleted checkpoint back.
@@ -1503,8 +1482,8 @@ using CheckpointEvent = llfs::PackedVariant<turtle_kv::PackedActiveCheckpoints>;
     llfs::StatusOr<usize> n_slots_visited = reader->visit_typed_next(
         batt::WaitForResource::kFalse,
         [&state](const llfs::SlotParse& s,
-                 const turtle_kv::PackedActiveCheckpoints& active_checkpoints) {
-          BATT_CHECK_GT(active_checkpoints.num_active_checkpoints.value(), 0u);
+                 const turtle_kv::PackedActiveCheckpoints& active_checkpoints) -> Status {
+          BATT_REQUIRE_OK(active_checkpoints.base());
           state.active = active_checkpoints;
           state.slot = s;
           return llfs::OkStatus();
@@ -1526,12 +1505,13 @@ using CheckpointEvent = llfs::PackedVariant<turtle_kv::PackedActiveCheckpoints>;
     llfs::Volume& checkpoint_volume,
     RecoveredActiveCheckpointsState state)
 {
-  if (state.active.num_active_checkpoints == 0) {
+  StatusOr<PackedCheckpoint> base = state.active.base();
+  if (base.status() == batt::StatusCode::kNotFound) {
     return Checkpoint::make_empty();
   }
-  const PackedCheckpoint& newest = state.active.newest();
+  BATT_REQUIRE_OK(base);
 
-  return Checkpoint::recover(checkpoint_volume, state.slot, newest);
+  return Checkpoint::recover(checkpoint_volume, state.slot, *base);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
