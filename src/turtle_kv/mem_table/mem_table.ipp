@@ -202,10 +202,13 @@ template <MemTableStorage StorageT, MemTableAllocationTracker AllocationTrackerT
 bool BasicMemTable<StorageT, AllocationTrackerT>::finalize(
     const SmallFn<EditOffset()>& get_next_edit_offset) noexcept
 {
-  // Stop accepting pin requests; a request accepted before this point will be handed off to the
-  // checkpoint pipeline along with this MemTable.
+  // Stop accepting checkpoint requests; a request accepted before this point will be handed off to
+  // the checkpoint pipeline along with this MemTable.
   //
-  this->pin_state_.fetch_or(Self::kPinRequestsClosed);
+  {
+    absl::MutexLock lock{&this->checkpoint_requests_mutex_};
+    this->checkpoint_requests_closed_ = true;
+  }
 
   // Update committed_bytes_total first, so that if prepared_bytes_total_ is observed to have the
   // kFinalizedMask bit set, we can assume committed_bytes_total_ does too.
@@ -287,15 +290,37 @@ bool BasicMemTable<StorageT, AllocationTrackerT>::is_finalized() const
 template <MemTableStorage StorageT, MemTableAllocationTracker AllocationTrackerT>
 bool BasicMemTable<StorageT, AllocationTrackerT>::request_pin() noexcept
 {
-  u32 expected = 0;
-  if (this->pin_state_.compare_exchange_strong(expected, Self::kPinRequested)) {
-    return true;
+  absl::MutexLock lock{&this->checkpoint_requests_mutex_};
+
+  if (this->checkpoint_requests_closed_) {
+    return false;
   }
 
-  // Only finalize() can race with us; there is never more than one pin request per MemTable.
+  // Callers are serialized; there is never more than one checkpoint request per MemTable.
   //
-  BATT_CHECK_EQ(expected, Self::kPinRequestsClosed);
-  return false;
+  BATT_CHECK(this->checkpoint_requests_.empty());
+
+  this->checkpoint_requests_.pin = true;
+  return true;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <MemTableStorage StorageT, MemTableAllocationTracker AllocationTrackerT>
+bool BasicMemTable<StorageT, AllocationTrackerT>::request_unpin(EditOffset edit_offset) noexcept
+{
+  absl::MutexLock lock{&this->checkpoint_requests_mutex_};
+
+  if (this->checkpoint_requests_closed_) {
+    return false;
+  }
+
+  // Callers are serialized; there is never more than one checkpoint request per MemTable.
+  //
+  BATT_CHECK(this->checkpoint_requests_.empty());
+
+  this->checkpoint_requests_.unpin = edit_offset;
+  return true;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

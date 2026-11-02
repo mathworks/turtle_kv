@@ -4,6 +4,7 @@
 #include <turtle_kv/checkpoint_generator_metrics.hpp>
 #include <turtle_kv/checkpoint_job.hpp>
 #include <turtle_kv/checkpoint_lock.hpp>
+#include <turtle_kv/checkpoint_requests.hpp>
 #include <turtle_kv/delta_batch.hpp>
 
 #include <turtle_kv/tree/tree_options.hpp>
@@ -23,7 +24,6 @@
 #include <batteries/metrics/metric_collectors.hpp>
 #include <batteries/small_vec.hpp>
 
-#include <mutex>
 
 namespace turtle_kv {
 
@@ -98,28 +98,18 @@ class CheckpointGenerator
    * `push_batch` MUST be called at least once after construction and before this call, and at least
    * once in between calls to `finalize_checkpoint` so that we have a new checkpoint to finalize.
    *
-   * The new checkpoint becomes the base checkpoint.  If `pin` is true, it is also pinned, unless
-   * `MAX_PINNED_CHECKPOINTS` checkpoints are already pinned (only possible if a pin was requested
-   * past `check_pin_limit`, e.g. by a failed `create_snapshot` during shutdown), in which case it
-   * is left unpinned.
+   * The new checkpoint becomes the base checkpoint.  If `requests.unpin` is set, the checkpoint at
+   * that offset is unpinned.  If `requests.pin` is true, the new checkpoint is pinned, unless
+   * `MAX_PINNED_CHECKPOINTS` checkpoints are already pinned (only possible if a pin request
+   * outlived a failed `KVStore::create_snapshot`, e.g. during shutdown), in which case it is left
+   * unpinned.  Both changes are included in the new checkpoint's PackedActiveCheckpoints, and
+   * become durable when it is committed.
    */
   StatusOr<std::unique_ptr<CheckpointJob>> finalize_checkpoint(
       batt::Grant&& token,
       std::shared_ptr<batt::Grant::Issuer>&& token_issuer,
       llfs::PageCacheOvercommit& overcommit,
-      bool pin = false) noexcept;
-
-  /** \brief Unpins the checkpoint identified by `edit_offset`.  The change is included in the
-   * PackedActiveCheckpoints of the next finalized checkpoint, and becomes durable when that
-   * checkpoint is committed.  Returns kNotFound if the checkpoint is not pinned.
-   */
-  Status delete_checkpoint(EditOffset edit_offset) noexcept;
-
-  /** \brief Returns kResourceExhausted if `MAX_PINNED_CHECKPOINTS` checkpoints are already
-   * pinned, so no more can be pinned.  The limit is enforced authoritatively by
-   * `finalize_checkpoint`; this lets callers fail early, before forcing a checkpoint.
-   */
-  Status check_pin_limit() noexcept;
+      const CheckpointRequests& requests = {}) noexcept;
 
   llfs::PageCacheJob& page_cache_job() const
   {
@@ -215,13 +205,8 @@ class CheckpointGenerator
   //
   llfs::Volume& checkpoint_volume_;
 
-  // Guards active_checkpoints_, ensuring mutual exclusion between finalize_checkpoint (update
-  // thread) and delete_checkpoint/check_pin_limit (caller threads).  Should not be held across
-  // blocking calls.
-  //
-  std::mutex checkpoint_mutex_;
-
-  // The base checkpoint and the pinned checkpoints.
+  // The base checkpoint and the pinned checkpoints.  Only accessed on the checkpoint update thread
+  // (pin/unpin requests arrive via the MemTable; see finalize_checkpoint).
   //
   PackedActiveCheckpoints active_checkpoints_{};
 

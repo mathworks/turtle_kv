@@ -1061,65 +1061,30 @@ StatusOr<Snapshot> KVStore::create_snapshot() noexcept
 {
   BATT_REQUIRE_OK(this->wait_for_recovery());
 
-  // Prevent multiple pins_requests on a single MemTable by making this a critical section.
-  //
-  std::unique_lock<std::mutex> lock{this->create_snapshot_mutex_};
+  std::unique_lock<std::mutex> lock{this->snapshot_mutex_};
 
-  BATT_REQUIRE_OK(this->checkpoint_generator_->check_pin_limit());
-
-  // Attach the pin request to the active MemTable; it applies to exactly the checkpoint created
-  // from that MemTable.  request_pin only fails if the MemTable was finalized after we observed it
-  // (nothing is recorded in that case), so retry with the new active MemTable.
+  // Fail early if no more checkpoints can be pinned.  The limit is enforced authoritatively by
+  // CheckpointGenerator::finalize_checkpoint.
   //
-  boost::intrusive_ptr<MemTable> mem_table;
-  bool pin_requested = false;
-  for (;;) {
-    {
-      batt::Toggle<State>::Reader state_reader{this->state_};
-      mem_table = state_reader->mem_table_;
-    }
-    if (mem_table->empty()) {
-      // TODO: [Gabe Bornstein 10/22/26] Is it better to continue looping, and wait for a put, or to
-      // break and fail here?
-      //
-      break;
-    }
-    if (mem_table->request_pin()) {
-      pin_requested = true;
-      break;
+  {
+    batt::Toggle<State>::Reader state_reader{this->state_};
+    if (state_reader->active_checkpoints_.is_pin_limit_reached()) {
+      return {batt::StatusCode::kResourceExhausted};
     }
   }
 
-  // If the active MemTable is empty, there is no new checkpoint to pin.
+  BATT_ASSIGN_OK_RESULT(const EditOffset checkpoint_edit_offset,
+                        this->checkpoint_with_request([](MemTable& mem_table) {
+                          return mem_table.request_pin();
+                        }));
+
+  // get_snapshot only finds pinned checkpoints, so this fails if the pin was not applied.
   //
-  if (!pin_requested) {
-    return {batt::StatusCode::kFailedPrecondition};
-  }
-
-  // Finalize the MemTable to force a checkpoint, then wait for that checkpoint (and therefore its
-  // pin) to be durably committed.
+  // TODO: [Gabe Bornstein 11/02/26] If the pin was applied but this (or checkpoint_with_request,
+  // e.g. because the KVStore is halting) fails, the checkpoint remains pinned.  The caller can
+  // still find it via get_active_snapshots and delete it.
   //
-  StatusOr<Snapshot> snapshot = [&]() -> StatusOr<Snapshot> {
-    BATT_REQUIRE_OK(this->finalize_mem_table(batt::make_copy(mem_table)));
-    BATT_CHECK(mem_table->is_finalized());
-
-    const EditOffset checkpoint_edit_offset = mem_table->edit_offset_upper_bound();
-    BATT_REQUIRE_OK(this->wait_for_checkpoint(checkpoint_edit_offset));
-
-    // get_snapshot only finds pinned checkpoints, so this fails if the pin was not applied.
-    //
-    return this->get_snapshot(checkpoint_edit_offset);
-  }();
-
-  // finalize_mem_table always finalizes the MemTable (closing its pin request) before it can fail,
-  // so the pin was (or will be) applied when its checkpoint is finalized.  If that already
-  // happened, unpin it; otherwise (e.g. the KVStore is halting) it may remain pinned.
-  //
-  if (!snapshot.ok()) {
-    this->checkpoint_generator_->delete_checkpoint(mem_table->edit_offset_upper_bound())
-        .IgnoreError();
-  }
-  return snapshot;
+  return this->get_snapshot(checkpoint_edit_offset);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -1159,17 +1124,80 @@ StatusOr<std::vector<Snapshot>> KVStore::get_active_snapshots() noexcept
 //
 Status KVStore::delete_snapshot(EditOffset checkpoint_edit_offset) noexcept
 {
-  // TODO: [Gabe Bornstein 10/12/26] commit_checkpoint does this. Do we need delete_snapshot to do
-  // it too?
-  //
   BATT_REQUIRE_OK(this->wait_for_recovery());
 
-  // Deletion is lazy: we only unpin the checkpoint in the generator's active set.  The next
-  // finalized CheckpointJob picks up the deletion, and State is updated (from that job) when it is
-  // committed.  Updating State here would race with in-flight jobs finalized before the deletion,
-  // whose commit would bring the deleted checkpoint back.
+  std::unique_lock<std::mutex> lock{this->snapshot_mutex_};
+
+  // State reflects all prior pins/unpins while snapshot_mutex_ is held, so only request the unpin
+  // if the checkpoint is currently pinned.
   //
-  return this->checkpoint_generator_->delete_checkpoint(checkpoint_edit_offset);
+  {
+    batt::Toggle<State>::Reader state_reader{this->state_};
+    BATT_REQUIRE_OK(
+        state_reader->active_checkpoints_.find_pinned(checkpoint_edit_offset.value()).status());
+  }
+
+  BATT_REQUIRE_OK(this->checkpoint_with_request([checkpoint_edit_offset](MemTable& mem_table) {
+    return mem_table.request_unpin(checkpoint_edit_offset);
+  }));
+
+  // TODO: [Gabe Bornstein 11/02/26] Consider deleting this check and not verifying this variant
+  // here. Expensive check.
+  //
+  // The checkpoint carrying the unpin has been committed, so the deletion should now be visible.
+  //
+  {
+    batt::Toggle<State>::Reader state_reader{this->state_};
+    if (state_reader->active_checkpoints_.find_pinned(checkpoint_edit_offset.value()).ok()) {
+      LOG(WARNING) << "Checkpoint is still pinned after unpin was committed: "
+                   << BATT_INSPECT(checkpoint_edit_offset);
+      return {batt::StatusCode::kInternal};
+    }
+  }
+
+  return OkStatus();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+StatusOr<EditOffset> KVStore::checkpoint_with_request(
+    const std::function<bool(MemTable&)>& request) noexcept
+{
+  // Attach the request to the active MemTable; it applies to exactly the checkpoint created from
+  // that MemTable.  The request only fails if the MemTable was finalized after we observed it
+  // (nothing is recorded in that case), so retry with the new active MemTable.
+  //
+  boost::intrusive_ptr<MemTable> mem_table;
+  for (;;) {
+    {
+      batt::Toggle<State>::Reader state_reader{this->state_};
+      mem_table = state_reader->mem_table_;
+    }
+    // If the active MemTable is empty, there is no new checkpoint to carry the request.
+    //
+    // TODO: [Gabe Bornstein 10/22/26] Is it better to continue looping, and wait for a put, or to
+    // break and fail here?
+    //
+    if (mem_table->empty()) {
+      return {batt::StatusCode::kFailedPrecondition};
+    }
+    if (request(*mem_table)) {
+      break;
+    }
+  }
+
+  // Finalize the MemTable to force a checkpoint, then wait for that checkpoint (and therefore the
+  // request) to be durably committed.  finalize_mem_table always finalizes the MemTable (closing
+  // its requests) before it can fail, so if it or the wait fails (e.g. the KVStore is halting),
+  // the request may still be carried out.
+  //
+  BATT_REQUIRE_OK(this->finalize_mem_table(batt::make_copy(mem_table)));
+  BATT_CHECK(mem_table->is_finalized());
+
+  const EditOffset checkpoint_edit_offset = mem_table->edit_offset_upper_bound();
+  BATT_REQUIRE_OK(this->wait_for_checkpoint(checkpoint_edit_offset));
+
+  return checkpoint_edit_offset;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -1659,9 +1687,11 @@ StatusOr<std::unique_ptr<CheckpointJob>> KVStore::apply_batch_to_checkpoint(
       delta_batch ? batt::bool_status_from(delta_batch->batch_id().is_last_in_group())
                   : BoolStatus::kUnknown;
 
-  // A pin request on a MemTable applies to the checkpoint that includes its last batch.
+  // A pin/unpin request on a MemTable applies to the checkpoint that includes its last batch.
   //
-  const bool pin = (checkpoint_after == BoolStatus::kTrue) && delta_batch->has_pin_request();
+  const CheckpointRequests checkpoint_requests = (checkpoint_after == BoolStatus::kTrue)
+                                                     ? delta_batch->checkpoint_requests()
+                                                     : CheckpointRequests{};
 
   // Allow the page cache to be temporarily overcommitted so we don't deadlock; but if overcommit is
   // triggered, we immediately truncate the checkpoint to try to unpin pages ASAP.
@@ -1724,7 +1754,7 @@ StatusOr<std::unique_ptr<CheckpointJob>> KVStore::apply_batch_to_checkpoint(
                                     std::move(checkpoint_token),
                                     batt::make_copy(this->checkpoint_token_pool_),
                                     overcommit,
-                                    pin));
+                                    checkpoint_requests));
 
   BATT_REQUIRE_OK(checkpoint_job);
 

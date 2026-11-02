@@ -297,8 +297,13 @@ class KVStore : public Table
   /** \brief Deletes (unpins) the snapshot identified by the given EditOffset.  Returns kNotFound
    * if no pinned checkpoint exists at that offset.
    *
-   * Deletion is lazy: the checkpoint remains visible (e.g. via `get_snapshot`) until the next
-   * checkpoint is committed, at which point the deletion takes effect both in memory and durably.
+   * Like `create_snapshot`, this forces a checkpoint of all edits up to this point: the unpin is
+   * recorded in that checkpoint's PackedActiveCheckpoints record, and this call waits for it to be
+   * durably committed, so the deletion is visible (and durable) when this returns.  Calls are
+   * serialized with `create_snapshot`.  If there are no edits since the latest checkpoint, nothing
+   * is deleted and kFailedPrecondition is returned.
+   *
+   * Existing Snapshot objects for the deleted checkpoint remain valid until they are destroyed.
    */
   Status delete_snapshot(EditOffset checkpoint_edit_offset) noexcept;
 
@@ -407,6 +412,16 @@ class KVStore : public Table
    * Calls `this->hand_off_finalized_mem_table`.
    */
   Status finalize_mem_table(boost::intrusive_ptr<MemTable>&& mem_table);
+
+  /** \brief Attaches a checkpoint request (a pin or unpin, made by calling `request` on the active
+   * MemTable), then finalizes that MemTable and waits for its checkpoint (which carries out the
+   * request) to be durably committed.  Returns the EditOffset of that checkpoint.
+   *
+   * Returns kFailedPrecondition, attaching nothing, if the active MemTable is empty.  Must be called
+   * with `snapshot_mutex_` held, so that at most one request is attached to any MemTable.
+   */
+  StatusOr<EditOffset> checkpoint_with_request(
+      const std::function<bool(MemTable&)>& request) noexcept;
 
   /** \brief Passes the given MemTable to the checkpoint update pipeline.
    *
@@ -544,10 +559,12 @@ class KVStore : public Table
 
   usize checkpoint_batch_count_;
 
-  // Serializes `create_snapshot` calls, so at most one pin request is ever attached to a given
-  // MemTable (and therefore to a given checkpoint).
+  // Serializes `create_snapshot` and `delete_snapshot` calls, so at most one pin/unpin request is
+  // ever attached to a given MemTable (and therefore to a given checkpoint).  Since each call waits
+  // for its checkpoint to be committed, State::active_checkpoints_ reflects all prior requests
+  // while this is held.
   //
-  std::mutex create_snapshot_mutex_;
+  std::mutex snapshot_mutex_;
 
   //----- --- -- -  -  -   -
   // Checkpoint Flush State.

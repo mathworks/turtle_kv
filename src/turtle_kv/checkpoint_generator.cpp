@@ -175,7 +175,7 @@ StatusOr<std::unique_ptr<CheckpointJob>> CheckpointGenerator::finalize_checkpoin
     batt::Grant&& token,
     std::shared_ptr<batt::Grant::Issuer>&& token_issuer,
     llfs::PageCacheOvercommit& overcommit,
-    bool pin) noexcept
+    const CheckpointRequests& requests) noexcept
 {
   VLOG(1) << "CheckpointGenerator::finalize_checkpoint()";
 
@@ -207,8 +207,6 @@ StatusOr<std::unique_ptr<CheckpointJob>> CheckpointGenerator::finalize_checkpoin
   checkpoint_job->batch_count = batch_count;
 
   {
-    std::lock_guard<std::mutex> lock{this->checkpoint_mutex_};
-
     const PackedCheckpoint new_checkpoint{
         .edit_offset_upper_bound = this->base_checkpoint_.edit_offset_upper_bound().value(),
         .new_tree_root = llfs::PackedPageId::from(this->base_checkpoint_.root_id()),
@@ -216,11 +214,23 @@ StatusOr<std::unique_ptr<CheckpointJob>> CheckpointGenerator::finalize_checkpoin
 
     BATT_REQUIRE_OK(this->active_checkpoints_.set_base_checkpoint(new_checkpoint));
 
+    // delete_snapshot checks that the checkpoint is pinned before requesting the unpin, so this
+    // only fails if that check was stale (e.g. a pin request that outlived a failed
+    // create_snapshot); delete_snapshot reports failure if the checkpoint is still pinned.
+    //
+    if (requests.unpin) {
+      Status unpin_status = this->active_checkpoints_.unpin(requests.unpin->value());
+      if (!unpin_status.ok()) {
+        LOG(WARNING) << "Failed to unpin checkpoint: " << BATT_INSPECT(*requests.unpin)
+                     << BATT_INSPECT(unpin_status);
+      }
+    }
+
     // create_snapshot checks the pin limit up front, so this only fails if a pin request outlived
     // a failed create_snapshot (e.g. during shutdown); that caller has already reported failure,
     // so leaving the checkpoint unpinned is safe.
     //
-    if (pin) {
+    if (requests.pin) {
       Status pin_status = this->active_checkpoints_.pin(new_checkpoint);
       if (!pin_status.ok()) {
         LOG(WARNING) << "Failed to pin checkpoint; it will not be pinned: "
@@ -243,8 +253,7 @@ StatusOr<std::unique_ptr<CheckpointJob>> CheckpointGenerator::finalize_checkpoin
 
   BATT_REQUIRE_OK(appendable_job);
 
-  // Reserve slot grant for the current checkpoint in checkpoint-log.  This may block, so it must
-  // not be done while holding `checkpoint_mutex_`.
+  // Reserve slot grant for the current checkpoint in checkpoint-log.
   //
   auto grant_size = appendable_job->calculate_grant_size();
   StatusOr<batt::Grant> checkpoint_grant = this->reserve_slot_grant_for_checkpoints(grant_size);
@@ -263,28 +272,6 @@ StatusOr<std::unique_ptr<CheckpointJob>> CheckpointGenerator::finalize_checkpoin
   VLOG(1) << "checkpoint finalized";
 
   return {std::move(checkpoint_job)};
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-Status CheckpointGenerator::delete_checkpoint(EditOffset edit_offset) noexcept
-{
-  std::lock_guard<std::mutex> lock{this->checkpoint_mutex_};
-
-  return this->active_checkpoints_.unpin(edit_offset.value());
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-Status CheckpointGenerator::check_pin_limit() noexcept
-{
-  std::lock_guard<std::mutex> lock{this->checkpoint_mutex_};
-
-  if (this->active_checkpoints_.is_pin_limit_reached()) {
-    return {batt::StatusCode::kResourceExhausted};
-  }
-
-  return OkStatus();
 }
 
 }  // namespace turtle_kv

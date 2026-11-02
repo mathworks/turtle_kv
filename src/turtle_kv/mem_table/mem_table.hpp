@@ -10,6 +10,7 @@
 #define TURTLE_KV_MEM_TABLE_HPP
 
 #include <turtle_kv/api_types.hpp>
+#include <turtle_kv/checkpoint_requests.hpp>
 
 #include <turtle_kv/mem_table/mem_table_allocation_tracker_impl.hpp>
 #include <turtle_kv/mem_table/mem_table_entry.hpp>
@@ -137,15 +138,6 @@ class BasicMemTable : public MemTableBase
   static constexpr i64 kFinalizedMask = i64{1} << 62;  // single bit, non-negative.
   static_assert(kFinalizedMask > 0);
 
-  /** \brief Bit set in MemTable::pin_state_ by MemTable::finalize(); once set, the pin request
-   * can no longer be made or withdrawn.
-   */
-  static constexpr u32 kPinRequestsClosed = 1;
-
-  /** \brief Bit set in MemTable::pin_state_ by MemTable::request_pin().
-   */
-  static constexpr u32 kPinRequested = 2;
-
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   explicit BasicMemTable(AllocationTracker& allocation_tracker,
@@ -220,18 +212,25 @@ class BasicMemTable : public MemTableBase
    * (recording nothing) if the MemTable has already been finalized.
    *
    * The request is accepted and closed atomically with respect to `finalize()`, so a successful
-   * request is always seen by the checkpoint pipeline via `has_pin_request()`.  A request cannot
-   * be withdrawn.  At most one pin
-   * request may be made per MemTable (callers are serialized; see KVStore::create_snapshot).
+   * request is always seen by the checkpoint pipeline via `checkpoint_requests()`.  A request
+   * cannot be withdrawn.  At most one checkpoint request (pin or unpin) may be made per MemTable
+   * (callers are serialized; see KVStore::create_snapshot and KVStore::delete_snapshot).
    */
   [[nodiscard]] bool request_pin() noexcept;
 
-  /** \brief Returns whether a pin request was accepted before this MemTable was finalized.  Only
+  /** \brief Requests that the checkpoint at `edit_offset` be unpinned when the checkpoint created
+   * from this MemTable is finalized.  Returns false (recording nothing) if the MemTable has already
+   * been finalized.  Same guarantees and restrictions as `request_pin()`.
+   */
+  [[nodiscard]] bool request_unpin(EditOffset edit_offset) noexcept;
+
+  /** \brief Returns the checkpoint requests accepted before this MemTable was finalized.  Only
    * meaningful after `finalize()` has been called.
    */
-  bool has_pin_request() const noexcept
+  CheckpointRequests checkpoint_requests() const noexcept
   {
-    return (this->pin_state_.load() & Self::kPinRequested) != 0;
+    absl::MutexLock lock{&this->checkpoint_requests_mutex_};
+    return this->checkpoint_requests_;
   }
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -353,10 +352,18 @@ class BasicMemTable : public MemTableBase
   //
   std::atomic<i64> edit_offset_upper_bound_{this->edit_offset_lower_bound_.value() - 1};
 
-  // The kPinRequestsClosed bit is set by finalize(); the kPinRequested bit is set if a pin request
-  // was accepted before then (see request_pin).
+  // Guards checkpoint_requests_ and checkpoint_requests_closed_, so that a request is either
+  // accepted before finalize() (and seen by the checkpoint pipeline) or not recorded at all.
   //
-  std::atomic<u32> pin_state_{0};
+  mutable absl::Mutex checkpoint_requests_mutex_;
+
+  // Pin/unpin requests accepted before finalize() (see request_pin/request_unpin).
+  //
+  CheckpointRequests checkpoint_requests_;
+
+  // Set by finalize(); once true, no checkpoint request can be made.
+  //
+  bool checkpoint_requests_closed_ = false;
 
   // The maximum size of a batch (produced post-finalization by MemTable::BatchCompactor).  Passed
   // in at construction time; used to calculate when the MemTable is full.

@@ -93,12 +93,12 @@ class DeltaBatch
     return *this->mem_table_;
   }
 
-  /** \brief Returns whether a pin request was recorded on this batch's MemTable (see
-   * MemTable::request_pin).
+  /** \brief Returns the checkpoint requests (pin/unpin) recorded on this batch's MemTable (see
+   * MemTable::request_pin and MemTable::request_unpin).
    */
-  bool has_pin_request() const noexcept
+  CheckpointRequests checkpoint_requests() const noexcept
   {
-    return this->mem_table_->has_pin_request();
+    return this->mem_table_->checkpoint_requests();
   }
 
   /** \brief Returns whether the batch contains page references ("big" values).
