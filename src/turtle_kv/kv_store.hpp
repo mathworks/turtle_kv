@@ -418,10 +418,10 @@ class KVStore : public Table
    * MemTable), then finalizes that MemTable and waits for its checkpoint (which carries out the
    * request) to be durably committed.  Returns the EditOffset of that checkpoint.
    *
-   * Returns kFailedPrecondition, attaching nothing, if the active MemTable is empty.  Must be called
-   * with `snapshot_mutex_` held, so that at most one request is attached to any MemTable.
+   * Returns kFailedPrecondition, attaching nothing, if the active MemTable is empty.  Must be
+   * called with `snapshot_mutex_` held, so that at most one request is attached to any MemTable.
    */
-  StatusOr<EditOffset> checkpoint_with_request(
+  StatusOr<EditOffset> flush_checkpoint_request(
       const std::function<bool(MemTable&)>& request) noexcept;
 
   /** \brief Passes the given MemTable to the checkpoint update pipeline.

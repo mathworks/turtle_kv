@@ -352,18 +352,15 @@ class BasicMemTable : public MemTableBase
   //
   std::atomic<i64> edit_offset_upper_bound_{this->edit_offset_lower_bound_.value() - 1};
 
-  // Guards checkpoint_requests_ and checkpoint_requests_closed_, so that a request is either
+  // Guards checkpoint_requests_ (including its `closed` flag), so that a request is either
   // accepted before finalize() (and seen by the checkpoint pipeline) or not recorded at all.
   //
   mutable absl::Mutex checkpoint_requests_mutex_;
 
-  // Pin/unpin requests accepted before finalize() (see request_pin/request_unpin).
+  // Pin/unpin requests accepted before finalize() (see request_pin/request_unpin).  finalize() sets
+  // `closed`; once true, no checkpoint request can be made.
   //
   CheckpointRequests checkpoint_requests_;
-
-  // Set by finalize(); once true, no checkpoint request can be made.
-  //
-  bool checkpoint_requests_closed_ = false;
 
   // The maximum size of a batch (produced post-finalization by MemTable::BatchCompactor).  Passed
   // in at construction time; used to calculate when the MemTable is full.

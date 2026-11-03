@@ -23,6 +23,13 @@ struct CheckpointRequests {
   //
   Optional<EditOffset> unpin;
 
+  // Set when the MemTable is finalized; once true, no more requests can be attached.  Always true
+  // by the time the checkpoint pipeline reads the requests.
+  //
+  bool closed = false;
+
+  // Returns true if neither a pin nor an unpin was requested (ignores `closed`).
+  //
   bool empty() const noexcept
   {
     return !this->pin && !this->unpin;

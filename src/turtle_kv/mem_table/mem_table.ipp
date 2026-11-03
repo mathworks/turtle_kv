@@ -207,7 +207,7 @@ bool BasicMemTable<StorageT, AllocationTrackerT>::finalize(
   //
   {
     absl::MutexLock lock{&this->checkpoint_requests_mutex_};
-    this->checkpoint_requests_closed_ = true;
+    this->checkpoint_requests_.closed = true;
   }
 
   // Update committed_bytes_total first, so that if prepared_bytes_total_ is observed to have the
@@ -292,7 +292,7 @@ bool BasicMemTable<StorageT, AllocationTrackerT>::request_pin() noexcept
 {
   absl::MutexLock lock{&this->checkpoint_requests_mutex_};
 
-  if (this->checkpoint_requests_closed_) {
+  if (this->checkpoint_requests_.closed) {
     return false;
   }
 
@@ -311,7 +311,7 @@ bool BasicMemTable<StorageT, AllocationTrackerT>::request_unpin(EditOffset edit_
 {
   absl::MutexLock lock{&this->checkpoint_requests_mutex_};
 
-  if (this->checkpoint_requests_closed_) {
+  if (this->checkpoint_requests_.closed) {
     return false;
   }
 

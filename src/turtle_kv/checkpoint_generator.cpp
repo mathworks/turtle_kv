@@ -214,10 +214,6 @@ StatusOr<std::unique_ptr<CheckpointJob>> CheckpointGenerator::finalize_checkpoin
 
     BATT_REQUIRE_OK(this->active_checkpoints_.set_base_checkpoint(new_checkpoint));
 
-    // delete_snapshot checks that the checkpoint is pinned before requesting the unpin, so this
-    // only fails if that check was stale (e.g. a pin request that outlived a failed
-    // create_snapshot); delete_snapshot reports failure if the checkpoint is still pinned.
-    //
     if (requests.unpin) {
       Status unpin_status = this->active_checkpoints_.unpin(requests.unpin->value());
       if (!unpin_status.ok()) {
@@ -226,10 +222,6 @@ StatusOr<std::unique_ptr<CheckpointJob>> CheckpointGenerator::finalize_checkpoin
       }
     }
 
-    // create_snapshot checks the pin limit up front, so this only fails if a pin request outlived
-    // a failed create_snapshot (e.g. during shutdown); that caller has already reported failure,
-    // so leaving the checkpoint unpinned is safe.
-    //
     if (requests.pin) {
       Status pin_status = this->active_checkpoints_.pin(new_checkpoint);
       if (!pin_status.ok()) {

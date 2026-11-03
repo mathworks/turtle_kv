@@ -1074,15 +1074,11 @@ StatusOr<EditOffset> KVStore::create_snapshot() noexcept
   }
 
   BATT_ASSIGN_OK_RESULT(const EditOffset checkpoint_edit_offset,
-                        this->checkpoint_with_request([](MemTable& mem_table) {
+                        this->flush_checkpoint_request([](MemTable& mem_table) {
                           return mem_table.request_pin();
                         }));
 
   // Fail if the pin was not applied, so that the caller is never told it holds a pin it doesn't.
-  //
-  // TODO: [Gabe Bornstein 11/02/26] If the pin was applied but checkpoint_with_request fails (e.g.
-  // because the KVStore is halting), the checkpoint remains pinned.  The caller can still find it
-  // via get_active_snapshots and delete it.
   //
   {
     batt::Toggle<State>::Reader state_reader{this->state_};
@@ -1143,7 +1139,7 @@ Status KVStore::delete_snapshot(EditOffset checkpoint_edit_offset) noexcept
         state_reader->active_checkpoints_.find_pinned(checkpoint_edit_offset.value()).status());
   }
 
-  BATT_REQUIRE_OK(this->checkpoint_with_request([checkpoint_edit_offset](MemTable& mem_table) {
+  BATT_REQUIRE_OK(this->flush_checkpoint_request([checkpoint_edit_offset](MemTable& mem_table) {
     return mem_table.request_unpin(checkpoint_edit_offset);
   }));
 
@@ -1166,7 +1162,7 @@ Status KVStore::delete_snapshot(EditOffset checkpoint_edit_offset) noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<EditOffset> KVStore::checkpoint_with_request(
+StatusOr<EditOffset> KVStore::flush_checkpoint_request(
     const std::function<bool(MemTable&)>& request) noexcept
 {
   // Attach the request to the active MemTable; it applies to exactly the checkpoint created from
@@ -1180,9 +1176,6 @@ StatusOr<EditOffset> KVStore::checkpoint_with_request(
       mem_table = state_reader->mem_table_;
     }
     // If the active MemTable is empty, there is no new checkpoint to carry the request.
-    //
-    // TODO: [Gabe Bornstein 10/22/26] Is it better to continue looping, and wait for a put, or to
-    // break and fail here?
     //
     if (mem_table->empty()) {
       return {batt::StatusCode::kFailedPrecondition};
