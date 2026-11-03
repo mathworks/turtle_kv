@@ -1057,9 +1057,9 @@ StatusOr<Snapshot> KVStore::get_snapshot(EditOffset checkpoint_edit_offset) noex
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<Snapshot> KVStore::create_snapshot() noexcept
+StatusOr<EditOffset> KVStore::create_snapshot() noexcept
 {
-  BATT_REQUIRE_OK(this->wait_for_recovery());
+  BATT_CHECK_OK(this->wait_for_recovery());
 
   std::unique_lock<std::mutex> lock{this->snapshot_mutex_};
 
@@ -1078,13 +1078,19 @@ StatusOr<Snapshot> KVStore::create_snapshot() noexcept
                           return mem_table.request_pin();
                         }));
 
-  // get_snapshot only finds pinned checkpoints, so this fails if the pin was not applied.
+  // Fail if the pin was not applied, so that the caller is never told it holds a pin it doesn't.
   //
-  // TODO: [Gabe Bornstein 11/02/26] If the pin was applied but this (or checkpoint_with_request,
-  // e.g. because the KVStore is halting) fails, the checkpoint remains pinned.  The caller can
-  // still find it via get_active_snapshots and delete it.
+  // TODO: [Gabe Bornstein 11/02/26] If the pin was applied but checkpoint_with_request fails (e.g.
+  // because the KVStore is halting), the checkpoint remains pinned.  The caller can still find it
+  // via get_active_snapshots and delete it.
   //
-  return this->get_snapshot(checkpoint_edit_offset);
+  {
+    batt::Toggle<State>::Reader state_reader{this->state_};
+    BATT_REQUIRE_OK(
+        state_reader->active_checkpoints_.find_pinned(checkpoint_edit_offset.value()).status());
+  }
+
+  return checkpoint_edit_offset;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -1124,7 +1130,7 @@ StatusOr<std::vector<Snapshot>> KVStore::get_active_snapshots() noexcept
 //
 Status KVStore::delete_snapshot(EditOffset checkpoint_edit_offset) noexcept
 {
-  BATT_REQUIRE_OK(this->wait_for_recovery());
+  BATT_CHECK_OK(this->wait_for_recovery());
 
   std::unique_lock<std::mutex> lock{this->snapshot_mutex_};
 
@@ -1798,7 +1804,7 @@ Status KVStore::commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_jo
 {
   // Make sure recovery has fully completed before continuing.
   //
-  BATT_REQUIRE_OK(this->wait_for_recovery());
+  BATT_CHECK_OK(this->wait_for_recovery());
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
   // TODO [tastolfi 2026-05-12] MAYBE? (TBD) call change_log_writer_->sync(/*non-urgent*/) here to

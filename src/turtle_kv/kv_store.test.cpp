@@ -739,9 +739,9 @@ class CheckpointReadOldKeysTest
   //
   void do_checkpoint(KVStore& kv_store, std::vector<EditOffset>& checkpoint_offsets_out)
   {
-    StatusOr<Snapshot> snapshot = kv_store.create_snapshot();
-    ASSERT_TRUE(snapshot.ok()) << BATT_INSPECT(snapshot.status());
-    checkpoint_offsets_out.push_back(snapshot->edit_offset());
+    StatusOr<EditOffset> checkpoint_offset = kv_store.create_snapshot();
+    ASSERT_TRUE(checkpoint_offset.ok()) << BATT_INSPECT(checkpoint_offset.status());
+    checkpoint_offsets_out.push_back(*checkpoint_offset);
   }
 
   // Returns the number of expired (deleted by `do_checkpoint`) checkpoints.
@@ -1310,7 +1310,10 @@ TEST_F(KVStoreTest, SnapshotScan)
 
   std::map<std::string, std::string> scanned;
   {
-    StatusOr<Snapshot> snapshot = kv_store->create_snapshot();
+    StatusOr<EditOffset> checkpoint_offset = kv_store->create_snapshot();
+    ASSERT_TRUE(checkpoint_offset.ok()) << BATT_INSPECT(checkpoint_offset.status());
+
+    StatusOr<Snapshot> snapshot = kv_store->get_snapshot(*checkpoint_offset);
     ASSERT_TRUE(snapshot.ok()) << BATT_INSPECT(snapshot.status());
 
     turtle_kv::KVStoreScanner scanner{*snapshot, KeyView{}};
@@ -1376,9 +1379,9 @@ class DeleteSnapshotTest
  public:
   void SetUp() override
   {
-    KVStoreTest::SetUp();
+    this->KVStoreTest::SetUp();
 
-    DeleteSnapshotParams params = GetParam();
+    DeleteSnapshotParams params = this->GetParam();
     this->num_keys = params.num_keys;
     this->num_checkpoints = params.num_checkpoints;
   }
@@ -1440,7 +1443,10 @@ TEST_P(DeleteSnapshotTest, DeleteSnapshot)
       ASSERT_TRUE(put_status.ok()) << BATT_INSPECT(put_status);
     }
 
-    StatusOr<Snapshot> snapshot = kv_store->create_snapshot();
+    StatusOr<EditOffset> checkpoint_offset = kv_store->create_snapshot();
+    ASSERT_TRUE(checkpoint_offset.ok()) << BATT_INSPECT(checkpoint_offset.status());
+
+    StatusOr<Snapshot> snapshot = kv_store->get_snapshot(*checkpoint_offset);
     ASSERT_TRUE(snapshot.ok()) << BATT_INSPECT(snapshot.status());
 
     // The new snapshot should see the batch we just wrote.
@@ -1452,7 +1458,7 @@ TEST_P(DeleteSnapshotTest, DeleteSnapshot)
       EXPECT_EQ(result->as_str(), make_value(i));
     }
 
-    checkpoint_offsets.push_back(snapshot->edit_offset());
+    checkpoint_offsets.push_back(*checkpoint_offset);
   }
 
   // Verify all checkpoints are queryable before deletion.
@@ -1572,9 +1578,7 @@ class PinSnapshotTest : public KVStoreTest
     const std::string key = batt::to_string(i);
     BATT_REQUIRE_OK(kv_store.put(KeyView{key}, ValueView::from_str(key)));
 
-    BATT_ASSIGN_OK_RESULT(Snapshot snapshot, kv_store.create_snapshot());
-
-    return snapshot.edit_offset();
+    return kv_store.create_snapshot();
   }
 
   // Writes a single key `i`, then forces an (unpinned) checkpoint and waits for it to become the
@@ -1903,9 +1907,9 @@ TEST_F(PinSnapshotTest, DeleteUnpinnedDoesNotCheckpoint)
   EXPECT_EQ(kv_store->delete_snapshot(*unpinned), batt::StatusCode::kNotFound);
 
   {
-    StatusOr<Snapshot> snapshot = kv_store->create_snapshot();
-    ASSERT_TRUE(snapshot.ok()) << BATT_INSPECT(snapshot.status());
-    EXPECT_TRUE(snapshot_has_key(*kv_store, snapshot->edit_offset(), pending_key));
+    StatusOr<EditOffset> checkpoint_offset = kv_store->create_snapshot();
+    ASSERT_TRUE(checkpoint_offset.ok()) << BATT_INSPECT(checkpoint_offset.status());
+    EXPECT_TRUE(snapshot_has_key(*kv_store, *checkpoint_offset, pending_key));
   }
 
   this->ShutdownKVStore(kv_store);

@@ -276,7 +276,8 @@ class KVStore : public Table
   StatusOr<Snapshot> get_snapshot(EditOffset checkpoint_edit_offset) noexcept;
 
   /** \brief Forces a checkpoint of all edits up to this point, pins it, waits for it to be
-   * durably committed, and returns a read-only Snapshot of that checkpoint.
+   * durably committed, and returns the checkpoint's EditOffset.  Use `get_snapshot` with the
+   * returned EditOffset to read from it.
    *
    * A pinned checkpoint is retained when new checkpoints are created, until it is deleted via
    * `delete_snapshot`.  At most `MAX_PINNED_CHECKPOINTS` checkpoints may be pinned at once; returns
@@ -288,7 +289,7 @@ class KVStore : public Table
    * created from the active MemTable.  If there are no edits since the latest checkpoint, no
    * checkpoint is created or pinned and kFailedPrecondition is returned.
    */
-  StatusOr<Snapshot> create_snapshot() noexcept;
+  StatusOr<EditOffset> create_snapshot() noexcept;
 
   /** \brief Returns Snapshots for all pinned checkpoints, ordered oldest to newest.
    */
