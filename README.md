@@ -169,3 +169,7 @@ Currently missing/under development:
 Limitations (out-of-scope):
 
 - A K/V store may only be opened by one process at a time
+
+## License
+
+This project is licensed under the Apache 2.0 license. This project contains third-party software components which are governed by their own license terms.  Your usage of these third-party components is governed by the terms of their respective licenses.
