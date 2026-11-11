@@ -165,7 +165,8 @@ BoxedSeq<EditSlice> InMemoryNodeHybridLevel::to_boxed_seq(const InMemoryNode& no
                                                           Optional<KeyView> min_key) const
 {
   return as_seq(this->sub_levels) |
-         seq::map([&](const std::variant<MergedLevel, SegmentedLevel>& v) -> BoxedSeq<EditSlice> {
+         seq::map([&node, &update_context, &segment_load_status, min_pivot_i, only_pivot, min_key](
+                      const std::variant<MergedLevel, SegmentedLevel>& v) -> BoxedSeq<EditSlice> {
            return batt::case_of(
                v,
                [&](const MergedLevel& merged_level) -> BoxedSeq<EditSlice> {
