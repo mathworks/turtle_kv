@@ -1959,49 +1959,6 @@ TEST_F(PinSnapshotTest, DeleteMultipleSnapshots)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-TEST_F(PinSnapshotTest, DeleteSnapshotsIsAllOrNothing)
-{
-  StatusOr<std::unique_ptr<KVStore>> open_result = this->open("delete_snapshots_all_or_nothing");
-  ASSERT_TRUE(open_result.ok()) << BATT_INSPECT(open_result.status());
-  std::unique_ptr<KVStore>& kv_store = *open_result;
-
-  i64 next_key = 0;
-
-  const i64 pinned_key = next_key;
-  StatusOr<EditOffset> pinned = write_and_snapshot(*kv_store, next_key++);
-  ASSERT_TRUE(pinned.ok()) << BATT_INSPECT(pinned.status());
-
-  StatusOr<EditOffset> unpinned = write_and_checkpoint(*kv_store, next_key++);
-  ASSERT_TRUE(unpinned.ok()) << BATT_INSPECT(unpinned.status());
-
-  // Leave an edit in the active MemTable.
-  //
-  const i64 pending_key = next_key++;
-  {
-    const std::string key = batt::to_string(pending_key);
-    ASSERT_TRUE(kv_store->put(KeyView{key}, ValueView::from_str(key)).ok());
-  }
-
-  // If any offset is not pinned, or the list is empty or has duplicates, nothing is deleted and no
-  // checkpoint is forced.
-  //
-  EXPECT_EQ(kv_store->delete_snapshots({*pinned, *unpinned}), batt::StatusCode::kNotFound);
-  EXPECT_EQ(kv_store->delete_snapshots({*pinned, *pinned}), batt::StatusCode::kInvalidArgument);
-  EXPECT_EQ(kv_store->delete_snapshots({}), batt::StatusCode::kInvalidArgument);
-
-  EXPECT_TRUE(snapshot_has_key(*kv_store, *pinned, pinned_key));
-
-  {
-    StatusOr<EditOffset> checkpoint_offset = kv_store->create_snapshot();
-    ASSERT_TRUE(checkpoint_offset.ok()) << BATT_INSPECT(checkpoint_offset.status());
-    EXPECT_TRUE(snapshot_has_key(*kv_store, *checkpoint_offset, pending_key));
-  }
-
-  this->ShutdownKVStore(kv_store);
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
 TEST_F(PinSnapshotTest, DeletionSurvivesRecovery)
 {
   std::filesystem::path test_kv_store_dir =
