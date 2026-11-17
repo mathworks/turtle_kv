@@ -295,16 +295,24 @@ class KVStore : public Table
    */
   StatusOr<std::vector<Snapshot>> get_active_snapshots() noexcept;
 
-  /** \brief Deletes (unpins) the snapshot identified by the given EditOffset.  Returns kNotFound
-   * if no pinned checkpoint exists at that offset.
+  /** \brief Deletes (unpins) the snapshots identified by the given EditOffsets.
    *
-   * Like `create_snapshot`, this forces a checkpoint of all edits up to this point: the unpin is
+   * All-or-nothing: if `checkpoint_edit_offsets` is empty or contains duplicates,
+   * kInvalidArgument is returned; if any offset is not a pinned checkpoint, kNotFound is returned.
+   * In both cases nothing is deleted.
+   *
+   * Like `create_snapshot`, this forces a checkpoint of all edits up to this point: the unpins are
    * recorded in that checkpoint's PackedActiveCheckpoints record, and this call waits for it to be
-   * durably committed, so the deletion is visible (and durable) when this returns.  Calls are
+   * durably committed, so the deletions are visible (and durable) when this returns.  Calls are
    * serialized with `create_snapshot`.  If there are no edits since the latest checkpoint, nothing
    * is deleted and kFailedPrecondition is returned.
    *
-   * Existing Snapshot objects for the deleted checkpoint remain valid until they are destroyed.
+   * Existing Snapshot objects for the deleted checkpoints remain valid until they are destroyed.
+   */
+  Status delete_snapshots(const std::vector<EditOffset>& checkpoint_edit_offsets) noexcept;
+
+  /** \brief Deletes (unpins) the snapshot identified by the given EditOffset.  Equivalent to
+   * `delete_snapshots({checkpoint_edit_offset})`.
    */
   Status delete_snapshot(EditOffset checkpoint_edit_offset) noexcept;
 
@@ -418,11 +426,13 @@ class KVStore : public Table
    * MemTable), then finalizes that MemTable and waits for its checkpoint (which carries out the
    * request) to be durably committed.  Returns the EditOffset of that checkpoint.
    *
-   * Returns kFailedPrecondition, attaching nothing, if the active MemTable is empty.  Must be
-   * called with `snapshot_mutex_` held, so that at most one request is attached to any MemTable.
+   * Returns kFailedPrecondition, attaching nothing, if the active MemTable is empty.  If `request`
+   * returns kClosed (the MemTable was finalized first), retries with the new active MemTable; any
+   * other error from `request` is returned.  Must be called with `snapshot_mutex_` held, so that
+   * at most one request is attached to any MemTable.
    */
   StatusOr<EditOffset> flush_checkpoint_request(
-      const std::function<bool(MemTable&)>& request) noexcept;
+      const std::function<Status(MemTable&)>& request) noexcept;
 
   /** \brief Passes the given MemTable to the checkpoint update pipeline.
    *

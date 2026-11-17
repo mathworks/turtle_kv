@@ -44,6 +44,7 @@
 #endif  // TURTLE_KV_ENABLE_TCMALLOC_HEAP_PROFILING
 #endif  // TURTLE_KV_ENABLE_TCMALLOC
 
+#include <algorithm>
 #include <set>
 
 namespace turtle_kv {
@@ -1126,34 +1127,57 @@ StatusOr<std::vector<Snapshot>> KVStore::get_active_snapshots() noexcept
 //
 Status KVStore::delete_snapshot(EditOffset checkpoint_edit_offset) noexcept
 {
+  return this->delete_snapshots({checkpoint_edit_offset});
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Status KVStore::delete_snapshots(const std::vector<EditOffset>& checkpoint_edit_offsets) noexcept
+{
   BATT_CHECK_OK(this->wait_for_recovery());
+
+  if (checkpoint_edit_offsets.empty()) {
+    return {batt::StatusCode::kInvalidArgument};
+  }
+
+  // Fail early if any of the requested checkpoints are duplicates, so that the caller is never told
+  // it holds a pin it doesn't.
+  //
+  {
+    std::vector<EditOffset> sorted_offsets = checkpoint_edit_offsets;
+    std::sort(sorted_offsets.begin(), sorted_offsets.end());
+    if (std::adjacent_find(sorted_offsets.begin(), sorted_offsets.end()) != sorted_offsets.end()) {
+      return {batt::StatusCode::kInvalidArgument};
+    }
+  }
 
   std::unique_lock<std::mutex> lock{this->snapshot_mutex_};
 
   // State reflects all prior pins/unpins while snapshot_mutex_ is held, so only request the unpin
-  // if the checkpoint is currently pinned.
+  // if every checkpoint is currently pinned (so that either all are deleted or none are).
   //
   {
     batt::Toggle<State>::Reader state_reader{this->state_};
-    BATT_REQUIRE_OK(
-        state_reader->active_checkpoints_.find_pinned(checkpoint_edit_offset.value()).status());
+    for (const EditOffset& checkpoint_edit_offset : checkpoint_edit_offsets) {
+      BATT_REQUIRE_OK(
+          state_reader->active_checkpoints_.find_pinned(checkpoint_edit_offset.value()).status());
+    }
   }
 
-  BATT_REQUIRE_OK(this->flush_checkpoint_request([checkpoint_edit_offset](MemTable& mem_table) {
-    return mem_table.request_unpin(checkpoint_edit_offset);
+  BATT_REQUIRE_OK(this->flush_checkpoint_request([&checkpoint_edit_offsets](MemTable& mem_table) {
+    return mem_table.request_unpin(checkpoint_edit_offsets);
   }));
 
-  // TODO: [Gabe Bornstein 11/02/26] Consider deleting this check and not verifying this variant
-  // here. Expensive check.
-  //
-  // The checkpoint carrying the unpin has been committed, so the deletion should now be visible.
+  // The checkpoint carrying the unpins has been committed, so the deletions should now be visible.
   //
   {
     batt::Toggle<State>::Reader state_reader{this->state_};
-    if (state_reader->active_checkpoints_.find_pinned(checkpoint_edit_offset.value()).ok()) {
-      LOG(WARNING) << "Checkpoint is still pinned after unpin was committed: "
-                   << BATT_INSPECT(checkpoint_edit_offset);
-      return {batt::StatusCode::kInternal};
+    for (const EditOffset& checkpoint_edit_offset : checkpoint_edit_offsets) {
+      if (state_reader->active_checkpoints_.find_pinned(checkpoint_edit_offset.value()).ok()) {
+        LOG(WARNING) << "Checkpoint is still pinned after unpin was committed: "
+                     << BATT_INSPECT(checkpoint_edit_offset);
+        return {batt::StatusCode::kInternal};
+      }
     }
   }
 
@@ -1163,11 +1187,11 @@ Status KVStore::delete_snapshot(EditOffset checkpoint_edit_offset) noexcept
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 StatusOr<EditOffset> KVStore::flush_checkpoint_request(
-    const std::function<bool(MemTable&)>& request) noexcept
+    const std::function<Status(MemTable&)>& request) noexcept
 {
   // Attach the request to the active MemTable; it applies to exactly the checkpoint created from
-  // that MemTable.  The request only fails if the MemTable was finalized after we observed it
-  // (nothing is recorded in that case), so retry with the new active MemTable.
+  // that MemTable.  If the MemTable was finalized after we observed it, the request fails with
+  // kClosed (nothing is recorded in that case), so retry with the new active MemTable.
   //
   boost::intrusive_ptr<MemTable> mem_table;
   for (;;) {
@@ -1180,8 +1204,12 @@ StatusOr<EditOffset> KVStore::flush_checkpoint_request(
     if (mem_table->empty()) {
       return {batt::StatusCode::kFailedPrecondition};
     }
-    if (request(*mem_table)) {
+    Status request_status = request(*mem_table);
+    if (request_status.ok()) {
       break;
+    }
+    if (request_status != batt::StatusCode::kClosed) {
+      return request_status;
     }
   }
 

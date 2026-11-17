@@ -4,6 +4,7 @@
 #include <turtle_kv/checkpoint_log_events.hpp>
 
 #include <batteries/async/backoff.hpp>
+#include <batteries/case_of.hpp>
 #include <batteries/env.hpp>
 #include <batteries/status.hpp>
 
@@ -214,20 +215,25 @@ StatusOr<std::unique_ptr<CheckpointJob>> CheckpointGenerator::finalize_checkpoin
 
     BATT_REQUIRE_OK(this->active_checkpoints_.set_base_checkpoint(new_checkpoint));
 
-    if (requests.unpin) {
-      Status unpin_status = this->active_checkpoints_.unpin(requests.unpin->value());
-      if (!unpin_status.ok()) {
-        LOG(WARNING) << "Failed to unpin checkpoint: " << BATT_INSPECT(*requests.unpin)
-                     << BATT_INSPECT(unpin_status);
-      }
-    }
-
-    if (requests.pin) {
-      Status pin_status = this->active_checkpoints_.pin(new_checkpoint);
-      if (!pin_status.ok()) {
-        LOG(WARNING) << "Failed to pin checkpoint; it will not be pinned: "
-                     << BATT_INSPECT(edit_offset_upper_bound) << BATT_INSPECT(pin_status);
-      }
+    if (requests.request) {
+      batt::case_of(
+          *requests.request,
+          [&](const PinRequest&) {
+            Status pin_status = this->active_checkpoints_.pin(new_checkpoint);
+            if (!pin_status.ok()) {
+              LOG(WARNING) << "Failed to pin checkpoint; it will not be pinned: "
+                           << BATT_INSPECT(edit_offset_upper_bound) << BATT_INSPECT(pin_status);
+            }
+          },
+          [&](const UnpinRequest& unpin_request) {
+            for (const EditOffset& unpin_offset : unpin_request.edit_offsets) {
+              Status unpin_status = this->active_checkpoints_.unpin(unpin_offset.value());
+              if (!unpin_status.ok()) {
+                LOG(WARNING) << "Failed to unpin checkpoint: " << BATT_INSPECT(unpin_offset)
+                             << BATT_INSPECT(unpin_status);
+              }
+            }
+          });
     }
 
     checkpoint_job->active_checkpoints.emplace(

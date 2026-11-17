@@ -208,21 +208,22 @@ class BasicMemTable : public MemTableBase
    */
   bool is_finalized() const;
 
-  /** \brief Requests that the checkpoint created from this MemTable be pinned.  Returns false
+  /** \brief Requests that the checkpoint created from this MemTable be pinned.  Returns kClosed
    * (recording nothing) if the MemTable has already been finalized.
    *
    * The request is accepted and closed atomically with respect to `finalize()`, so a successful
    * request is always seen by the checkpoint pipeline via `checkpoint_requests()`.  A request
    * cannot be withdrawn.  At most one checkpoint request (pin or unpin) may be made per MemTable
-   * (callers are serialized; see KVStore::create_snapshot and KVStore::delete_snapshot).
+   * (callers are serialized; see KVStore::create_snapshot and KVStore::delete_snapshots); returns
+   * kAlreadyExists (recording nothing) if this MemTable already carries a request.
    */
-  [[nodiscard]] bool request_pin() noexcept;
+  Status request_pin() noexcept;
 
-  /** \brief Requests that the checkpoint at `edit_offset` be unpinned when the checkpoint created
-   * from this MemTable is finalized.  Returns false (recording nothing) if the MemTable has already
-   * been finalized.  Same guarantees and restrictions as `request_pin()`.
+  /** \brief Requests that the checkpoints at `edit_offsets` be unpinned when the checkpoint created
+   * from this MemTable is finalized.  Same return values, guarantees, and restrictions as
+   * `request_pin()`.
    */
-  [[nodiscard]] bool request_unpin(EditOffset edit_offset) noexcept;
+  Status request_unpin(std::vector<EditOffset> edit_offsets) noexcept;
 
   /** \brief Returns the checkpoint requests accepted before this MemTable was finalized.  Only
    * meaningful after `finalize()` has been called.
@@ -291,6 +292,11 @@ class BasicMemTable : public MemTableBase
    * split).
    */
   i64 calculate_max_byte_size() const;
+
+  /** \brief Records `request` unless the MemTable is finalized (kClosed) or already carries a
+   * request (kAlreadyExists).  Implements `request_pin` and `request_unpin`.
+   */
+  Status set_checkpoint_request(CheckpointRequest&& request) noexcept;
 
   /** \brief Updates the cached maximum edit size and attempts to reserve space in the MemTable to
    * insert an edit of the specified byte count `packed_edit_size`.  If there is not enough room in

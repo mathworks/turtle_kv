@@ -98,12 +98,12 @@ class CheckpointGenerator
    * `push_batch` MUST be called at least once after construction and before this call, and at least
    * once in between calls to `finalize_checkpoint` so that we have a new checkpoint to finalize.
    *
-   * The new checkpoint becomes the base checkpoint.  If `requests.unpin` is set, the checkpoint at
-   * that offset is unpinned.  If `requests.pin` is true, the new checkpoint is pinned, unless
-   * `MAX_PINNED_CHECKPOINTS` checkpoints are already pinned (only possible if a pin request
+   * The new checkpoint becomes the base checkpoint.  If `requests.request` holds an UnpinRequest, the
+   * checkpoints at its offsets are unpinned.  If it holds a PinRequest, the new checkpoint is pinned,
+   * unless `MAX_PINNED_CHECKPOINTS` checkpoints are already pinned (only possible if a pin request
    * outlived a failed `KVStore::create_snapshot`, e.g. during shutdown), in which case it is left
-   * unpinned.  Both changes are included in the new checkpoint's PackedActiveCheckpoints, and
-   * become durable when it is committed.
+   * unpinned.  The change is included in the new checkpoint's PackedActiveCheckpoints, and becomes
+   * durable when it is committed.
    */
   StatusOr<std::unique_ptr<CheckpointJob>> finalize_checkpoint(
       batt::Grant&& token,

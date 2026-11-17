@@ -288,39 +288,43 @@ bool BasicMemTable<StorageT, AllocationTrackerT>::is_finalized() const
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <MemTableStorage StorageT, MemTableAllocationTracker AllocationTrackerT>
-bool BasicMemTable<StorageT, AllocationTrackerT>::request_pin() noexcept
+Status BasicMemTable<StorageT, AllocationTrackerT>::request_pin() noexcept
 {
-  absl::MutexLock lock{&this->checkpoint_requests_mutex_};
-
-  if (this->checkpoint_requests_.closed) {
-    return false;
-  }
-
-  // Callers are serialized; there is never more than one checkpoint request per MemTable.
-  //
-  BATT_CHECK(this->checkpoint_requests_.empty());
-
-  this->checkpoint_requests_.pin = true;
-  return true;
+  return this->set_checkpoint_request(PinRequest{});
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <MemTableStorage StorageT, MemTableAllocationTracker AllocationTrackerT>
-bool BasicMemTable<StorageT, AllocationTrackerT>::request_unpin(EditOffset edit_offset) noexcept
+Status BasicMemTable<StorageT, AllocationTrackerT>::request_unpin(
+    std::vector<EditOffset> edit_offsets) noexcept
+{
+  return this->set_checkpoint_request(UnpinRequest{
+      .edit_offsets = std::move(edit_offsets),
+  });
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <MemTableStorage StorageT, MemTableAllocationTracker AllocationTrackerT>
+Status BasicMemTable<StorageT, AllocationTrackerT>::set_checkpoint_request(
+    CheckpointRequest&& request) noexcept
 {
   absl::MutexLock lock{&this->checkpoint_requests_mutex_};
 
   if (this->checkpoint_requests_.closed) {
-    return false;
+    return {batt::StatusCode::kClosed};
   }
 
-  // Callers are serialized; there is never more than one checkpoint request per MemTable.
+  // Callers are serialized, so there should never be more than one checkpoint request per
+  // MemTable.
   //
-  BATT_CHECK(this->checkpoint_requests_.empty());
+  if (!this->checkpoint_requests_.empty()) {
+    return {batt::StatusCode::kAlreadyExists};
+  }
 
-  this->checkpoint_requests_.unpin = edit_offset;
-  return true;
+  this->checkpoint_requests_.request.emplace(std::move(request));
+  return OkStatus();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
