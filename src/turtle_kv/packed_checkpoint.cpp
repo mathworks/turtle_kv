@@ -2,6 +2,8 @@
 //
 #include <turtle_kv/import/slice.hpp>
 
+#include <batteries/require.hpp>
+
 namespace turtle_kv {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -24,60 +26,103 @@ llfs::BoxedSeq<llfs::PageId> trace_refs(const PackedCheckpoint& checkpoint)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-void PackedActiveCheckpoints::push_back(const PackedCheckpoint& checkpoint)
+Status PackedActiveCheckpoints::set_base_checkpoint(const PackedCheckpoint& checkpoint)
 {
-  if (this->num_active_checkpoints > 0) {
-    BATT_CHECK_GT(checkpoint.edit_offset_upper_bound, this->newest().edit_offset_upper_bound);
+  if (this->has_base_checkpoint) {
+    BATT_REQUIRE_GT(checkpoint.edit_offset_upper_bound,
+                    this->base_checkpoint.edit_offset_upper_bound);
+  }
+  this->base_checkpoint = checkpoint;
+  this->has_base_checkpoint = true;
+
+  return OkStatus();
+}
+
+StatusOr<PackedCheckpoint> PackedActiveCheckpoints::base() const
+{
+  if (!this->has_base_checkpoint) {
+    return {batt::StatusCode::kNotFound};
+  }
+  return this->base_checkpoint;
+}
+
+Slice<const PackedCheckpoint> PackedActiveCheckpoints::pinned() const
+{
+  return as_slice(this->pinned_checkpoints.data(), this->num_pinned_checkpoints);
+}
+
+bool PackedActiveCheckpoints::is_pin_limit_reached() const
+{
+  return this->num_pinned_checkpoints >= MAX_PINNED_CHECKPOINTS;
+}
+
+Status PackedActiveCheckpoints::pin(const PackedCheckpoint& checkpoint)
+{
+  if (this->is_pin_limit_reached()) {
+    return {batt::StatusCode::kResourceExhausted};
   }
 
-  const u8 n = this->num_active_checkpoints;
-  if (n < MAX_ACTIVE_CHECKPOINTS) {
-    this->checkpoints[n] = checkpoint;
-    this->num_active_checkpoints = n + 1;
-  } else {
-    for (u8 i = 0; i < MAX_ACTIVE_CHECKPOINTS - 1; ++i) {
-      this->checkpoints[i] = this->checkpoints[i + 1];
+  const u8 n = this->num_pinned_checkpoints;
+  // Check that the new checkpoint is newer than the last pinned checkpoint.
+  //
+  if (n > 0) {
+    BATT_REQUIRE_GT(checkpoint.edit_offset_upper_bound,
+                    this->pinned_checkpoints[n - 1].edit_offset_upper_bound);
+  }
+  this->pinned_checkpoints[n] = checkpoint;
+  this->num_pinned_checkpoints = n + 1;
+
+  return OkStatus();
+}
+
+Status PackedActiveCheckpoints::unpin(i64 edit_offset)
+{
+  for (u8 i = 0; i < this->num_pinned_checkpoints; ++i) {
+    if (this->pinned_checkpoints[i].edit_offset_upper_bound == edit_offset) {
+      for (u8 j = i; j + 1 < this->num_pinned_checkpoints; ++j) {
+        this->pinned_checkpoints[j] = this->pinned_checkpoints[j + 1];
+      }
+      this->num_pinned_checkpoints = this->num_pinned_checkpoints - 1;
+      return OkStatus();
     }
-    this->checkpoints[MAX_ACTIVE_CHECKPOINTS - 1] = checkpoint;
   }
+  return {batt::StatusCode::kNotFound};
 }
 
-const PackedCheckpoint& PackedActiveCheckpoints::newest() const
+StatusOr<PackedCheckpoint> PackedActiveCheckpoints::find_pinned(i64 edit_offset) const
 {
-  BATT_CHECK_NE(this->num_active_checkpoints, 0);
-  return this->checkpoints[this->num_active_checkpoints - 1];
-}
-
-const PackedCheckpoint& PackedActiveCheckpoints::oldest() const
-{
-  BATT_CHECK_NE(this->num_active_checkpoints, 0);
-  return this->checkpoints[0];
-}
-
-const PackedCheckpoint* PackedActiveCheckpoints::find(i64 edit_offset) const
-{
-  for (u8 i = 0; i < this->num_active_checkpoints; ++i) {
-    if (this->checkpoints[i].edit_offset_upper_bound == edit_offset) {
-      return &this->checkpoints[i];
+  for (const PackedCheckpoint& checkpoint : this->pinned()) {
+    if (checkpoint.edit_offset_upper_bound == edit_offset) {
+      return checkpoint;
     }
   }
-  return nullptr;
+  return {batt::StatusCode::kNotFound};
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 llfs::BoxedSeq<llfs::PageId> trace_refs(const PackedActiveCheckpoints& active)
 {
-  auto active_slice = as_slice(active.checkpoints.data(),
-                               active.checkpoints.data() + active.num_active_checkpoints);
+  const StatusOr<PackedCheckpoint> base = active.base();
 
-  auto refs_per_checkpoint = as_seq(active_slice)  //
-                             | llfs::seq::map([](const PackedCheckpoint& checkpoint) {
-                                 return trace_refs(checkpoint);
-                               });
+  // The base checkpoint may also be pinned; skip it here so its refs are only traced once.
+  //
+  auto pinned_refs =
+      as_seq(active.pinned())  //
+      | llfs::seq::filter([base](const PackedCheckpoint& checkpoint) {
+          return !base.ok() || checkpoint.edit_offset_upper_bound != base->edit_offset_upper_bound;
+        })  //
+      | llfs::seq::map([](const PackedCheckpoint& checkpoint) {
+          return trace_refs(checkpoint);
+        })  //
+      | llfs::seq::flatten();
 
-  return std::move(refs_per_checkpoint)  //
-         | llfs::seq::flatten()          //
+  if (!base.ok()) {
+    return std::move(pinned_refs) | llfs::seq::boxed();
+  }
+
+  return std::move(pinned_refs)                 //
+         | llfs::seq::chain(trace_refs(*base))  //
          | llfs::seq::boxed();
 }
 

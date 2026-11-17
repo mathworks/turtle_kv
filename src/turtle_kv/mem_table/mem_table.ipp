@@ -202,6 +202,14 @@ template <MemTableStorage StorageT, MemTableAllocationTracker AllocationTrackerT
 bool BasicMemTable<StorageT, AllocationTrackerT>::finalize(
     const SmallFn<EditOffset()>& get_next_edit_offset) noexcept
 {
+  // Stop accepting checkpoint requests; a request accepted before this point will be handed off to
+  // the checkpoint pipeline along with this MemTable.
+  //
+  {
+    absl::MutexLock lock{&this->checkpoint_requests_mutex_};
+    this->checkpoint_requests_.closed = true;
+  }
+
   // Update committed_bytes_total first, so that if prepared_bytes_total_ is observed to have the
   // kFinalizedMask bit set, we can assume committed_bytes_total_ does too.
   //
@@ -275,6 +283,48 @@ bool BasicMemTable<StorageT, AllocationTrackerT>::is_finalized() const
 {
   return (this->committed_bytes_total_->load() & Self::kFinalizedMask) != 0 &&
          this->edit_offset_lower_bound_ <= EditOffset{this->edit_offset_upper_bound_.load()};
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <MemTableStorage StorageT, MemTableAllocationTracker AllocationTrackerT>
+Status BasicMemTable<StorageT, AllocationTrackerT>::request_pin() noexcept
+{
+  return this->set_checkpoint_request(PinRequest{});
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <MemTableStorage StorageT, MemTableAllocationTracker AllocationTrackerT>
+Status BasicMemTable<StorageT, AllocationTrackerT>::request_unpin(
+    std::vector<EditOffset> edit_offsets) noexcept
+{
+  return this->set_checkpoint_request(UnpinRequest{
+      .edit_offsets = std::move(edit_offsets),
+  });
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <MemTableStorage StorageT, MemTableAllocationTracker AllocationTrackerT>
+Status BasicMemTable<StorageT, AllocationTrackerT>::set_checkpoint_request(
+    CheckpointRequest&& request) noexcept
+{
+  absl::MutexLock lock{&this->checkpoint_requests_mutex_};
+
+  if (this->checkpoint_requests_.closed) {
+    return {batt::StatusCode::kClosed};
+  }
+
+  // Callers are serialized, so there should never be more than one checkpoint request per
+  // MemTable.
+  //
+  if (!this->checkpoint_requests_.empty()) {
+    return {batt::StatusCode::kAlreadyExists};
+  }
+
+  this->checkpoint_requests_.request.emplace(std::move(request));
+  return OkStatus();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

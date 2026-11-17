@@ -44,6 +44,7 @@
 #endif  // TURTLE_KV_ENABLE_TCMALLOC_HEAP_PROFILING
 #endif  // TURTLE_KV_ENABLE_TCMALLOC
 
+#include <algorithm>
 #include <set>
 
 namespace turtle_kv {
@@ -1033,11 +1034,11 @@ StatusOr<Snapshot> KVStore::get_snapshot(EditOffset checkpoint_edit_offset) noex
   {
     batt::Toggle<State>::Reader state_reader{this->state_};
 
-    const PackedCheckpoint* found =
-        state_reader->active_checkpoints_.find(checkpoint_edit_offset.value());
-    if (!found) {
+    StatusOr<PackedCheckpoint> found =
+        state_reader->active_checkpoints_.find_pinned(checkpoint_edit_offset.value());
+    if (!found.ok()) {
       VLOG(1) << "Checkpoint with EditOffset: " << checkpoint_edit_offset << " does not exist.";
-      return {batt::StatusCode::kNotFound};
+      return found.status();
     }
     packed = *found;
 
@@ -1057,6 +1058,40 @@ StatusOr<Snapshot> KVStore::get_snapshot(EditOffset checkpoint_edit_offset) noex
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+StatusOr<EditOffset> KVStore::create_snapshot() noexcept
+{
+  BATT_CHECK_OK(this->wait_for_recovery());
+
+  std::unique_lock<std::mutex> lock{this->snapshot_mutex_};
+
+  // Fail early if no more checkpoints can be pinned.  The limit is enforced authoritatively by
+  // CheckpointGenerator::finalize_checkpoint.
+  //
+  {
+    batt::Toggle<State>::Reader state_reader{this->state_};
+    if (state_reader->active_checkpoints_.is_pin_limit_reached()) {
+      return {batt::StatusCode::kResourceExhausted};
+    }
+  }
+
+  BATT_ASSIGN_OK_RESULT(const EditOffset checkpoint_edit_offset,
+                        this->flush_checkpoint_request([](MemTable& mem_table) {
+                          return mem_table.request_pin();
+                        }));
+
+  // Fail if the pin was not applied, so that the caller is never told it holds a pin it doesn't.
+  //
+  {
+    batt::Toggle<State>::Reader state_reader{this->state_};
+    BATT_REQUIRE_OK(
+        state_reader->active_checkpoints_.find_pinned(checkpoint_edit_offset.value()).status());
+  }
+
+  return checkpoint_edit_offset;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 StatusOr<std::vector<Snapshot>> KVStore::get_active_snapshots() noexcept
 {
   std::vector<PackedCheckpoint> packed_checkpoints;
@@ -1064,12 +1099,8 @@ StatusOr<std::vector<Snapshot>> KVStore::get_active_snapshots() noexcept
   {
     batt::Toggle<State>::Reader state_reader{this->state_};
 
-    const auto& active = state_reader->active_checkpoints_;
-    packed_checkpoints.reserve(active.num_active_checkpoints);
-
-    for (u8 i = 0; i < active.num_active_checkpoints; ++i) {
-      packed_checkpoints.push_back(active.checkpoints[i]);
-    }
+    const auto pinned = state_reader->active_checkpoints_.pinned();
+    packed_checkpoints.assign(pinned.begin(), pinned.end());
 
     BATT_CHECK(state_reader->base_checkpoint_.has_value());
     checkpoint_lock.emplace(state_reader->base_checkpoint_->clone_checkpoint_lock());
@@ -1090,6 +1121,110 @@ StatusOr<std::vector<Snapshot>> KVStore::get_active_snapshots() noexcept
   }
 
   return snapshots;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Status KVStore::delete_snapshot(EditOffset checkpoint_edit_offset) noexcept
+{
+  return this->delete_snapshots({checkpoint_edit_offset});
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Status KVStore::delete_snapshots(const std::vector<EditOffset>& checkpoint_edit_offsets) noexcept
+{
+  BATT_CHECK_OK(this->wait_for_recovery());
+
+  if (checkpoint_edit_offsets.empty()) {
+    return {batt::StatusCode::kInvalidArgument};
+  }
+
+  // Fail early if any of the requested checkpoints are duplicates, so that the caller is never told
+  // it holds a pin it doesn't.
+  //
+  {
+    std::vector<EditOffset> sorted_offsets = checkpoint_edit_offsets;
+    std::sort(sorted_offsets.begin(), sorted_offsets.end());
+    if (std::adjacent_find(sorted_offsets.begin(), sorted_offsets.end()) != sorted_offsets.end()) {
+      return {batt::StatusCode::kInvalidArgument};
+    }
+  }
+
+  std::unique_lock<std::mutex> lock{this->snapshot_mutex_};
+
+  // State reflects all prior pins/unpins while snapshot_mutex_ is held, so only request the unpin
+  // if every checkpoint is currently pinned (so that either all are deleted or none are).
+  //
+  {
+    batt::Toggle<State>::Reader state_reader{this->state_};
+    for (const EditOffset& checkpoint_edit_offset : checkpoint_edit_offsets) {
+      BATT_REQUIRE_OK(
+          state_reader->active_checkpoints_.find_pinned(checkpoint_edit_offset.value()).status());
+    }
+  }
+
+  BATT_REQUIRE_OK(this->flush_checkpoint_request([&checkpoint_edit_offsets](MemTable& mem_table) {
+    return mem_table.request_unpin(checkpoint_edit_offsets);
+  }));
+
+  // The checkpoint carrying the unpins has been committed, so the deletions should now be visible.
+  //
+  {
+    batt::Toggle<State>::Reader state_reader{this->state_};
+    for (const EditOffset& checkpoint_edit_offset : checkpoint_edit_offsets) {
+      if (state_reader->active_checkpoints_.find_pinned(checkpoint_edit_offset.value()).ok()) {
+        LOG(WARNING) << "Checkpoint is still pinned after unpin was committed: "
+                     << BATT_INSPECT(checkpoint_edit_offset);
+        return {batt::StatusCode::kInternal};
+      }
+    }
+  }
+
+  return OkStatus();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+StatusOr<EditOffset> KVStore::flush_checkpoint_request(
+    const std::function<Status(MemTable&)>& request) noexcept
+{
+  // Attach the request to the active MemTable; it applies to exactly the checkpoint created from
+  // that MemTable.  If the MemTable was finalized after we observed it, the request fails with
+  // kClosed (nothing is recorded in that case), so retry with the new active MemTable.
+  //
+  boost::intrusive_ptr<MemTable> mem_table;
+  for (;;) {
+    {
+      batt::Toggle<State>::Reader state_reader{this->state_};
+      mem_table = state_reader->mem_table_;
+    }
+    // If the active MemTable is empty, there is no new checkpoint to carry the request.
+    //
+    if (mem_table->empty()) {
+      return {batt::StatusCode::kFailedPrecondition};
+    }
+    Status request_status = request(*mem_table);
+    if (request_status.ok()) {
+      break;
+    }
+    if (request_status != batt::StatusCode::kClosed) {
+      return request_status;
+    }
+  }
+
+  // Finalize the MemTable to force a checkpoint, then wait for that checkpoint (and therefore the
+  // request) to be durably committed.  finalize_mem_table always finalizes the MemTable (closing
+  // its requests) before it can fail, so if it or the wait fails (e.g. the KVStore is halting),
+  // the request may still be carried out.
+  //
+  BATT_REQUIRE_OK(this->finalize_mem_table(batt::make_copy(mem_table)));
+  BATT_CHECK(mem_table->is_finalized());
+
+  const EditOffset checkpoint_edit_offset = mem_table->edit_offset_upper_bound();
+  BATT_REQUIRE_OK(this->wait_for_checkpoint(checkpoint_edit_offset));
+
+  return checkpoint_edit_offset;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -1402,8 +1537,8 @@ using CheckpointEvent = llfs::PackedVariant<turtle_kv::PackedActiveCheckpoints>;
     llfs::StatusOr<usize> n_slots_visited = reader->visit_typed_next(
         batt::WaitForResource::kFalse,
         [&state](const llfs::SlotParse& s,
-                 const turtle_kv::PackedActiveCheckpoints& active_checkpoints) {
-          BATT_CHECK_GT(active_checkpoints.num_active_checkpoints.value(), 0u);
+                 const turtle_kv::PackedActiveCheckpoints& active_checkpoints) -> Status {
+          BATT_REQUIRE_OK(active_checkpoints.base());
           state.active = active_checkpoints;
           state.slot = s;
           return llfs::OkStatus();
@@ -1425,12 +1560,13 @@ using CheckpointEvent = llfs::PackedVariant<turtle_kv::PackedActiveCheckpoints>;
     llfs::Volume& checkpoint_volume,
     RecoveredActiveCheckpointsState state)
 {
-  if (state.active.num_active_checkpoints == 0) {
+  StatusOr<PackedCheckpoint> base = state.active.base();
+  if (base.status() == batt::StatusCode::kNotFound) {
     return Checkpoint::make_empty();
   }
-  const PackedCheckpoint& newest = state.active.newest();
+  BATT_REQUIRE_OK(base);
 
-  return Checkpoint::recover(checkpoint_volume, state.slot, newest);
+  return Checkpoint::recover(checkpoint_volume, state.slot, *base);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -1484,9 +1620,9 @@ void KVStore::mem_table_batch_scanner_thread_main()
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename Fn>
-requires std::invocable<Fn, std::unique_ptr<DeltaBatch>> Status
-KVStore::scan_mem_table_to_build_batches(boost::intrusive_ptr<MemTable>&& mem_table,
-                                         Fn&& consume_fn)
+  requires std::invocable<Fn, std::unique_ptr<DeltaBatch>>
+Status KVStore::scan_mem_table_to_build_batches(boost::intrusive_ptr<MemTable>&& mem_table,
+                                                Fn&& consume_fn)
 {
   MemTable::BatchCompactor batch_compactor{*mem_table,
                                            /*byte_size_limit=*/this->tree_options_.flush_size()};
@@ -1578,6 +1714,12 @@ StatusOr<std::unique_ptr<CheckpointJob>> KVStore::apply_batch_to_checkpoint(
       delta_batch ? batt::bool_status_from(delta_batch->batch_id().is_last_in_group())
                   : BoolStatus::kUnknown;
 
+  // A pin/unpin request on a MemTable applies to the checkpoint that includes its last batch.
+  //
+  const CheckpointRequests checkpoint_requests = (checkpoint_after == BoolStatus::kTrue)
+                                                     ? delta_batch->checkpoint_requests()
+                                                     : CheckpointRequests{};
+
   // Allow the page cache to be temporarily overcommitted so we don't deadlock; but if overcommit is
   // triggered, we immediately truncate the checkpoint to try to unpin pages ASAP.
   //
@@ -1638,7 +1780,8 @@ StatusOr<std::unique_ptr<CheckpointJob>> KVStore::apply_batch_to_checkpoint(
                                 this->checkpoint_generator_->finalize_checkpoint(
                                     std::move(checkpoint_token),
                                     batt::make_copy(this->checkpoint_token_pool_),
-                                    overcommit));
+                                    overcommit,
+                                    checkpoint_requests));
 
   BATT_REQUIRE_OK(checkpoint_job);
 
@@ -1682,7 +1825,7 @@ Status KVStore::commit_checkpoint(std::unique_ptr<CheckpointJob>&& checkpoint_jo
 {
   // Make sure recovery has fully completed before continuing.
   //
-  BATT_REQUIRE_OK(this->wait_for_recovery());
+  BATT_CHECK_OK(this->wait_for_recovery());
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
   // TODO [tastolfi 2026-05-12] MAYBE? (TBD) call change_log_writer_->sync(/*non-urgent*/) here to

@@ -47,6 +47,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <thread>
 #include <utility>
 
@@ -268,14 +269,52 @@ class KVStore : public Table
    */
   Status wait_for_checkpoint(EditOffset target) noexcept;
 
-  /** \brief Returns a read-only Snapshot for the checkpoint identified by the given EditOffset.
-   * Returns kNotFound if no checkpoint exists at that offset.
+  /** \brief Returns a read-only Snapshot for the pinned checkpoint (i.e. one created by
+   * `create_snapshot`) identified by the given EditOffset.  Returns kNotFound if no such checkpoint
+   * exists.
    */
   StatusOr<Snapshot> get_snapshot(EditOffset checkpoint_edit_offset) noexcept;
 
-  /** \brief Returns Snapshots for all currently active checkpoints, ordered oldest to newest.
+  /** \brief Forces a checkpoint of all edits up to this point, pins it, waits for it to be
+   * durably committed, and returns the checkpoint's EditOffset.  Use `get_snapshot` with the
+   * returned EditOffset to read from it.
+   *
+   * A pinned checkpoint is retained when new checkpoints are created, until it is deleted via
+   * `delete_snapshot`.  At most `MAX_PINNED_CHECKPOINTS` checkpoints may be pinned at once; returns
+   * kResourceExhausted without creating a checkpoint if that limit has been reached.
+   *
+   * Pins are durable: the pinned checkpoint is recorded in the same PackedActiveCheckpoints record
+   * as the checkpoint itself, so it is persisted when the checkpoint is committed and survives the
+   * KVStore being closed/reopened.  Calls are serialized, and each one pins exactly the checkpoint
+   * created from the active MemTable.  If there are no edits since the latest checkpoint, no
+   * checkpoint is created or pinned and kFailedPrecondition is returned.
+   */
+  StatusOr<EditOffset> create_snapshot() noexcept;
+
+  /** \brief Returns Snapshots for all pinned checkpoints, ordered oldest to newest.
    */
   StatusOr<std::vector<Snapshot>> get_active_snapshots() noexcept;
+
+  /** \brief Deletes (unpins) the snapshots identified by the given EditOffsets.
+   *
+   * All-or-nothing: if `checkpoint_edit_offsets` is empty or contains duplicates,
+   * kInvalidArgument is returned; if any offset is not a pinned checkpoint, kNotFound is returned.
+   * In both cases nothing is deleted.
+   *
+   * Like `create_snapshot`, this forces a checkpoint of all edits up to this point: the unpins are
+   * recorded in that checkpoint's PackedActiveCheckpoints record, and this call waits for it to be
+   * durably committed, so the deletions are visible (and durable) when this returns.  Calls are
+   * serialized with `create_snapshot`.  If there are no edits since the latest checkpoint, nothing
+   * is deleted and kFailedPrecondition is returned.
+   *
+   * Existing Snapshot objects for the deleted checkpoints remain valid until they are destroyed.
+   */
+  Status delete_snapshots(const std::vector<EditOffset>& checkpoint_edit_offsets) noexcept;
+
+  /** \brief Deletes (unpins) the snapshot identified by the given EditOffset.  Equivalent to
+   * `delete_snapshots({checkpoint_edit_offset})`.
+   */
+  Status delete_snapshot(EditOffset checkpoint_edit_offset) noexcept;
 
   std::function<void(std::ostream&)> debug_info() const noexcept;
 
@@ -324,7 +363,8 @@ class KVStore : public Table
      */
     Optional<Checkpoint> base_checkpoint_;
 
-    /** \brief The set of all active (retained) packed checkpoints.
+    /** \brief The base checkpoint and the pinned checkpoints, as of the latest committed
+     * checkpoint.
      */
     PackedActiveCheckpoints active_checkpoints_;
 
@@ -382,6 +422,18 @@ class KVStore : public Table
    */
   Status finalize_mem_table(boost::intrusive_ptr<MemTable>&& mem_table);
 
+  /** \brief Attaches a checkpoint request (a pin or unpin, made by calling `request` on the active
+   * MemTable), then finalizes that MemTable and waits for its checkpoint (which carries out the
+   * request) to be durably committed.  Returns the EditOffset of that checkpoint.
+   *
+   * Returns kFailedPrecondition, attaching nothing, if the active MemTable is empty.  If `request`
+   * returns kClosed (the MemTable was finalized first), retries with the new active MemTable; any
+   * other error from `request` is returned.  Must be called with `snapshot_mutex_` held, so that
+   * at most one request is attached to any MemTable.
+   */
+  StatusOr<EditOffset> flush_checkpoint_request(
+      const std::function<Status(MemTable&)>& request) noexcept;
+
   /** \brief Passes the given MemTable to the checkpoint update pipeline.
    *
    * This should be called only after `reset_active_mem_table` has installed a new MemTable.
@@ -417,8 +469,9 @@ class KVStore : public Table
    * checkpoint generator (depending on whether the threaded checkpoint pipeline is enabled).
    */
   template <typename Fn>
-  requires std::invocable<Fn, std::unique_ptr<DeltaBatch>> Status
-  scan_mem_table_to_build_batches(boost::intrusive_ptr<MemTable>&& mem_table, Fn&& consume_fn);
+    requires std::invocable<Fn, std::unique_ptr<DeltaBatch>>
+  Status scan_mem_table_to_build_batches(boost::intrusive_ptr<MemTable>&& mem_table,
+                                         Fn&& consume_fn);
 
   /** \brief Entry point for the MemTable::BatchCompactor thread.
    */
@@ -516,6 +569,13 @@ class KVStore : public Table
   Optional<CheckpointGenerator> checkpoint_generator_;
 
   usize checkpoint_batch_count_;
+
+  // Serializes `create_snapshot` and `delete_snapshot` calls, so at most one pin/unpin request is
+  // ever attached to a given MemTable (and therefore to a given checkpoint).  Since each call waits
+  // for its checkpoint to be committed, State::active_checkpoints_ reflects all prior requests
+  // while this is held.
+  //
+  std::mutex snapshot_mutex_;
 
   //----- --- -- -  -  -   -
   // Checkpoint Flush State.

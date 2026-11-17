@@ -4,6 +4,7 @@
 #include <turtle_kv/checkpoint_generator_metrics.hpp>
 #include <turtle_kv/checkpoint_job.hpp>
 #include <turtle_kv/checkpoint_lock.hpp>
+#include <turtle_kv/checkpoint_requests.hpp>
 #include <turtle_kv/delta_batch.hpp>
 
 #include <turtle_kv/tree/tree_options.hpp>
@@ -22,6 +23,7 @@
 #include <batteries/async/mutex.hpp>
 #include <batteries/metrics/metric_collectors.hpp>
 #include <batteries/small_vec.hpp>
+
 
 namespace turtle_kv {
 
@@ -51,13 +53,14 @@ class CheckpointGenerator
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  explicit CheckpointGenerator(batt::WorkerPool& worker_pool,
-                               const TreeOptions& tree_options,
-                               llfs::PageCache& cache,
-                               boost::intrusive_ptr<FilterPageWriteState>&& filter_page_write_state,
-                               Checkpoint&& base_checkpoint,
-                               llfs::Volume& checkpoint_volume,
-                               const PackedActiveCheckpoints& recovered_active_checkpoints) noexcept;
+  explicit CheckpointGenerator(
+      batt::WorkerPool& worker_pool,
+      const TreeOptions& tree_options,
+      llfs::PageCache& cache,
+      boost::intrusive_ptr<FilterPageWriteState>&& filter_page_write_state,
+      Checkpoint&& base_checkpoint,
+      llfs::Volume& checkpoint_volume,
+      const PackedActiveCheckpoints& recovered_active_checkpoints) noexcept;
 
   CheckpointGenerator(const CheckpointGenerator&) = delete;
   CheckpointGenerator& operator=(const CheckpointGenerator&) = delete;
@@ -94,11 +97,19 @@ class CheckpointGenerator
    *
    * `push_batch` MUST be called at least once after construction and before this call, and at least
    * once in between calls to `finalize_checkpoint` so that we have a new checkpoint to finalize.
+   *
+   * The new checkpoint becomes the base checkpoint.  If `requests.request` holds an UnpinRequest, the
+   * checkpoints at its offsets are unpinned.  If it holds a PinRequest, the new checkpoint is pinned,
+   * unless `MAX_PINNED_CHECKPOINTS` checkpoints are already pinned (only possible if a pin request
+   * outlived a failed `KVStore::create_snapshot`, e.g. during shutdown), in which case it is left
+   * unpinned.  The change is included in the new checkpoint's PackedActiveCheckpoints, and becomes
+   * durable when it is committed.
    */
   StatusOr<std::unique_ptr<CheckpointJob>> finalize_checkpoint(
       batt::Grant&& token,
       std::shared_ptr<batt::Grant::Issuer>&& token_issuer,
-      llfs::PageCacheOvercommit& overcommit) noexcept;
+      llfs::PageCacheOvercommit& overcommit,
+      const CheckpointRequests& requests = {}) noexcept;
 
   llfs::PageCacheJob& page_cache_job() const
   {
@@ -194,8 +205,8 @@ class CheckpointGenerator
   //
   llfs::Volume& checkpoint_volume_;
 
-  // The set of currently active (retained) checkpoints, in sorted order by
-  // edit_offset_upper_bound.
+  // The base checkpoint and the pinned checkpoints.  Only accessed on the checkpoint update thread
+  // (pin/unpin requests arrive via the MemTable; see finalize_checkpoint).
   //
   PackedActiveCheckpoints active_checkpoints_{};
 

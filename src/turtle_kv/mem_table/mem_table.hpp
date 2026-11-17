@@ -10,6 +10,7 @@
 #define TURTLE_KV_MEM_TABLE_HPP
 
 #include <turtle_kv/api_types.hpp>
+#include <turtle_kv/checkpoint_requests.hpp>
 
 #include <turtle_kv/mem_table/mem_table_allocation_tracker_impl.hpp>
 #include <turtle_kv/mem_table/mem_table_entry.hpp>
@@ -207,6 +208,32 @@ class BasicMemTable : public MemTableBase
    */
   bool is_finalized() const;
 
+  /** \brief Requests that the checkpoint created from this MemTable be pinned.  Returns kClosed
+   * (recording nothing) if the MemTable has already been finalized.
+   *
+   * The request is accepted and closed atomically with respect to `finalize()`, so a successful
+   * request is always seen by the checkpoint pipeline via `checkpoint_requests()`.  A request
+   * cannot be withdrawn.  At most one checkpoint request (pin or unpin) may be made per MemTable
+   * (callers are serialized; see KVStore::create_snapshot and KVStore::delete_snapshots); returns
+   * kAlreadyExists (recording nothing) if this MemTable already carries a request.
+   */
+  Status request_pin() noexcept;
+
+  /** \brief Requests that the checkpoints at `edit_offsets` be unpinned when the checkpoint created
+   * from this MemTable is finalized.  Same return values, guarantees, and restrictions as
+   * `request_pin()`.
+   */
+  Status request_unpin(std::vector<EditOffset> edit_offsets) noexcept;
+
+  /** \brief Returns the checkpoint requests accepted before this MemTable was finalized.  Only
+   * meaningful after `finalize()` has been called.
+   */
+  CheckpointRequests checkpoint_requests() const noexcept
+  {
+    absl::MutexLock lock{&this->checkpoint_requests_mutex_};
+    return this->checkpoint_requests_;
+  }
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   /** \brief Same as `get`, but with synchronization; only safe to call after this->finalize() has
@@ -265,6 +292,11 @@ class BasicMemTable : public MemTableBase
    * split).
    */
   i64 calculate_max_byte_size() const;
+
+  /** \brief Records `request` unless the MemTable is finalized (kClosed) or already carries a
+   * request (kAlreadyExists).  Implements `request_pin` and `request_unpin`.
+   */
+  Status set_checkpoint_request(CheckpointRequest&& request) noexcept;
 
   /** \brief Updates the cached maximum edit size and attempts to reserve space in the MemTable to
    * insert an edit of the specified byte count `packed_edit_size`.  If there is not enough room in
@@ -325,6 +357,16 @@ class BasicMemTable : public MemTableBase
   // Should be set after the MemTable is finalized.
   //
   std::atomic<i64> edit_offset_upper_bound_{this->edit_offset_lower_bound_.value() - 1};
+
+  // Guards checkpoint_requests_ (including its `closed` flag), so that a request is either
+  // accepted before finalize() (and seen by the checkpoint pipeline) or not recorded at all.
+  //
+  mutable absl::Mutex checkpoint_requests_mutex_;
+
+  // Pin/unpin requests accepted before finalize() (see request_pin/request_unpin).  finalize() sets
+  // `closed`; once true, no checkpoint request can be made.
+  //
+  CheckpointRequests checkpoint_requests_;
 
   // The maximum size of a batch (produced post-finalization by MemTable::BatchCompactor).  Passed
   // in at construction time; used to calculate when the MemTable is full.

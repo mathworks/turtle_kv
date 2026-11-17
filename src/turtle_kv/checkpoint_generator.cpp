@@ -4,6 +4,7 @@
 #include <turtle_kv/checkpoint_log_events.hpp>
 
 #include <batteries/async/backoff.hpp>
+#include <batteries/case_of.hpp>
 #include <batteries/env.hpp>
 #include <batteries/status.hpp>
 
@@ -174,7 +175,8 @@ StatusOr<batt::Grant> CheckpointGenerator::reserve_slot_grant_for_checkpoints(us
 StatusOr<std::unique_ptr<CheckpointJob>> CheckpointGenerator::finalize_checkpoint(
     batt::Grant&& token,
     std::shared_ptr<batt::Grant::Issuer>&& token_issuer,
-    llfs::PageCacheOvercommit& overcommit) noexcept
+    llfs::PageCacheOvercommit& overcommit,
+    const CheckpointRequests& requests) noexcept
 {
   VLOG(1) << "CheckpointGenerator::finalize_checkpoint()";
 
@@ -205,17 +207,43 @@ StatusOr<std::unique_ptr<CheckpointJob>> CheckpointGenerator::finalize_checkpoin
   checkpoint_job->edit_offset_upper_bound = edit_offset_upper_bound;
   checkpoint_job->batch_count = batch_count;
 
-  this->active_checkpoints_.push_back(PackedCheckpoint{
-      .edit_offset_upper_bound = this->base_checkpoint_.edit_offset_upper_bound().value(),
-      .new_tree_root = llfs::PackedPageId::from(this->base_checkpoint_.root_id()),
-  });
+  {
+    const PackedCheckpoint new_checkpoint{
+        .edit_offset_upper_bound = this->base_checkpoint_.edit_offset_upper_bound().value(),
+        .new_tree_root = llfs::PackedPageId::from(this->base_checkpoint_.root_id()),
+    };
 
-  checkpoint_job->active_checkpoints.emplace(
-      llfs::PackAsVariant<CheckpointLogEvent, PackedActiveCheckpoints>{
-          this->active_checkpoints_,
-      });
+    BATT_REQUIRE_OK(this->active_checkpoints_.set_base_checkpoint(new_checkpoint));
 
-  // Package the job up with a PackedActiveCheckpoints event record so we can append it to the Volume.
+    if (requests.request) {
+      batt::case_of(
+          *requests.request,
+          [&](const PinRequest&) {
+            Status pin_status = this->active_checkpoints_.pin(new_checkpoint);
+            if (!pin_status.ok()) {
+              LOG(WARNING) << "Failed to pin checkpoint; it will not be pinned: "
+                           << BATT_INSPECT(edit_offset_upper_bound) << BATT_INSPECT(pin_status);
+            }
+          },
+          [&](const UnpinRequest& unpin_request) {
+            for (const EditOffset& unpin_offset : unpin_request.edit_offsets) {
+              Status unpin_status = this->active_checkpoints_.unpin(unpin_offset.value());
+              if (!unpin_status.ok()) {
+                LOG(WARNING) << "Failed to unpin checkpoint: " << BATT_INSPECT(unpin_offset)
+                             << BATT_INSPECT(unpin_status);
+              }
+            }
+          });
+    }
+
+    checkpoint_job->active_checkpoints.emplace(
+        llfs::PackAsVariant<CheckpointLogEvent, PackedActiveCheckpoints>{
+            this->active_checkpoints_,
+        });
+  }
+
+  // Package the job up with a PackedActiveCheckpoints event record so we can append it to the
+  // Volume.
   //
   StatusOr<llfs::AppendableJob> appendable_job =
       llfs::make_appendable_job(std::move(this->job_),
