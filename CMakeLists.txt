@@ -39,4 +39,5 @@ add_compile_definitions(BOOST_ERROR_CODE_HEADER_ONLY)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-address-of-packed-member")
 
 add_subdirectory(src)
+add_subdirectory(bindings/c)
 add_subdirectory(bench)

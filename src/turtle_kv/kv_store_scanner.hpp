@@ -142,20 +142,15 @@ class KVStoreScanner
     }
   };
 
-  struct ActiveMemTableTag {
-  };
+  struct ActiveMemTableTag {};
 
-  struct ActiveMemTableValueTag {
-  };
+  struct ActiveMemTableValueTag {};
 
-  struct DeltaMemTableTag {
-  };
+  struct DeltaMemTableTag {};
 
-  struct DeltaMemTableValueTag {
-  };
+  struct DeltaMemTableValueTag {};
 
-  struct ShardedLeafTag {
-  };
+  struct ShardedLeafTag {};
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
   //
@@ -283,6 +278,10 @@ class KVStoreScanner
   //+++++++++++-+-+--+----- --- -- -  -  -   --
 
   explicit KVStoreScanner(KVStore& kv_store, const KeyView& min_key) noexcept;
+
+  explicit KVStoreScanner(KVStore& kv_store,
+                          KVStore::ThreadContext& thread_context,
+                          const KeyView& min_key) noexcept;
 
   /** \brief Create a scanner for a checkpoint tree only (no MemTables).
    */

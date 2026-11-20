@@ -31,9 +31,22 @@ KeyView art_scanner_get_key(ART<MemTableValueEntry>::Scanner<kSynchronized,
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 /*explicit*/ KVStoreScanner::KVStoreScanner(KVStore& kv_store, const KeyView& min_key) noexcept
+    : KVStoreScanner{
+          kv_store,
+          kv_store.per_thread_.get(&kv_store),
+          min_key,
+      }
+{
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+/*explicit*/ KVStoreScanner::KVStoreScanner(KVStore& kv_store,
+                                            KVStore::ThreadContext& thread_context,
+                                            const KeyView& min_key) noexcept
     : state_reader_{kv_store.state_}
-    , page_loader_{kv_store.per_thread_.get(&kv_store).get_page_loader()}
-    , slice_storage_{std::addressof(*(kv_store.per_thread_.get(&kv_store).scan_result_storage))}
+    , page_loader_{thread_context.get_page_loader()}
+    , slice_storage_{std::addressof(*(thread_context.scan_result_storage))}
     , root_{this->state_reader_->base_checkpoint_->tree()->page_id_slot_or_panic()}
     , trie_index_sharded_view_size_{kv_store.tree_options().trie_index_sharded_view_size()}
     , tree_height_{this->state_reader_->base_checkpoint_->tree_height()}

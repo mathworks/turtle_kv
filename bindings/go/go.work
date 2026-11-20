@@ -1,0 +1,6 @@
+go 1.27.1
+
+use (
+	./turtle_kv
+	./turtle_kv_examples
+)

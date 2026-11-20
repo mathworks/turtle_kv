@@ -11,6 +11,7 @@ import io, os, platform, shlex, subprocess, sys
 from conan import ConanFile
 from conan.errors import ConanInvalidConfiguration
 from conan.tools.scm import Version
+from conan.tools.files import save, copy
 
 
 class TurtleKvRecipe(ConanFile):
@@ -38,6 +39,9 @@ class TurtleKvRecipe(ConanFile):
         "bench/**/*.cpp",
         "bench/**/*.hpp",
         "bench/**/*.ipp",
+        "bindings/c/*.c",
+        "bindings/c/*.cpp",
+        "bindings/c/*.h",
     ]
 
     options = {
@@ -106,9 +110,9 @@ class TurtleKvRecipe(ConanFile):
                 self.requires("keyvcr/[>=0.2.2 <1]", **VISIBLE)
             if self.options.use_quotient_filter:
                 self.requires("vqf/[>=0.2.5 <1]", **VISIBLE)
-            self.requires("libfuse/[>=3.16.2 <4]", **VISIBLE)
-            self.requires("libunwind/[>=1.8.1 <2]", **VISIBLE, **OVERRIDE)
-            self.requires("liburing/[>=2.11 <3]", **VISIBLE)
+                self.requires("libfuse/[>=3.16.2 <4]", **VISIBLE)
+                self.requires("libunwind/[>=1.8.1 <2]", **VISIBLE, **OVERRIDE)
+                self.requires("liburing/[>=2.11 <3]", **VISIBLE)
 
     def build_requirements(self):
         self.tool_requires("cmake/[>=3.20.0 <4]")
@@ -139,7 +143,29 @@ class TurtleKvRecipe(ConanFile):
         self.cor.build_cmake_default(self)
 
     def package(self):
-        self.cor.package_cmake_lib_default(self)
+        #self.cor.package_conan_lib_default(self)
+        conanfile = self
+
+        src_build = conanfile.build_folder
+        src_turtlekv_include = os.path.join(conanfile.source_folder, "src")
+        src_c_include = os.path.join(conanfile.source_folder, "bindings", "c")
+
+        dst_licenses = os.path.join(conanfile.package_folder, "licenses")
+        dst_include = os.path.join(conanfile.package_folder, "include")
+        dst_lib = os.path.join(conanfile.package_folder, "lib")
+        dst_bin = os.path.join(conanfile.package_folder, "bin")
+
+        copy(conanfile, pattern="turtlekv.h", src=src_c_include, dst=dst_include)
+        copy(conanfile, pattern="*.hpp", src=src_turtlekv_include, dst=dst_include)
+        copy(conanfile, pattern="*.ipp", src=src_turtlekv_include, dst=dst_include)
+        #----- --- -- -  -  -   -
+        copy(conanfile, pattern="*.a", src=src_build, dst=dst_lib, keep_path=False)
+        copy(conanfile, pattern="*.so", src=src_build, dst=dst_lib, keep_path=False)
+        copy(conanfile, pattern="*.lib", src=src_build, dst=dst_lib, keep_path=False)
+        #----- --- -- -  -  -   -
+        copy(conanfile, pattern="*.dll", src=src_build, dst=dst_bin, keep_path=False)
+        copy(conanfile, pattern="*.dylib", src=src_build, dst=dst_lib, keep_path=False)
+    
 
     def package_info(self):
         self.cor.package_info_lib_default(self)

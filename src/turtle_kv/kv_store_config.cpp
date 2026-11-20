@@ -56,6 +56,7 @@ std::vector<ConfigParam> initialize_config_params()
       &KVStoreConfig::initial_capacity_bytes};
 
   params.push_back(ConfigParam{
+      batt::StaticType<u64>{},
       "initial_capacity_bytes",
       initial_capacity_bytes_field,
       initial_capacity_bytes_field,
@@ -68,6 +69,7 @@ std::vector<ConfigParam> initialize_config_params()
                                                           kGiB};
 
   params.push_back(ConfigParam{
+      batt::StaticType<u64>{},
       "initial_capacity_gb",
       initial_capacity_gb_get_set,
       initial_capacity_gb_get_set,
@@ -82,6 +84,7 @@ std::vector<ConfigParam> initialize_config_params()
       &KVStoreConfig::max_capacity_bytes};
 
   params.push_back(ConfigParam{
+      batt::StaticType<u64>{},
       "max_capacity_bytes",
       max_capacity_bytes_field,
       max_capacity_bytes_field,
@@ -94,6 +97,7 @@ std::vector<ConfigParam> initialize_config_params()
                                                       kGiB};
 
   params.push_back(ConfigParam{
+      batt::StaticType<u64>{},
       "max_capacity_gb",
       max_capacity_gb_get_set,
       max_capacity_gb_get_set,
@@ -108,6 +112,7 @@ std::vector<ConfigParam> initialize_config_params()
       &KVStoreConfig::change_log_size_bytes};
 
   params.push_back(ConfigParam{
+      batt::StaticType<u64>{},
       "wal_size_bytes",
       wal_size_bytes_field,
       wal_size_bytes_field,
@@ -118,6 +123,7 @@ std::vector<ConfigParam> initialize_config_params()
   static ScaleConversion<u64> wal_size_mb_get_set{wal_size_bytes_field, wal_size_bytes_field, kMiB};
 
   params.push_back(ConfigParam{
+      batt::StaticType<u64>{},
       "wal_size_mb",
       wal_size_mb_get_set,
       wal_size_mb_get_set,
@@ -136,6 +142,7 @@ std::vector<ConfigParam> initialize_config_params()
   static TypePropertySetter<TreeOptions, u64> node_size_setter{&TreeOptions::set_node_size};
 
   params.push_back(ConfigParam{
+      batt::StaticType<u64>{},
       "node_size",
       node_size_getter,
       node_size_setter,
@@ -146,6 +153,7 @@ std::vector<ConfigParam> initialize_config_params()
   static ScaleConversion<u64> node_size_kb_get_set{node_size_getter, node_size_setter, kKiB};
 
   params.push_back(ConfigParam{
+      batt::StaticType<u64>{},
       "node_size_kb",
       node_size_kb_get_set,
       node_size_kb_get_set,
@@ -161,6 +169,7 @@ std::vector<ConfigParam> initialize_config_params()
   static TypePropertySetter<TreeOptions, u64> leaf_size_setter{&TreeOptions::set_leaf_size};
 
   params.push_back(ConfigParam{
+      batt::StaticType<u64>{},
       "leaf_size",
       leaf_size_getter,
       leaf_size_setter,
@@ -171,6 +180,7 @@ std::vector<ConfigParam> initialize_config_params()
   static ScaleConversion<u64> leaf_size_kb_get_set{leaf_size_getter, leaf_size_setter, kKiB};
 
   params.push_back(ConfigParam{
+      batt::StaticType<u64>{},
       "leaf_size_kb",
       leaf_size_kb_get_set,
       leaf_size_kb_get_set,
@@ -186,6 +196,7 @@ std::vector<ConfigParam> initialize_config_params()
       &TreeOptions::set_min_flush_factor};
 
   params.push_back(ConfigParam{
+      batt::StaticType<double>{},
       "min_flush",
       min_flush_getter,
       min_flush_setter,
@@ -201,6 +212,7 @@ std::vector<ConfigParam> initialize_config_params()
       &TreeOptions::set_max_flush_factor};
 
   params.push_back(ConfigParam{
+      batt::StaticType<double>{},
       "max_flush",
       max_flush_getter,
       max_flush_setter,
@@ -217,6 +229,7 @@ std::vector<ConfigParam> initialize_config_params()
       &TreeOptions::set_buffer_level_trim};
 
   params.push_back(ConfigParam{
+      batt::StaticType<u64>{},
       "buffer_level_trim",
       buffer_level_trim_getter,
       buffer_level_trim_setter,
@@ -233,6 +246,7 @@ std::vector<ConfigParam> initialize_config_params()
       &TreeOptions::set_key_size_hint};
 
   params.push_back(ConfigParam{
+      batt::StaticType<u64>{},
       "key_size_hint",
       key_size_hint_getter,
       key_size_hint_setter,
@@ -249,6 +263,7 @@ std::vector<ConfigParam> initialize_config_params()
       &TreeOptions::set_value_size_hint};
 
   params.push_back(ConfigParam{
+      batt::StaticType<u64>{},
       "value_size_hint",
       value_size_hint_getter,
       value_size_hint_setter,
@@ -265,6 +280,7 @@ std::vector<ConfigParam> initialize_config_params()
       &TreeOptions::set_filter_bits_per_key};
 
   params.push_back(ConfigParam{
+      batt::StaticType<u64>{},
       "filter_bits",
       filter_bits_getter,
       filter_bits_setter,
@@ -280,6 +296,7 @@ std::vector<ConfigParam> initialize_config_params()
   static TypePropertySetter<TreeOptions, bool> size_tiered_setter{&TreeOptions::set_size_tiered};
 
   params.push_back(ConfigParam{
+      batt::StaticType<bool>{},
       "size_tiered",
       size_tiered_getter,
       size_tiered_setter,
@@ -296,6 +313,7 @@ std::vector<ConfigParam> initialize_config_params()
       &TreeOptions::set_b_tree_mode_enabled};
 
   params.push_back(ConfigParam{
+      batt::StaticType<bool>{},
       "b_tree_mode",
       b_tree_mode_getter,
       b_tree_mode_setter,
@@ -313,6 +331,7 @@ std::vector<ConfigParam> initialize_config_params()
       &KVStoreRuntimeOptions::cache_size_bytes};
 
   params.push_back(ConfigParam{
+      batt::StaticType<u64>{},
       "cache_size_bytes",
       cache_size_bytes_field,
       cache_size_bytes_field,
@@ -325,6 +344,7 @@ std::vector<ConfigParam> initialize_config_params()
                                                     kMiB};
 
   params.push_back(ConfigParam{
+      batt::StaticType<u64>{},
       "cache_size_mb",
       cache_size_mb_get_set,
       cache_size_mb_get_set,
@@ -339,6 +359,7 @@ std::vector<ConfigParam> initialize_config_params()
       &KVStoreRuntimeOptions::initial_checkpoint_distance};
 
   params.push_back(ConfigParam{
+      batt::StaticType<u64>{},
       "chi",
       initial_checkpoint_distance_field,
       initial_checkpoint_distance_field,
@@ -353,6 +374,7 @@ std::vector<ConfigParam> initialize_config_params()
       &KVStoreRuntimeOptions::use_threaded_checkpoint_pipeline};
 
   params.push_back(ConfigParam{
+      batt::StaticType<bool>{},
       "checkpoint_pipeline",
       use_threaded_checkpoint_pipeline_field,
       use_threaded_checkpoint_pipeline_field,
@@ -393,6 +415,29 @@ const std::unordered_map<std::string_view, ConfigParam>& config_param_map()
 {
   static const std::unordered_map<std::string_view, ConfigParam> cache_ =
       initialize_config_param_map();
+
+  return cache_;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+const std::vector<std::pair<std::string, const ConfigParam*>>& sorted_params()
+{
+  // We copy the param names to std::string so they can be accessed as c-strings for the extern "C"
+  // api.
+  //
+  static const std::vector<std::pair<std::string, const ConfigParam*>> cache_ = [] {
+    std::vector<std::pair<std::string, const ConfigParam*>> names;
+
+    for (const auto& [name, param] : config_param_map()) {
+      names.push_back(std::make_pair(std::string{name}, &param));
+    }
+
+    std::sort(names.begin(), names.end());
+
+    return names;
+  }();
+
   return cache_;
 }
 
@@ -420,6 +465,52 @@ Status parse_config(std::string_view name [[maybe_unused]],
   }
 
   return status;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+usize num_config_params()
+{
+  return config_param_map().size();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+const ConfigParam* get_config_param_for_index(usize i)
+{
+  const std::vector<std::pair<std::string, const ConfigParam*>>& names = sorted_params();
+  if (i < names.size()) {
+    return names[i].second;
+  }
+  return nullptr;
+}
+
+namespace {
+
+std::string_view get_param_name(const std::string_view& s) noexcept
+{
+  return s;
+}
+
+std::string_view get_param_name(const std::pair<std::string, const ConfigParam*>& p) noexcept
+{
+  return p.first;
+}
+
+}  // namespace
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+StatusOr<usize> get_index_for_config_param_name(const std::string_view& name)
+{
+  const std::vector<std::pair<std::string, const ConfigParam*>>& names = sorted_params();
+  auto iter = std::lower_bound(names.begin(), names.end(), name, [](const auto& l, const auto& r) {
+    return get_param_name(l) < get_param_name(r);
+  });
+  if (iter == names.end() || iter->first != name) {
+    return {batt::StatusCode::kNotFound};
+  }
+  return std::distance(names.begin(), iter);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

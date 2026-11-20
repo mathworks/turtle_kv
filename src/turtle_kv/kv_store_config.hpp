@@ -105,6 +105,23 @@ Status parse_config(std::string_view name,
                     KVStoreConfig* config,
                     KVStoreRuntimeOptions* runtime_options);
 
+/** \brief Returns the number of available config options.
+ */
+usize num_config_params();
+
+//----- --- -- -  -  -   -
+class ConfigParam;
+//----- --- -- -  -  -   -
+
+/** \brief Returns the c-string name of the i-th param; if i is out-of-range, returns nullptr.
+ */
+const ConfigParam* get_config_param_for_index(usize i);
+
+/** \brief Returns the index of the param with the given name; if there is no such parameter,
+ * returns batt::StatusCode::kNotFound.
+ */
+StatusOr<usize> get_index_for_config_param_name(const std::string_view& name);
+
 /** \brief Formats all config options as string, string pairs and returns the result.
  */
 std::vector<std::pair<std::string, std::string>> config_to_string_list(
@@ -116,6 +133,12 @@ std::vector<std::pair<std::string, std::string>> config_to_string_list(
 class ConfigParam
 {
  public:
+  using ValueTypeId = std::variant<batt::StaticType<std::string>,
+                                   batt::StaticType<i64>,
+                                   batt::StaticType<u64>,
+                                   batt::StaticType<double>,
+                                   batt::StaticType<bool>>;
+
   using TypedValue = std::variant<std::string, i64, u64, double, bool>;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -199,7 +222,8 @@ class ConfigParam
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   ConfigParam() noexcept
-      : name_{}
+      : value_type_id_{}
+      , name_{}
       , getter_{nullptr}
       , setter_{nullptr}
       , parser_{nullptr}
@@ -207,12 +231,14 @@ class ConfigParam
   {
   }
 
-  explicit ConfigParam(std::string_view name,
+  explicit ConfigParam(ValueTypeId value_type_id,
+                       std::string_view name,
                        Getter& getter,
                        Setter& setter,
                        Parser& parser,
                        Formatter& formatter) noexcept
-      : name_{name}
+      : value_type_id_{value_type_id}
+      , name_{name}
       , getter_{&getter}
       , setter_{&setter}
       , parser_{&parser}
@@ -222,7 +248,12 @@ class ConfigParam
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  std::string_view name() const
+  ValueTypeId value_type_id() const
+  {
+    return this->value_type_id_;
+  }
+
+  const std::string& name() const
   {
     return this->name_;
   }
@@ -262,6 +293,7 @@ class ConfigParam
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
+  ValueTypeId value_type_id_;
   std::string name_;
   Getter* getter_;
   Setter* setter_;

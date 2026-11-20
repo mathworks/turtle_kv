@@ -219,13 +219,28 @@ class KVStore : public Table
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  Status put(const KeyView& key, const ValueView& value) noexcept override;
+  Status put(const KeyView& key, const ValueView& value) noexcept override
+  {
+    return this->put(this->per_thread_.get(this), key, value);
+  }
+
+  Status put(ThreadContext& thread_context, const KeyView& key, const ValueView& value) noexcept;
 
   StatusOr<EditOffset> put(const KeyView& key,
+                           const ValueView& value,
+                           Optional<WriteOptions> write_options) noexcept
+  {
+    return this->put(this->per_thread_.get(this), key, value, write_options);
+  }
+
+  StatusOr<EditOffset> put(ThreadContext& thread_context,
+                           const KeyView& key,
                            const ValueView& value,
                            Optional<WriteOptions> write_options) noexcept;
 
   StatusOr<ValueView> get(const KeyView& key) noexcept override;
+
+  StatusOr<ValueView> get(ThreadContext& thread_context, const KeyView& key) noexcept;
 
   StatusOr<usize> scan(const KeyView& min_key,
                        const Slice<std::pair<KeyView, ValueView>>& items_out) noexcept override;
@@ -234,7 +249,13 @@ class KVStore : public Table
 
   Status remove(const KeyView& key) noexcept override;
 
+  Status remove(ThreadContext& thread_context, const KeyView& key) noexcept;
+
   StatusOr<EditOffset> remove(const KeyView& key, Optional<WriteOptions> write_options) noexcept;
+
+  StatusOr<EditOffset> remove(ThreadContext& thread_context,
+                              const KeyView& key,
+                              Optional<WriteOptions> write_options) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -505,6 +526,14 @@ class KVStore : public Table
   /** \brief Blocks the caller until recovery has either finished or failed.
    */
   Status wait_for_recovery() const noexcept;
+
+  /** \brief Generic mplementation of point query.
+   */
+  template <typename GetThreadContextFn>
+    requires(std::is_invocable_v<GetThreadContextFn> &&
+             std::is_convertible_v<std::invoke_result_t<GetThreadContextFn>, ThreadContext&>)
+  StatusOr<ValueView> get_impl(const KeyView& key,
+                               GetThreadContextFn&& get_thread_context_fn) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
